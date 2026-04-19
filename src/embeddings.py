@@ -1,11 +1,13 @@
 import json
 import urllib.request
+import os
 
 def embed_text(text, model="nomic-embed-text"):
     """Generate an embedding using local Ollama instance."""
     if not text:
         return None
-    url = "http://localhost:11434/api/embeddings"
+    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    url = f"{base_url}/api/embeddings"
     data = json.dumps({"model": model, "prompt": text}).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     try:

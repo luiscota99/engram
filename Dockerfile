@@ -5,6 +5,10 @@ LABEL description="Engram — persistent memory for AI-assisted development"
 
 WORKDIR /app
 
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 # Copy source
 COPY src/ ./src/
 

@@ -45,6 +45,9 @@ docker compose run --rm engram stats
 docker compose run --rm engram search "query"
 ```
 
+> [!NOTE]
+> If you are using semantic vector search with Ollama, the `docker-compose.yml` automatically maps `host.docker.internal` to hit your host machine's Ollama instance. Ensure Ollama is running before starting the container!
+
 ## IDE Integration
 
 ### Cursor IDE

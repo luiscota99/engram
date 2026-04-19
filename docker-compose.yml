@@ -3,5 +3,8 @@ services:
     build: .
     volumes:
       - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - ENGRAM_DB_PATH=/data/memory.db
+      - OLLAMA_HOST=http://host.docker.internal:11434
