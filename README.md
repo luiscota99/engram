@@ -226,7 +226,50 @@ When connected via MCP, AI agents get these tools:
 
 ## Architecture
 
+### System Flow Diagram
+
+```mermaid
+graph TD
+    %% Actors/Interfaces
+    U[User] -->|Terminal Commands| CLI[CLI Handler]
+    IDE[Cursor IDE / Claude] -->|MCP Protocol JSON-RPC| MCP[MCP Server]
+    Hook[Auto-Suggest Hook] -.->|Background Process| CLI
+    
+    %% Core Logic
+    subgraph Engram Core
+        CLI --> SE[Search Engine]
+        MCP --> SE[Search Engine]
+        CLI --> DB_Int[Database Interface]
+        MCP --> DB_Int[Database Interface]
+        SE --> DB_Int
+    end
+    
+    %% AI Model
+    SE -- "Generate Vector Embedding" --> Ollama[(Local Ollama<br/>nomic-embed-text)]
+    DB_Int -- "Generate Vector Embedding" --> Ollama
+    
+    %% Database Layer
+    subgraph Storage Layer
+        DB_Int --> Driver[sqlean-py Driver]
+        Driver --> SQLite[(memory.db SQLite)]
+        
+        SQLite --- FTS[FTS5 Index<br/>Lexical Search]
+        SQLite --- VEC[sqlite-vec<br/>Semantic Search]
+    end
+    
+    %% Layout styling
+    classDef primary fill:#2563eb,stroke:#1e40af,color:white;
+    classDef db fill:#059669,stroke:#047857,color:white;
+    classDef ai fill:#d97706,stroke:#b45309,color:white;
+    
+    class CLI,MCP,SE,DB_Int primary;
+    class SQLite,FTS,VEC,Driver db;
+    class Ollama ai;
 ```
+
+### Directory Structure
+
+```text
 engram/
 ├── src/
 │   ├── cli.py           # CLI entry point (engram command)
