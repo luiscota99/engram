@@ -1,0 +1,41 @@
+---
+description: Engram memory integration — shared persistent memory system for learning across sessions. Provides full-text search over mistakes, patterns, skills, and conversation history.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Engram — Persistent Memory
+
+This workspace is connected to the **Engram** MCP server, which provides persistent memory across sessions.
+
+## Available MCP Tools
+
+| Tool | When to Use |
+|------|-------------|
+| `memory_search` | At session start: search for relevant context. During debugging: check if this issue has been seen before |
+| `memory_recent` | Quick recall of recent sessions and entries |
+| `memory_add_mistake` | At session end: log errors/retries with root cause analysis |
+| `memory_add_pattern` | When a recurring issue type is identified across sessions |
+| `memory_add_skill` | When a repeatable workflow has been successfully completed |
+| `memory_add_conversation` | At session end: structured summary of the session |
+| `memory_list` | Browse all entries of a specific type |
+| `memory_stats` | Overview of memory database contents |
+
+## Mandatory Triggers
+
+### Session Start
+1. Use `memory_search` with keywords from the user's first request
+2. Use `memory_recent` to get the last 3 entries
+3. If a matching skill exists, follow it instead of rebuilding
+
+### During Debugging
+1. Before investigating from scratch, use `memory_search` with the error description
+2. Check if any pattern matches the symptoms
+
+### Session End (Retrospective)
+After significant work, always:
+1. `memory_add_conversation` — structured session summary
+2. `memory_add_mistake` — for each error or retry that occurred
+3. `memory_add_pattern` — if a new recurring pattern was identified
+4. `memory_add_skill` — if a repeatable workflow was used

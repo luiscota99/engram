@@ -1,0 +1,7 @@
+services:
+  engram:
+    build: .
+    volumes:
+      - ./data:/data
+    environment:
+      - ENGRAM_DB_PATH=/data/memory.db
