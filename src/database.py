@@ -135,6 +135,13 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory USING vec0(
     embedding float[768]
 );
+
+-- Standard B-Tree Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_mistakes_date ON mistakes(date);
+CREATE INDEX IF NOT EXISTS idx_conversations_date ON conversations(date);
+CREATE INDEX IF NOT EXISTS idx_skills_domain ON skills(domain);
+CREATE INDEX IF NOT EXISTS idx_prompts_domain ON prompts(domain);
 """
 
 
