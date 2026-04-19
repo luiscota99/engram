@@ -23,12 +23,17 @@ def semantic_search(query, limit=10, db_path=None):
         try:
             # Query vec_memory, join with FTS to get the item details
             # We assume rowid matches between memory_fts and vec_memory
+            # Query vec_memory using a CTE to guarantee KNN index utilization before the JOIN
             sql = """
-                SELECT f.item_type, f.item_id, f.title, f.content as snippet, f.tags, v.distance
-                FROM vec_memory v
-                JOIN memory_fts f ON v.rowid = f.rowid
-                WHERE v.embedding MATCH ? AND k = ?
-                ORDER BY v.distance
+                WITH matches AS (
+                    SELECT rowid, distance
+                    FROM vec_memory
+                    WHERE embedding MATCH ? AND k = ?
+                )
+                SELECT f.item_type, f.item_id, f.title, f.content as snippet, f.tags, m.distance
+                FROM matches m
+                JOIN memory_fts f ON m.rowid = f.rowid
+                ORDER BY m.distance
             """
             rows = conn.execute(sql, [json.dumps(embedding), limit]).fetchall()
             results = []
