@@ -39,6 +39,8 @@ if __name__ == "__main__" and __package__ is None:
 from .database import get_connection, init_db, link_tags, index_in_fts, get_tags_for_item, get_db_path
 from .search import search, get_recent, get_stats, semantic_search
 from .seed import seed_database
+from .doctor import run_diagnostics
+from .backup import run_backup
 
 
 # ── Formatting helpers ──────────────────────────────────────────────
@@ -264,6 +266,16 @@ def cmd_stats(args):
     print(f"  Tags:          {stats['tags']}")
     print(f"  FTS indexed:   {stats['fts_indexed']}")
     print(f"\n  DB path: {fmt_dim(get_db_path())}")
+
+
+def cmd_doctor(args):
+    """Run database diagnostics and optionally repair issues."""
+    run_diagnostics(repair=args.repair)
+
+
+def cmd_backup(args):
+    """Export database to JSON and optionally sync to Git."""
+    run_backup(git_sync=args.git)
 
 
 def cmd_init(args):
@@ -533,6 +545,16 @@ def build_parser():
     # stats
     p_stats = sub.add_parser("stats", help="Show database statistics")
     p_stats.set_defaults(func=cmd_stats)
+
+    # doctor
+    p_doctor = sub.add_parser("doctor", help="Run database diagnostics and repair")
+    p_doctor.add_argument("--repair", action="store_true", help="Attempt to auto-repair found issues")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    # backup
+    p_backup = sub.add_parser("backup", help="Export database to JSON format")
+    p_backup.add_argument("--git", action="store_true", help="Automatically commit and push backup to Git if configured")
+    p_backup.set_defaults(func=cmd_backup)
 
     # init
     p_init = sub.add_parser("init", help="Initialize the database")

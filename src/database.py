@@ -17,6 +17,7 @@ except ImportError:
     sqlite_vec = None
 
 from .embeddings import embed_text
+from .migrations import run_migrations
 
 DEFAULT_DB_PATH = os.path.join(
     os.path.expanduser("~"), ".engram", "memory.db"
@@ -24,7 +25,7 @@ DEFAULT_DB_PATH = os.path.join(
 
 DB_PATH = os.environ.get("ENGRAM_DB_PATH", DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -177,18 +178,26 @@ def get_connection(db_path=None):
 
 
 def init_db(db_path=None):
-    """Create tables and FTS index if they don't exist."""
+    """Create tables, FTS index, and run migrations if needed."""
     with get_connection(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
         # Set schema version if not present
         existing = conn.execute(
             "SELECT value FROM schema_meta WHERE key='version'"
         ).fetchone()
+        
         if not existing:
+            # Brand new database setup
             conn.execute(
                 "INSERT INTO schema_meta (key, value) VALUES ('version', ?)",
                 (str(SCHEMA_VERSION),),
             )
+        else:
+            # Existing database, check for migrations
+            current_version = int(existing["value"])
+            if current_version < SCHEMA_VERSION:
+                run_migrations(conn, current_version, SCHEMA_VERSION)
+                
     return True
 
 
