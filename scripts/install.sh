@@ -19,6 +19,10 @@ FUNC_LINE="engram() { ( cd \"$SCRIPT_DIR\" && python3 -m src.cli \"\$@\" ) }"
 echo "Installing Engram..."
 echo ""
 
+# Install requirements
+echo "→ Installing Python requirements..."
+(cd "$SCRIPT_DIR" && pip3 install -r requirements.txt)
+
 # Initialize the database
 echo "→ Initializing database..."
 (cd "$SCRIPT_DIR" && python3 -m src.cli init)
