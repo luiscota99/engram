@@ -98,6 +98,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     tags
 );
 
+-- Prompts: reusable LLM system prompts for specialized tasks
+CREATE TABLE IF NOT EXISTS prompts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    description TEXT NOT NULL,
+    prompt_text TEXT NOT NULL,
+    source_path TEXT,
+    best_for TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,

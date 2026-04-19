@@ -1,0 +1,45 @@
+---
+description: KS Cursor Orchestrator Integration with Engram for cross-session persistent memory, replacing L1, L2, and L3 memory layers.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Engram ↔ KS Cursor Orchestrator Integration
+
+This project uses **Engram** as its primary persistent memory backend, replacing the default `cursor10x-mcp` and `mempalace-mcp` layers from the KS Cursor Orchestrator stack.
+
+## Memory Layer Replacements
+
+| Orchestrator Concept | Engram Equivalent | Tool to Use |
+|----------------------|-------------------|-------------|
+| **L1: Entity Graph** (Projects/People) | `pattern` / `skill` | `memory_search`, `memory_add_pattern` |
+| **L2: Project Memory** (Decisions) | `conversation` | `memory_add_conversation`, `memory_list` |
+| **L3: Semantic Memory** (Verbatim/Errors) | `mistake` / full-text search | `memory_search`, `memory_add_mistake` |
+| **SKILLS** (`~/.cursor/skills/`) | `skill` | `memory_search` (with type "skill") |
+| **PROMPTS** (`~/.claude/prompts/`) | `prompt` | `memory_suggest_prompt` or search "prompt" |
+
+## Workflow Hooks
+
+When following the KS Cursor Orchestrator SDLC phases (`INTAKE`, `SCOUT`, `PLAN`, etc.), integrate Engram at these specific points:
+
+### During `INTAKE` and `SCOUT`
+1. Use `memory_search` to query for past conversations, decisions, or mistakes related to the current task.
+2. Use `memory_search` with type `prompt` to find any specialized system prompts that should be loaded as context (e.g. `Log Analyzer`, `Cursor Project Analyzer`).
+3. Use `memory_search` with type `skill` to see if a workflow pattern already exists for the task (e.g., `react-useeffect`, `debugging`).
+
+### During `DIAGNOSE` (Bugfixing)
+1. Query `memory_search` with the exact error message or stack trace snippet.
+2. Check if a `mistake` or `pattern` exists documenting this exact error and its root cause.
+
+### During `CLOSE` (Retrospective)
+Instead of using `user-devcontext` to summarize, log the results to Engram:
+1. Call `memory_add_conversation` with the ID, title, tasks completed, decisions, and mistakes.
+2. If any notable errors required iteration, call `memory_add_mistake` with the root cause and fix.
+3. If a new, highly reusable workflow was developed, call `memory_add_skill`.
+4. If you encountered a problem that matches a known pattern, use `engram link-pattern` (via shell if necessary) to connect the conversation to the pattern.
+
+## Guidelines
+- **Zero-Dependency**: Engram is fully local (SQLite). It does not rely on Turso or external services.
+- **Always Verify**: Use `memory_stats` if you need to understand the scale of the knowledge base.
+- **Tagging**: Use descriptive comma-separated tags when adding entries (e.g. `frontend,react,auth,bugfix`).

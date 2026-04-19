@@ -106,6 +106,8 @@ def cmd_add(args):
         _add_skill(args)
     elif kind == "conversation":
         _add_conversation(args)
+    elif kind == "prompt":
+        _add_prompt(args)
     else:
         print(f"Unknown type: {kind}")
         sys.exit(1)
@@ -219,8 +221,22 @@ def cmd_list(args):
                 if tags:
                     print(f"    {fmt_dim('tags: ' + ', '.join(tags))}")
                 print()
+
+        elif kind == "prompts":
+            rows = conn.execute("SELECT id, name, role, domain, best_for FROM prompts ORDER BY name").fetchall()
+            print(fmt_header(f"Prompts ({len(rows)}):\n"))
+            for r in rows:
+                tags = get_tags_for_item(conn, "prompt", r["id"])
+                print(f"  {fmt_type('prompt')} {fmt_bold(r['name'])} [{r['domain']}]")
+                print(f"    Role: {fmt_dim(r['role'][:100])}")
+                if r['best_for']:
+                    print(f"    Best for: {fmt_dim(r['best_for'][:100])}")
+                if tags:
+                    print(f"    {fmt_dim('tags: ' + ', '.join(tags))}")
+                print()
+
         else:
-            print(f"Unknown type: {kind}. Use: mistakes, patterns, skills, conversations")
+            print(f"Unknown type: {kind}. Use: mistakes, patterns, skills, conversations, prompts")
             sys.exit(1)
 
 
@@ -244,6 +260,7 @@ def cmd_stats(args):
     print(f"  Patterns:      {stats['patterns']}")
     print(f"  Skills:        {stats['skills']}")
     print(f"  Conversations: {stats['conversations']}")
+    print(f"  Prompts:       {stats['prompts']}")
     print(f"  Tags:          {stats['tags']}")
     print(f"  FTS indexed:   {stats['fts_indexed']}")
     print(f"\n  DB path: {fmt_dim(get_db_path())}")
@@ -256,6 +273,138 @@ def cmd_init(args):
 
 def cmd_seed(args):
     seed_database()
+
+
+def _add_prompt(args):
+    # Read prompt text from file if --file is provided
+    prompt_text = args.prompt_text or ""
+    if args.file:
+        with open(args.file, "r") as f:
+            prompt_text = f.read()
+
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """INSERT INTO prompts (name, role, domain, description, prompt_text, source_path, best_for)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (args.name, args.role, args.domain, args.description, prompt_text,
+             args.file, args.best_for),
+        )
+        pid = cursor.lastrowid
+        tags = [t.strip() for t in args.tags.split(",")] if args.tags else []
+        link_tags(conn, "prompt", pid, tags)
+        content = f"{args.role} | {args.description} | {args.best_for or ''} | {prompt_text[:500]}"
+        index_in_fts(conn, "prompt", pid, args.name, content, tags)
+    print(f"✓ Prompt #{pid} '{args.name}' stored.")
+
+
+def cmd_suggest(args):
+    """Suggest a prompt based on task description."""
+    query = " ".join(args.query) if args.query else ""
+    results = search(query, item_type="prompt", limit=args.limit)
+
+    if not results:
+        print(fmt_dim("No matching prompts found."))
+        return
+
+    print(fmt_header(f"Suggested prompts for: {query}\n"))
+    for r in results:
+        print(f"  {fmt_type('prompt')} {fmt_bold(r['title'])}")
+        if r["snippet"]:
+            snippet = r["snippet"].replace("\n", " ")[:150]
+            print(f"    {fmt_dim(snippet)}")
+        if r["tags"]:
+            print(f"    {fmt_dim('tags: ' + r['tags'])}")
+        print()
+
+
+def cmd_import_skills(args):
+    """Import skills from orchestrator SKILL.md files."""
+    import glob
+    import re
+
+    skills_path = args.path
+    if not os.path.isdir(skills_path):
+        print(f"Directory not found: {skills_path}")
+        sys.exit(1)
+
+    skill_dirs = sorted(glob.glob(os.path.join(skills_path, "*/SKILL.md")))
+    if not skill_dirs:
+        print(f"No SKILL.md files found in {skills_path}")
+        sys.exit(1)
+
+    imported = 0
+    skipped = 0
+
+    with get_connection() as conn:
+        for skill_file in skill_dirs:
+            with open(skill_file, "r") as f:
+                content = f.read()
+
+            # Parse YAML frontmatter
+            fm_match = re.match(r'^---\s*\n(.*?)\n---\s*\n(.*)$', content, re.DOTALL)
+            if not fm_match:
+                skipped += 1
+                continue
+
+            frontmatter = fm_match.group(1)
+            body = fm_match.group(2).strip()
+
+            # Extract name and description from frontmatter
+            name_match = re.search(r'^name:\s*(.+)$', frontmatter, re.MULTILINE)
+            desc_match = re.search(r'description:\s*>-?\s*\n((?:\s+.+\n?)*)', frontmatter)
+            if not desc_match:
+                desc_match = re.search(r'^description:\s*(.+)$', frontmatter, re.MULTILINE)
+
+            name = name_match.group(1).strip() if name_match else os.path.basename(os.path.dirname(skill_file))
+            description = ""
+            if desc_match:
+                description = " ".join(line.strip() for line in desc_match.group(1).strip().split("\n"))
+
+            # Extract "When to Use" section as trigger
+            trigger = ""
+            when_match = re.search(r'## When to Use\s*\n((?:- .+\n?)*)', body)
+            if when_match:
+                trigger = when_match.group(1).strip()
+            else:
+                trigger = description
+
+            # Classify domain from name
+            domain = "engineering"
+            if any(kw in name for kw in ["react", "frontend", "ui", "web-design", "web-accessibility", "vercel"]):
+                domain = "frontend"
+            elif any(kw in name for kw in ["backend", "nodejs", "api", "database", "auth"]):
+                domain = "backend"
+            elif any(kw in name for kw in ["security", "review-and-secure"]):
+                domain = "security"
+            elif any(kw in name for kw in ["test", "tdd", "webapp-testing"]):
+                domain = "testing"
+            elif any(kw in name for kw in ["debug", "error", "incident", "post-mortem"]):
+                domain = "debugging"
+            elif any(kw in name for kw in ["git", "ship", "branch", "sdlc", "phase"]):
+                domain = "process"
+            elif any(kw in name for kw in ["brainstorm", "requirements", "prd", "spec", "project-bootstrap"]):
+                domain = "planning"
+
+            # Check if already exists
+            existing = conn.execute("SELECT id FROM skills WHERE name = ?", (name,)).fetchone()
+            if existing:
+                skipped += 1
+                continue
+
+            cursor = conn.execute(
+                """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (name, domain, trigger[:500], body[:3000], None,
+                 json.dumps([skill_file]), "ks-cursor-orchestrator"),
+            )
+            sid = cursor.lastrowid
+            tags = [domain, "orchestrator", "cursor-skill"]
+            link_tags(conn, "skill", sid, tags)
+            index_content = f"{trigger} | {description} | {body[:500]}"
+            index_in_fts(conn, "skill", sid, name, index_content, tags)
+            imported += 1
+
+    print(f"✓ Imported {imported} skills, skipped {skipped} (already exist or no frontmatter).")
 
 
 # ── Argument parser ─────────────────────────────────────────────────
@@ -271,7 +420,7 @@ def build_parser():
     # search
     p_search = sub.add_parser("search", help="Search all memory")
     p_search.add_argument("query", nargs="*", help="Search query")
-    p_search.add_argument("-t", "--type", choices=["mistake", "pattern", "skill", "conversation"])
+    p_search.add_argument("-t", "--type", choices=["mistake", "pattern", "skill", "conversation", "prompt"])
     p_search.add_argument("--tags", help="Comma-separated tags")
     p_search.add_argument("-n", "--limit", type=int, default=20)
     p_search.set_defaults(func=cmd_search)
@@ -279,7 +428,7 @@ def build_parser():
     # recent
     p_recent = sub.add_parser("recent", help="Show recent entries")
     p_recent.add_argument("-n", type=int, default=10)
-    p_recent.add_argument("-t", "--type", choices=["mistake", "pattern", "skill", "conversation"])
+    p_recent.add_argument("-t", "--type", choices=["mistake", "pattern", "skill", "conversation", "prompt"])
     p_recent.set_defaults(func=cmd_recent)
 
     # add
@@ -330,10 +479,32 @@ def build_parser():
 
     p_add.set_defaults(func=cmd_add)
 
+    # add prompt
+    p_apr = add_sub.add_parser("prompt", help="Store an LLM prompt")
+    p_apr.add_argument("--name", required=True)
+    p_apr.add_argument("--role", required=True, help="What role/persona the prompt creates")
+    p_apr.add_argument("--domain", required=True)
+    p_apr.add_argument("--description", required=True)
+    p_apr.add_argument("--prompt-text", help="Prompt text (or use --file)")
+    p_apr.add_argument("--file", help="Path to prompt file")
+    p_apr.add_argument("--best-for", help="What this prompt is best for")
+    p_apr.add_argument("--tags")
+
     # list
     p_list = sub.add_parser("list", help="List entries by type")
-    p_list.add_argument("kind", choices=["mistakes", "patterns", "skills", "conversations"])
+    p_list.add_argument("kind", choices=["mistakes", "patterns", "skills", "conversations", "prompts"])
     p_list.set_defaults(func=cmd_list)
+
+    # suggest
+    p_suggest = sub.add_parser("suggest", help="Suggest a prompt for a task")
+    p_suggest.add_argument("query", nargs="*", help="Task description")
+    p_suggest.add_argument("-n", "--limit", type=int, default=3)
+    p_suggest.set_defaults(func=cmd_suggest)
+
+    # import-skills
+    p_import = sub.add_parser("import-skills", help="Import skills from orchestrator SKILL.md files")
+    p_import.add_argument("path", help="Path to skills directory")
+    p_import.set_defaults(func=cmd_import_skills)
 
     # link-pattern
     p_link = sub.add_parser("link-pattern", help="Link pattern to a conversation")

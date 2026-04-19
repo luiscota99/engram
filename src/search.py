@@ -11,7 +11,7 @@ def search(query, item_type=None, tags=None, limit=20, db_path=None):
 
     Args:
         query: Free-text search query
-        item_type: Optional filter ('mistake', 'pattern', 'skill', 'conversation')
+        item_type: Optional filter ('mistake', 'pattern', 'skill', 'conversation', 'prompt')
         tags: Optional list of tags to filter by
         limit: Max results to return
         db_path: Optional database path override
@@ -109,6 +109,7 @@ def get_stats(db_path=None):
             ("patterns", "patterns"),
             ("skills", "skills"),
             ("conversations", "conversations"),
+            ("prompts", "prompts"),
             ("tags", "tags"),
         ]:
             count = conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()["c"]

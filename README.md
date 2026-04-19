@@ -113,6 +113,7 @@ engram list mistakes                     # All mistakes
 engram list patterns                     # All patterns
 engram list skills                       # All skills
 engram list conversations                # All conversations
+engram list prompts                      # All system prompts
 engram stats                             # Database overview
 ```
 
@@ -154,11 +155,27 @@ engram add conversation \
   --domain "image-processing" \
   --tasks "Built proxy pipeline, fixed alpha compositing" \
   --tags "python,pillow"
+
+# Log an LLM Prompt
+engram add prompt \
+  --name "Log Analyzer" \
+  --role "Expert system/application log analyst" \
+  --domain "debugging" \
+  --description "Analyzes logs, traces, and detects errors" \
+  --file "/path/to/Prompt.md" \
+  --tags "debugging,logs"
 ```
 
-### Link Patterns
+### Advanced Operations
 
 ```bash
+# Suggest a prompt for a task
+engram suggest "need to write an optimized CV for a software job"
+
+# Import skills from KS Cursor Orchestrator
+engram import-skills ~/.cursor/skills/
+
+# Link a pattern to a conversation
 engram link-pattern "Alpha Compositing Edge Artifacts" \
   --conversation "abc123" \
   --date 2026-04-19 \
@@ -188,6 +205,7 @@ When connected via MCP, AI agents get these tools:
 | **Patterns** | Recurring issue types with standard solutions | "Alpha edges cause fringes → tint with mask" |
 | **Skills** | Reusable multi-step workflows | "Image proxy pipeline: fetch → upscale → bleed → frame" |
 | **Conversations** | Structured session summaries | "Built proxy pipeline, made 3 key decisions" |
+| **Prompts** | Reusable LLM system prompts | "Log Analyzer: extracts errors from raw log dumps" |
 | **Tags** | Cross-cutting labels for filtering | `python`, `image-processing`, `api` |
 
 ## Architecture

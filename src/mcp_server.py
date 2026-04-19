@@ -159,6 +159,23 @@ TOOLS = [
         }
     },
     {
+        "name": "memory_add_prompt",
+        "description": "Store a reusable LLM system prompt for specialized tasks.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Prompt name (e.g., 'Log Analyzer')"},
+                "role": {"type": "string", "description": "What role/persona the prompt creates"},
+                "domain": {"type": "string", "description": "Domain area (e.g., 'debugging', 'architecture')"},
+                "description": {"type": "string", "description": "What the prompt does"},
+                "prompt_text": {"type": "string", "description": "The full text of the system prompt"},
+                "best_for": {"type": "string", "description": "When to use this prompt"},
+                "tags": {"type": "string", "description": "Comma-separated tags"}
+            },
+            "required": ["name", "role", "domain", "description", "prompt_text"]
+        }
+    },
+    {
         "name": "memory_list",
         "description": "List all entries of a specific type.",
         "inputSchema": {
@@ -166,7 +183,7 @@ TOOLS = [
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["mistakes", "patterns", "skills", "conversations"],
+                    "enum": ["mistakes", "patterns", "skills", "conversations", "prompts"],
                     "description": "Type of entries to list"
                 }
             },
@@ -284,6 +301,22 @@ def handle_memory_add_conversation(args):
     return f"Conversation #{cid} '{args['title']}' logged successfully."
 
 
+def handle_memory_add_prompt(args):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """INSERT INTO prompts (name, role, domain, description, prompt_text, best_for)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (args["name"], args["role"], args["domain"], args["description"],
+             args["prompt_text"], args.get("best_for")),
+        )
+        pid = cursor.lastrowid
+        tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
+        link_tags(conn, "prompt", pid, tags)
+        content = f"{args['role']} | {args['description']} | {args.get('best_for', '')} | {args['prompt_text'][:500]}"
+        index_in_fts(conn, "prompt", pid, args["name"], content, tags)
+    return f"Prompt #{pid} '{args['name']}' stored successfully."
+
+
 def handle_memory_list(args):
     item_type = args["type"]
     with get_connection() as conn:
@@ -332,6 +365,19 @@ def handle_memory_list(args):
                     lines.append(f"    tags: {', '.join(tags)}")
             return "\n".join(lines)
 
+        elif item_type == "prompts":
+            rows = conn.execute("SELECT id, name, role, domain, best_for FROM prompts ORDER BY name").fetchall()
+            lines = [f"Prompts ({len(rows)}):"]
+            for r in rows:
+                tags = get_tags_for_item(conn, "prompt", r["id"])
+                lines.append(f"  {r['name']} [{r['domain']}]")
+                lines.append(f"    Role: {r['role'][:100]}")
+                if r['best_for']:
+                    lines.append(f"    Best for: {r['best_for'][:100]}")
+                if tags:
+                    lines.append(f"    tags: {', '.join(tags)}")
+            return "\n".join(lines)
+
     return f"Unknown type: {item_type}"
 
 
@@ -356,6 +402,7 @@ TOOL_HANDLERS = {
     "memory_add_pattern": handle_memory_add_pattern,
     "memory_add_skill": handle_memory_add_skill,
     "memory_add_conversation": handle_memory_add_conversation,
+    "memory_add_prompt": handle_memory_add_prompt,
     "memory_list": handle_memory_list,
     "memory_stats": handle_memory_stats,
 }
