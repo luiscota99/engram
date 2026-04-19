@@ -3,12 +3,10 @@ Search module — FTS5 full-text search with ranking and filtering.
 """
 
 import json
-import urllib.request
-from .database import get_connection
-
 
 from .database import get_connection
 from .embeddings import embed_text
+
 
 def semantic_search(query, limit=10, db_path=None):
     """
@@ -38,19 +36,22 @@ def semantic_search(query, limit=10, db_path=None):
             rows = conn.execute(sql, [json.dumps(embedding), limit]).fetchall()
             results = []
             for row in rows:
-                results.append({
-                    "item_type": row["item_type"],
-                    "item_id": row["item_id"],
-                    "title": row["title"],
-                    "snippet": row["snippet"][:200] if row["snippet"] else "",
-                    "tags": row["tags"],
-                    "rank": row["distance"], # lower distance is better
-                    "is_semantic": True
-                })
+                results.append(
+                    {
+                        "item_type": row["item_type"],
+                        "item_id": row["item_id"],
+                        "title": row["title"],
+                        "snippet": row["snippet"][:200] if row["snippet"] else "",
+                        "tags": row["tags"],
+                        "rank": row["distance"],  # lower distance is better
+                        "is_semantic": True,
+                    }
+                )
             return results
-        except Exception as e:
+        except Exception:
             # sqlite-vec might not be loaded
             return []
+
 
 def search(query, item_type=None, tags=None, limit=20, db_path=None):
     """
@@ -95,9 +96,7 @@ def search(query, item_type=None, tags=None, limit=20, db_path=None):
                 LIMIT ?
             """
             # Clean query for FTS5: quote terms to avoid syntax errors
-            fts_query = " OR ".join(
-                f'"{term}"' for term in query.strip().split() if term
-            )
+            fts_query = " OR ".join(f'"{term}"' for term in query.strip().split() if term)
             rows = conn.execute(sql, [fts_query] + params + [limit]).fetchall()
         else:
             # No query text — list with optional filters
@@ -116,14 +115,16 @@ def search(query, item_type=None, tags=None, limit=20, db_path=None):
 
         results = []
         for row in rows:
-            results.append({
-                "item_type": row["item_type"],
-                "item_id": row["item_id"],
-                "title": row["title"],
-                "snippet": row["snippet"][:200] if row["snippet"] else "",
-                "tags": row["tags"],
-                "rank": row["rank"],
-            })
+            results.append(
+                {
+                    "item_type": row["item_type"],
+                    "item_id": row["item_id"],
+                    "title": row["title"],
+                    "snippet": row["snippet"][:200] if row["snippet"] else "",
+                    "tags": row["tags"],
+                    "rank": row["rank"],
+                }
+            )
         return results
 
 

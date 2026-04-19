@@ -3,8 +3,7 @@ Seed module — populates the database with existing data from flat-file KIs.
 Run once to migrate from markdown-based memory to SQLite.
 """
 
-from .database import get_connection, init_db, link_tags, index_in_fts
-
+from .database import get_connection, index_in_fts, init_db, link_tags
 
 SEED_MISTAKES = [
     {
@@ -66,7 +65,9 @@ SEED_PATTERNS = [
         "root_cause": "Anti-aliased edges have semi-transparent pixels that blend with wrong background color (usually black from RGBA default)",
         "standard_fix": "Tint the overlay image to match target background color using its alpha channel as a mask",
         "tags": ["image-processing", "pillow", "alpha-compositing", "anti-aliasing"],
-        "occurrences": [("da2c45e6-1df8-4a66-ad50-73d7cff11f85", "2026-04-18", "Frame overlay on energy cards")],
+        "occurrences": [
+            ("da2c45e6-1df8-4a66-ad50-73d7cff11f85", "2026-04-18", "Frame overlay on energy cards")
+        ],
     },
     {
         "name": "Feature Loss During Script Unification",
@@ -74,7 +75,13 @@ SEED_PATTERNS = [
         "root_cause": "When merging scripts, exciting new features get attention while existing features are overlooked",
         "standard_fix": "Enumerate ALL features from each source as a checklist before writing combined version",
         "tags": ["script-unification", "feature-loss", "python"],
-        "occurrences": [("da2c45e6-1df8-4a66-ad50-73d7cff11f85", "2026-04-18", "add_bleed.py logic missing from make_proxies.py")],
+        "occurrences": [
+            (
+                "da2c45e6-1df8-4a66-ad50-73d7cff11f85",
+                "2026-04-18",
+                "add_bleed.py logic missing from make_proxies.py",
+            )
+        ],
     },
     {
         "name": "Browser Subagent Content Hallucination",
@@ -82,7 +89,13 @@ SEED_PATTERNS = [
         "root_cause": "Browser subagents have limited context and may optimize for appearance rather than following exact instructions",
         "standard_fix": "Provide exact copy-paste text in prompts. Verify every action via screenshot before proceeding",
         "tags": ["browser-subagent", "hallucination", "content-accuracy"],
-        "occurrences": [("dde56edf-1eb3-4887-a9a4-02dca808dd4c", "2026-04-18", "LinkedIn experience entries and About section modified")],
+        "occurrences": [
+            (
+                "dde56edf-1eb3-4887-a9a4-02dca808dd4c",
+                "2026-04-18",
+                "LinkedIn experience entries and About section modified",
+            )
+        ],
     },
     {
         "name": "API Parameter Name != Display Name",
@@ -90,7 +103,9 @@ SEED_PATTERNS = [
         "root_cause": "APIs use internal IDs/slugs/codes that differ from marketing names. Spaces and case sensitivity compound the problem",
         "standard_fix": "Look up resource ID from a listing/search endpoint first, then use returned ID in subsequent queries",
         "tags": ["api", "parameter-mismatch", "lookup-first"],
-        "occurrences": [("da2c45e6-1df8-4a66-ad50-73d7cff11f85", "2026-04-18", "Call of Legends vs col1")],
+        "occurrences": [
+            ("da2c45e6-1df8-4a66-ad50-73d7cff11f85", "2026-04-18", "Call of Legends vs col1")
+        ],
     },
     {
         "name": "Print Layout Overflow",
@@ -180,7 +195,15 @@ def seed_database(db_path=None):
             cursor = conn.execute(
                 """INSERT INTO mistakes (date, context, mistake, root_cause, fix, prevention, conversation_id)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (m["date"], m["context"], m["mistake"], m["root_cause"], m["fix"], m["prevention"], m["conversation_id"]),
+                (
+                    m["date"],
+                    m["context"],
+                    m["mistake"],
+                    m["root_cause"],
+                    m["fix"],
+                    m["prevention"],
+                    m["conversation_id"],
+                ),
             )
             mid = cursor.lastrowid
             link_tags(conn, "mistake", mid, m["tags"])
@@ -213,7 +236,15 @@ def seed_database(db_path=None):
             cursor = conn.execute(
                 """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (s["name"], s["domain"], s["trigger_desc"], s["workflow"], s["pitfalls"], s["key_files"], s["dependencies"]),
+                (
+                    s["name"],
+                    s["domain"],
+                    s["trigger_desc"],
+                    s["workflow"],
+                    s["pitfalls"],
+                    s["key_files"],
+                    s["dependencies"],
+                ),
             )
             sid = cursor.lastrowid
             link_tags(conn, "skill", sid, s["tags"])
@@ -227,7 +258,16 @@ def seed_database(db_path=None):
             cursor = conn.execute(
                 """INSERT INTO conversations (conversation_id, title, date, domain, tasks_completed, key_decisions, mistakes_summary, skills_extracted)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (c["conversation_id"], c["title"], c["date"], c["domain"], c["tasks_completed"], c["key_decisions"], c["mistakes_summary"], c["skills_extracted"]),
+                (
+                    c["conversation_id"],
+                    c["title"],
+                    c["date"],
+                    c["domain"],
+                    c["tasks_completed"],
+                    c["key_decisions"],
+                    c["mistakes_summary"],
+                    c["skills_extracted"],
+                ),
             )
             cid = cursor.lastrowid
             link_tags(conn, "conversation", cid, c["tags"])

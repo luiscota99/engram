@@ -24,8 +24,10 @@ AI assistants forget everything between sessions. Engram fixes that by maintaini
 ```bash
 git clone https://github.com/luismiguelcota/engram.git
 cd engram
-bash scripts/install.sh
-source ~/.zshrc
+pip install -e .
+
+# Initialize the database
+engram init
 ```
 
 ### Try it out

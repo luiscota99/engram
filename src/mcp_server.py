@@ -20,16 +20,16 @@ Usage in Cursor MCP config (~/.cursor/mcp.json):
 """
 
 import json
-import sys
 import os
+import sys
 import traceback
 
 # Ensure our package is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.database import init_db, get_connection, link_tags, index_in_fts, get_tags_for_item
-from src.search import search as memory_search, get_recent, get_stats
-
+from src.database import get_connection, get_tags_for_item, index_in_fts, init_db, link_tags
+from src.search import get_recent, get_stats
+from src.search import search as memory_search
 
 # ── MCP Protocol Constants ──────────────────────────────────────────
 
@@ -49,25 +49,25 @@ TOOLS = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Free-text search query (e.g., 'alpha compositing', 'API parameter mismatch')"
+                    "description": "Free-text search query (e.g., 'alpha compositing', 'API parameter mismatch')",
                 },
                 "type": {
                     "type": "string",
                     "enum": ["mistake", "pattern", "skill", "conversation"],
-                    "description": "Optional: filter results to a specific memory type"
+                    "description": "Optional: filter results to a specific memory type",
                 },
                 "tags": {
                     "type": "string",
-                    "description": "Optional: comma-separated tags to filter by (e.g., 'python,pillow')"
+                    "description": "Optional: comma-separated tags to filter by (e.g., 'python,pillow')",
                 },
                 "limit": {
                     "type": "integer",
                     "description": "Max results to return (default: 10)",
-                    "default": 10
-                }
+                    "default": 10,
+                },
             },
-            "required": ["query"]
-        }
+            "required": ["query"],
+        },
     },
     {
         "name": "memory_recent",
@@ -78,15 +78,15 @@ TOOLS = [
                 "count": {
                     "type": "integer",
                     "description": "Number of recent entries to return (default: 5)",
-                    "default": 5
+                    "default": 5,
                 },
                 "type": {
                     "type": "string",
                     "enum": ["mistake", "pattern", "skill", "conversation"],
-                    "description": "Optional: filter to a specific type"
-                }
-            }
-        }
+                    "description": "Optional: filter to a specific type",
+                },
+            },
+        },
     },
     {
         "name": "memory_add_mistake",
@@ -95,16 +95,22 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "date": {"type": "string", "description": "Date of the mistake (YYYY-MM-DD)"},
-                "context": {"type": "string", "description": "What you were doing when the mistake happened"},
+                "context": {
+                    "type": "string",
+                    "description": "What you were doing when the mistake happened",
+                },
                 "mistake": {"type": "string", "description": "What went wrong"},
                 "root_cause": {"type": "string", "description": "Why it happened"},
                 "fix": {"type": "string", "description": "How it was resolved"},
                 "prevention": {"type": "string", "description": "How to avoid it next time"},
-                "conversation_id": {"type": "string", "description": "ID of the conversation where this occurred"},
-                "tags": {"type": "string", "description": "Comma-separated tags"}
+                "conversation_id": {
+                    "type": "string",
+                    "description": "ID of the conversation where this occurred",
+                },
+                "tags": {"type": "string", "description": "Comma-separated tags"},
             },
-            "required": ["date", "context", "mistake", "fix"]
-        }
+            "required": ["date", "context", "mistake", "fix"],
+        },
     },
     {
         "name": "memory_add_pattern",
@@ -112,14 +118,17 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Pattern name (e.g., 'Alpha Compositing Edge Artifacts')"},
+                "name": {
+                    "type": "string",
+                    "description": "Pattern name (e.g., 'Alpha Compositing Edge Artifacts')",
+                },
                 "symptoms": {"type": "string", "description": "What the problem looks like"},
                 "root_cause": {"type": "string", "description": "Why it typically happens"},
                 "standard_fix": {"type": "string", "description": "What usually resolves it"},
-                "tags": {"type": "string", "description": "Comma-separated tags"}
+                "tags": {"type": "string", "description": "Comma-separated tags"},
             },
-            "required": ["name", "symptoms", "root_cause", "standard_fix"]
-        }
+            "required": ["name", "symptoms", "root_cause", "standard_fix"],
+        },
     },
     {
         "name": "memory_add_skill",
@@ -127,17 +136,26 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Skill name (e.g., 'Pokemon Proxy Pipeline')"},
-                "domain": {"type": "string", "description": "Domain area (e.g., 'image-processing', 'career', 'devops')"},
+                "name": {
+                    "type": "string",
+                    "description": "Skill name (e.g., 'Pokemon Proxy Pipeline')",
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "Domain area (e.g., 'image-processing', 'career', 'devops')",
+                },
                 "trigger": {"type": "string", "description": "When to use this skill"},
                 "workflow": {"type": "string", "description": "Step-by-step workflow (markdown)"},
                 "pitfalls": {"type": "string", "description": "Known issues and gotchas"},
                 "key_files": {"type": "string", "description": "JSON array of relevant file paths"},
-                "dependencies": {"type": "string", "description": "What's needed to run this workflow"},
-                "tags": {"type": "string", "description": "Comma-separated tags"}
+                "dependencies": {
+                    "type": "string",
+                    "description": "What's needed to run this workflow",
+                },
+                "tags": {"type": "string", "description": "Comma-separated tags"},
             },
-            "required": ["name", "domain", "trigger", "workflow"]
-        }
+            "required": ["name", "domain", "trigger", "workflow"],
+        },
     },
     {
         "name": "memory_add_conversation",
@@ -148,15 +166,21 @@ TOOLS = [
                 "conversation_id": {"type": "string", "description": "Unique conversation ID"},
                 "title": {"type": "string", "description": "Descriptive title"},
                 "date": {"type": "string", "description": "Date (YYYY-MM-DD)"},
-                "domain": {"type": "string", "description": "Primary domain (e.g., 'image-processing')"},
+                "domain": {
+                    "type": "string",
+                    "description": "Primary domain (e.g., 'image-processing')",
+                },
                 "tasks_completed": {"type": "string", "description": "What was accomplished"},
                 "key_decisions": {"type": "string", "description": "Important choices made"},
                 "mistakes_summary": {"type": "string", "description": "What went wrong"},
-                "skills_extracted": {"type": "string", "description": "Skills created from this session"},
-                "tags": {"type": "string", "description": "Comma-separated tags"}
+                "skills_extracted": {
+                    "type": "string",
+                    "description": "Skills created from this session",
+                },
+                "tags": {"type": "string", "description": "Comma-separated tags"},
             },
-            "required": ["conversation_id", "title", "date", "domain"]
-        }
+            "required": ["conversation_id", "title", "date", "domain"],
+        },
     },
     {
         "name": "memory_add_prompt",
@@ -166,14 +190,20 @@ TOOLS = [
             "properties": {
                 "name": {"type": "string", "description": "Prompt name (e.g., 'Log Analyzer')"},
                 "role": {"type": "string", "description": "What role/persona the prompt creates"},
-                "domain": {"type": "string", "description": "Domain area (e.g., 'debugging', 'architecture')"},
+                "domain": {
+                    "type": "string",
+                    "description": "Domain area (e.g., 'debugging', 'architecture')",
+                },
                 "description": {"type": "string", "description": "What the prompt does"},
-                "prompt_text": {"type": "string", "description": "The full text of the system prompt"},
+                "prompt_text": {
+                    "type": "string",
+                    "description": "The full text of the system prompt",
+                },
                 "best_for": {"type": "string", "description": "When to use this prompt"},
-                "tags": {"type": "string", "description": "Comma-separated tags"}
+                "tags": {"type": "string", "description": "Comma-separated tags"},
             },
-            "required": ["name", "role", "domain", "description", "prompt_text"]
-        }
+            "required": ["name", "role", "domain", "description", "prompt_text"],
+        },
     },
     {
         "name": "memory_list",
@@ -184,24 +214,22 @@ TOOLS = [
                 "type": {
                     "type": "string",
                     "enum": ["mistakes", "patterns", "skills", "conversations", "prompts"],
-                    "description": "Type of entries to list"
+                    "description": "Type of entries to list",
                 }
             },
-            "required": ["type"]
-        }
+            "required": ["type"],
+        },
     },
     {
         "name": "memory_stats",
         "description": "Get database statistics — counts of each memory type.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {}
-        }
+        "inputSchema": {"type": "object", "properties": {}},
     },
 ]
 
 
 # ── Tool Handlers ───────────────────────────────────────────────────
+
 
 def handle_memory_search(args):
     query = args.get("query", "")
@@ -241,14 +269,22 @@ def handle_memory_add_mistake(args):
         cursor = conn.execute(
             """INSERT INTO mistakes (date, context, mistake, root_cause, fix, prevention, conversation_id)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (args["date"], args["context"], args["mistake"],
-             args.get("root_cause"), args["fix"], args.get("prevention"),
-             args.get("conversation_id")),
+            (
+                args["date"],
+                args["context"],
+                args["mistake"],
+                args.get("root_cause"),
+                args["fix"],
+                args.get("prevention"),
+                args.get("conversation_id"),
+            ),
         )
         mid = cursor.lastrowid
         tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
         link_tags(conn, "mistake", mid, tags)
-        content = f"{args['context']} | {args['mistake']} | {args.get('root_cause', '')} | {args['fix']}"
+        content = (
+            f"{args['context']} | {args['mistake']} | {args.get('root_cause', '')} | {args['fix']}"
+        )
         index_in_fts(conn, "mistake", mid, args["mistake"][:80], content, tags)
     return f"Mistake #{mid} logged successfully."
 
@@ -273,8 +309,15 @@ def handle_memory_add_skill(args):
         cursor = conn.execute(
             """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (args["name"], args["domain"], args["trigger"], args["workflow"],
-             args.get("pitfalls"), args.get("key_files"), args.get("dependencies")),
+            (
+                args["name"],
+                args["domain"],
+                args["trigger"],
+                args["workflow"],
+                args.get("pitfalls"),
+                args.get("key_files"),
+                args.get("dependencies"),
+            ),
         )
         sid = cursor.lastrowid
         tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
@@ -289,9 +332,16 @@ def handle_memory_add_conversation(args):
         cursor = conn.execute(
             """INSERT INTO conversations (conversation_id, title, date, domain, tasks_completed, key_decisions, mistakes_summary, skills_extracted)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (args["conversation_id"], args["title"], args["date"], args["domain"],
-             args.get("tasks_completed"), args.get("key_decisions"),
-             args.get("mistakes_summary"), args.get("skills_extracted")),
+            (
+                args["conversation_id"],
+                args["title"],
+                args["date"],
+                args["domain"],
+                args.get("tasks_completed"),
+                args.get("key_decisions"),
+                args.get("mistakes_summary"),
+                args.get("skills_extracted"),
+            ),
         )
         cid = cursor.lastrowid
         tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
@@ -306,8 +356,14 @@ def handle_memory_add_prompt(args):
         cursor = conn.execute(
             """INSERT INTO prompts (name, role, domain, description, prompt_text, best_for)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (args["name"], args["role"], args["domain"], args["description"],
-             args["prompt_text"], args.get("best_for")),
+            (
+                args["name"],
+                args["role"],
+                args["domain"],
+                args["description"],
+                args["prompt_text"],
+                args.get("best_for"),
+            ),
         )
         pid = cursor.lastrowid
         tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
@@ -321,7 +377,9 @@ def handle_memory_list(args):
     item_type = args["type"]
     with get_connection() as conn:
         if item_type == "mistakes":
-            rows = conn.execute("SELECT id, date, mistake, fix FROM mistakes ORDER BY date DESC").fetchall()
+            rows = conn.execute(
+                "SELECT id, date, mistake, fix FROM mistakes ORDER BY date DESC"
+            ).fetchall()
             lines = [f"Mistakes ({len(rows)}):"]
             for r in rows:
                 tags = get_tags_for_item(conn, "mistake", r["id"])
@@ -332,7 +390,9 @@ def handle_memory_list(args):
             return "\n".join(lines)
 
         elif item_type == "patterns":
-            rows = conn.execute("SELECT id, name, symptoms, standard_fix FROM patterns ORDER BY name").fetchall()
+            rows = conn.execute(
+                "SELECT id, name, symptoms, standard_fix FROM patterns ORDER BY name"
+            ).fetchall()
             lines = [f"Patterns ({len(rows)}):"]
             for r in rows:
                 tags = get_tags_for_item(conn, "pattern", r["id"])
@@ -344,7 +404,9 @@ def handle_memory_list(args):
             return "\n".join(lines)
 
         elif item_type == "skills":
-            rows = conn.execute("SELECT id, name, domain, trigger_desc FROM skills ORDER BY name").fetchall()
+            rows = conn.execute(
+                "SELECT id, name, domain, trigger_desc FROM skills ORDER BY name"
+            ).fetchall()
             lines = [f"Skills ({len(rows)}):"]
             for r in rows:
                 tags = get_tags_for_item(conn, "skill", r["id"])
@@ -355,7 +417,9 @@ def handle_memory_list(args):
             return "\n".join(lines)
 
         elif item_type == "conversations":
-            rows = conn.execute("SELECT id, conversation_id, title, date, domain FROM conversations ORDER BY date DESC").fetchall()
+            rows = conn.execute(
+                "SELECT id, conversation_id, title, date, domain FROM conversations ORDER BY date DESC"
+            ).fetchall()
             lines = [f"Conversations ({len(rows)}):"]
             for r in rows:
                 tags = get_tags_for_item(conn, "conversation", r["id"])
@@ -366,13 +430,15 @@ def handle_memory_list(args):
             return "\n".join(lines)
 
         elif item_type == "prompts":
-            rows = conn.execute("SELECT id, name, role, domain, best_for FROM prompts ORDER BY name").fetchall()
+            rows = conn.execute(
+                "SELECT id, name, role, domain, best_for FROM prompts ORDER BY name"
+            ).fetchall()
             lines = [f"Prompts ({len(rows)}):"]
             for r in rows:
                 tags = get_tags_for_item(conn, "prompt", r["id"])
                 lines.append(f"  {r['name']} [{r['domain']}]")
                 lines.append(f"    Role: {r['role'][:100]}")
-                if r['best_for']:
+                if r["best_for"]:
                     lines.append(f"    Best for: {r['best_for'][:100]}")
                 if tags:
                     lines.append(f"    tags: {', '.join(tags)}")
@@ -410,6 +476,7 @@ TOOL_HANDLERS = {
 
 # ── JSON-RPC / MCP Protocol Handler ─────────────────────────────────
 
+
 def make_response(req_id, result):
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
@@ -425,11 +492,14 @@ def handle_request(msg):
 
     # Initialize
     if method == "initialize":
-        return make_response(req_id, {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-        })
+        return make_response(
+            req_id,
+            {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+            },
+        )
 
     # Initialized notification (no response needed)
     if method == "notifications/initialized":
@@ -450,16 +520,17 @@ def handle_request(msg):
 
         try:
             result_text = handler(tool_args)
-            return make_response(req_id, {
-                "content": [{"type": "text", "text": result_text}]
-            })
+            return make_response(req_id, {"content": [{"type": "text", "text": result_text}]})
         except Exception as e:
             tb = traceback.format_exc()
             print(f"Error in {tool_name}: {tb}", file=sys.stderr)
-            return make_response(req_id, {
-                "content": [{"type": "text", "text": f"Error: {str(e)}"}],
-                "isError": True,
-            })
+            return make_response(
+                req_id,
+                {
+                    "content": [{"type": "text", "text": f"Error: {str(e)}"}],
+                    "isError": True,
+                },
+            )
 
     # Ping
     if method == "ping":

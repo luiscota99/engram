@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "engram-memory"
+version = "0.1.0"
+description = "A fast, local, FTS5-powered engineering memory for LLM-assisted development"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Luis Miguel Cota" }
+]
+dependencies = [
+    "sqlite-vec>=0.1.6",
+    "sqlean-py>=3.45.1"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.3.0"
+]
+
+[project.scripts]
+engram = "src.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]

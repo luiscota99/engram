@@ -3,6 +3,7 @@ Database module — schema, connection, and migrations for Engram.
 Uses SQLite with FTS5 for full-text search. Zero external dependencies.
 """
 
+import json
 import os
 from contextlib import contextmanager
 
@@ -19,9 +20,7 @@ except ImportError:
 from .embeddings import embed_text
 from .migrations import run_migrations
 
-DEFAULT_DB_PATH = os.path.join(
-    os.path.expanduser("~"), ".engram", "memory.db"
-)
+DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
 DB_PATH = os.environ.get("ENGRAM_DB_PATH", DEFAULT_DB_PATH)
 
@@ -155,18 +154,20 @@ def get_db_path():
 def get_connection(db_path=None):
     """Context manager for database connections with WAL mode and foreign keys."""
     path = db_path or DB_PATH
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    db_dir = os.path.dirname(path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    
+
     # Load vector extension if available
     if sqlite_vec is not None:
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
-        
+
     try:
         yield conn
         conn.commit()
@@ -182,10 +183,8 @@ def init_db(db_path=None):
     with get_connection(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
         # Set schema version if not present
-        existing = conn.execute(
-            "SELECT value FROM schema_meta WHERE key='version'"
-        ).fetchone()
-        
+        existing = conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()
+
         if not existing:
             # Brand new database setup
             conn.execute(
@@ -197,7 +196,7 @@ def init_db(db_path=None):
             current_version = int(existing["value"])
             if current_version < SCHEMA_VERSION:
                 run_migrations(conn, current_version, SCHEMA_VERSION)
-                
+
     return True
 
 
@@ -248,14 +247,13 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
         (item_type, str(item_id), title, content, tags_str),
     )
     rowid = cursor.lastrowid
-    
+
     # Generate and store embedding
     full_text = f"{title}\n{content}\n{tags_str}"
     embedding = embed_text(full_text)
-    
+
     if embedding and sqlite_vec is not None:
         conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rowid,))
         conn.execute(
-            "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
-            (rowid, json.dumps(embedding))
+            "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)", (rowid, json.dumps(embedding))
         )

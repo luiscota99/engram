@@ -29,38 +29,48 @@ import argparse
 import json
 import os
 import sys
-import textwrap
 
 # Allow running as `python -m src.cli` or directly
 if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     __package__ = "src"
 
-from .database import get_connection, init_db, link_tags, index_in_fts, get_tags_for_item, get_db_path
-from .search import search, get_recent, get_stats, semantic_search
-from .seed import seed_database
-from .doctor import run_diagnostics
 from .backup import run_backup
-
+from .database import (
+    get_connection,
+    get_db_path,
+    get_tags_for_item,
+    index_in_fts,
+    init_db,
+    link_tags,
+)
+from .doctor import run_diagnostics
+from .search import get_recent, get_stats, search, semantic_search
+from .seed import seed_database
 
 # ── Formatting helpers ──────────────────────────────────────────────
 
+
 def fmt_header(text):
     return f"\033[1;36m{text}\033[0m"
+
 
 def fmt_type(t):
     colors = {"mistake": "31", "pattern": "33", "skill": "32", "conversation": "34"}
     code = colors.get(t, "37")
     return f"\033[1;{code}m[{t.upper()}]\033[0m"
 
+
 def fmt_dim(text):
     return f"\033[2m{text}\033[0m"
+
 
 def fmt_bold(text):
     return f"\033[1m{text}\033[0m"
 
 
 # ── Commands ────────────────────────────────────────────────────────
+
 
 def cmd_search(args):
     query = " ".join(args.query) if args.query else ""
@@ -120,7 +130,15 @@ def _add_mistake(args):
         cursor = conn.execute(
             """INSERT INTO mistakes (date, context, mistake, root_cause, fix, prevention, conversation_id)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (args.date, args.context, args.mistake, args.root_cause, args.fix, args.prevention, args.conversation),
+            (
+                args.date,
+                args.context,
+                args.mistake,
+                args.root_cause,
+                args.fix,
+                args.prevention,
+                args.conversation,
+            ),
         )
         mid = cursor.lastrowid
         tags = args.tags.split(",") if args.tags else []
@@ -150,7 +168,15 @@ def _add_skill(args):
         cursor = conn.execute(
             """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (args.name, args.domain, args.trigger, args.workflow, args.pitfalls, args.files, args.dependencies),
+            (
+                args.name,
+                args.domain,
+                args.trigger,
+                args.workflow,
+                args.pitfalls,
+                args.files,
+                args.dependencies,
+            ),
         )
         sid = cursor.lastrowid
         tags = args.tags.split(",") if args.tags else []
@@ -165,7 +191,16 @@ def _add_conversation(args):
         cursor = conn.execute(
             """INSERT INTO conversations (conversation_id, title, date, domain, tasks_completed, key_decisions, mistakes_summary, skills_extracted)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (args.id, args.title, args.date, args.domain, args.tasks, args.decisions, args.mistakes, args.skills),
+            (
+                args.id,
+                args.title,
+                args.date,
+                args.domain,
+                args.tasks,
+                args.decisions,
+                args.mistakes,
+                args.skills,
+            ),
         )
         cid = cursor.lastrowid
         tags = args.tags.split(",") if args.tags else []
@@ -179,7 +214,9 @@ def cmd_list(args):
     kind = args.kind
     with get_connection() as conn:
         if kind == "mistakes":
-            rows = conn.execute("SELECT id, date, mistake, fix FROM mistakes ORDER BY date DESC").fetchall()
+            rows = conn.execute(
+                "SELECT id, date, mistake, fix FROM mistakes ORDER BY date DESC"
+            ).fetchall()
             print(fmt_header(f"Mistakes ({len(rows)}):\n"))
             for r in rows:
                 tags = get_tags_for_item(conn, "mistake", r["id"])
@@ -190,12 +227,18 @@ def cmd_list(args):
                 print()
 
         elif kind == "patterns":
-            rows = conn.execute("SELECT id, name, symptoms, standard_fix FROM patterns ORDER BY name").fetchall()
+            rows = conn.execute(
+                "SELECT id, name, symptoms, standard_fix FROM patterns ORDER BY name"
+            ).fetchall()
             print(fmt_header(f"Patterns ({len(rows)}):\n"))
             for r in rows:
-                occ = conn.execute("SELECT COUNT(*) as c FROM pattern_occurrences WHERE pattern_id = ?", (r["id"],)).fetchone()["c"]
+                occ = conn.execute(
+                    "SELECT COUNT(*) as c FROM pattern_occurrences WHERE pattern_id = ?", (r["id"],)
+                ).fetchone()["c"]
                 tags = get_tags_for_item(conn, "pattern", r["id"])
-                print(f"  {fmt_type('pattern')} {fmt_bold(r['name'])} ({occ} occurrence{'s' if occ != 1 else ''})")
+                print(
+                    f"  {fmt_type('pattern')} {fmt_bold(r['name'])} ({occ} occurrence{'s' if occ != 1 else ''})"
+                )
                 print(f"    Symptoms: {fmt_dim(r['symptoms'][:100])}")
                 print(f"    Fix: {fmt_dim(r['standard_fix'][:100])}")
                 if tags:
@@ -203,7 +246,9 @@ def cmd_list(args):
                 print()
 
         elif kind == "skills":
-            rows = conn.execute("SELECT id, name, domain, trigger_desc FROM skills ORDER BY name").fetchall()
+            rows = conn.execute(
+                "SELECT id, name, domain, trigger_desc FROM skills ORDER BY name"
+            ).fetchall()
             print(fmt_header(f"Skills ({len(rows)}):\n"))
             for r in rows:
                 tags = get_tags_for_item(conn, "skill", r["id"])
@@ -214,24 +259,30 @@ def cmd_list(args):
                 print()
 
         elif kind == "conversations":
-            rows = conn.execute("SELECT id, conversation_id, title, date, domain FROM conversations ORDER BY date DESC").fetchall()
+            rows = conn.execute(
+                "SELECT id, conversation_id, title, date, domain FROM conversations ORDER BY date DESC"
+            ).fetchall()
             print(fmt_header(f"Conversations ({len(rows)}):\n"))
             for r in rows:
                 tags = get_tags_for_item(conn, "conversation", r["id"])
                 print(f"  {fmt_type('conversation')} [{r['date']}] {fmt_bold(r['title'])}")
-                print(f"    Domain: {r['domain']} | ID: {fmt_dim(r['conversation_id'][:12] + '...')}")
+                print(
+                    f"    Domain: {r['domain']} | ID: {fmt_dim(r['conversation_id'][:12] + '...')}"
+                )
                 if tags:
                     print(f"    {fmt_dim('tags: ' + ', '.join(tags))}")
                 print()
 
         elif kind == "prompts":
-            rows = conn.execute("SELECT id, name, role, domain, best_for FROM prompts ORDER BY name").fetchall()
+            rows = conn.execute(
+                "SELECT id, name, role, domain, best_for FROM prompts ORDER BY name"
+            ).fetchall()
             print(fmt_header(f"Prompts ({len(rows)}):\n"))
             for r in rows:
                 tags = get_tags_for_item(conn, "prompt", r["id"])
                 print(f"  {fmt_type('prompt')} {fmt_bold(r['name'])} [{r['domain']}]")
                 print(f"    Role: {fmt_dim(r['role'][:100])}")
-                if r['best_for']:
+                if r["best_for"]:
                     print(f"    Best for: {fmt_dim(r['best_for'][:100])}")
                 if tags:
                     print(f"    {fmt_dim('tags: ' + ', '.join(tags))}")
@@ -298,8 +349,15 @@ def _add_prompt(args):
         cursor = conn.execute(
             """INSERT INTO prompts (name, role, domain, description, prompt_text, source_path, best_for)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (args.name, args.role, args.domain, args.description, prompt_text,
-             args.file, args.best_for),
+            (
+                args.name,
+                args.role,
+                args.domain,
+                args.description,
+                prompt_text,
+                args.file,
+                args.best_for,
+            ),
         )
         pid = cursor.lastrowid
         tags = [t.strip() for t in args.tags.split(",")] if args.tags else []
@@ -312,28 +370,30 @@ def _add_prompt(args):
 def cmd_suggest(args):
     """Suggest a prompt or skill based on task description."""
     query = " ".join(args.query) if args.query else ""
-    
+
     # Try semantic search first if query is long enough
     results = []
     is_semantic = False
     if len(query.split()) > 2:
         sem_results = semantic_search(query, limit=args.limit)
         # Filter for prompts or requested type
-        item_type = getattr(args, 'type', 'prompt')
-        results = [r for r in sem_results if r['item_type'] == item_type]
+        item_type = getattr(args, "type", "prompt")
+        results = [r for r in sem_results if r["item_type"] == item_type]
         if results:
             is_semantic = True
 
     # Fallback to FTS5 lexical search
     if not results:
-        results = search(query, item_type=getattr(args, 'type', 'prompt'), limit=args.limit)
+        results = search(query, item_type=getattr(args, "type", "prompt"), limit=args.limit)
 
     if not results:
         print(fmt_dim(f"No matching {getattr(args, 'type', 'prompt')}s found."))
         return
 
     search_type = "Semantic" if is_semantic else "Lexical"
-    print(fmt_header(f"Suggested {getattr(args, 'type', 'prompt')}s ({search_type}) for: {query}\n"))
+    print(
+        fmt_header(f"Suggested {getattr(args, 'type', 'prompt')}s ({search_type}) for: {query}\n")
+    )
     for r in results:
         print(f"  {fmt_type('prompt')} {fmt_bold(r['title'])}")
         if r["snippet"]:
@@ -368,7 +428,7 @@ def cmd_import_skills(args):
                 content = f.read()
 
             # Parse YAML frontmatter
-            fm_match = re.match(r'^---\s*\n(.*?)\n---\s*\n(.*)$', content, re.DOTALL)
+            fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", content, re.DOTALL)
             if not fm_match:
                 skipped += 1
                 continue
@@ -377,19 +437,25 @@ def cmd_import_skills(args):
             body = fm_match.group(2).strip()
 
             # Extract name and description from frontmatter
-            name_match = re.search(r'^name:\s*(.+)$', frontmatter, re.MULTILINE)
-            desc_match = re.search(r'description:\s*>-?\s*\n((?:\s+.+\n?)*)', frontmatter)
+            name_match = re.search(r"^name:\s*(.+)$", frontmatter, re.MULTILINE)
+            desc_match = re.search(r"description:\s*>-?\s*\n((?:\s+.+\n?)*)", frontmatter)
             if not desc_match:
-                desc_match = re.search(r'^description:\s*(.+)$', frontmatter, re.MULTILINE)
+                desc_match = re.search(r"^description:\s*(.+)$", frontmatter, re.MULTILINE)
 
-            name = name_match.group(1).strip() if name_match else os.path.basename(os.path.dirname(skill_file))
+            name = (
+                name_match.group(1).strip()
+                if name_match
+                else os.path.basename(os.path.dirname(skill_file))
+            )
             description = ""
             if desc_match:
-                description = " ".join(line.strip() for line in desc_match.group(1).strip().split("\n"))
+                description = " ".join(
+                    line.strip() for line in desc_match.group(1).strip().split("\n")
+                )
 
             # Extract "When to Use" section as trigger
             trigger = ""
-            when_match = re.search(r'## When to Use\s*\n((?:- .+\n?)*)', body)
+            when_match = re.search(r"## When to Use\s*\n((?:- .+\n?)*)", body)
             if when_match:
                 trigger = when_match.group(1).strip()
             else:
@@ -397,7 +463,10 @@ def cmd_import_skills(args):
 
             # Classify domain from name
             domain = "engineering"
-            if any(kw in name for kw in ["react", "frontend", "ui", "web-design", "web-accessibility", "vercel"]):
+            if any(
+                kw in name
+                for kw in ["react", "frontend", "ui", "web-design", "web-accessibility", "vercel"]
+            ):
                 domain = "frontend"
             elif any(kw in name for kw in ["backend", "nodejs", "api", "database", "auth"]):
                 domain = "backend"
@@ -409,7 +478,10 @@ def cmd_import_skills(args):
                 domain = "debugging"
             elif any(kw in name for kw in ["git", "ship", "branch", "sdlc", "phase"]):
                 domain = "process"
-            elif any(kw in name for kw in ["brainstorm", "requirements", "prd", "spec", "project-bootstrap"]):
+            elif any(
+                kw in name
+                for kw in ["brainstorm", "requirements", "prd", "spec", "project-bootstrap"]
+            ):
                 domain = "planning"
 
             # Check if already exists
@@ -421,8 +493,15 @@ def cmd_import_skills(args):
             cursor = conn.execute(
                 """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (name, domain, trigger[:500], body[:3000], None,
-                 json.dumps([skill_file]), "ks-cursor-orchestrator"),
+                (
+                    name,
+                    domain,
+                    trigger[:500],
+                    body[:3000],
+                    None,
+                    json.dumps([skill_file]),
+                    "ks-cursor-orchestrator",
+                ),
             )
             sid = cursor.lastrowid
             tags = [domain, "orchestrator", "cursor-skill"]
@@ -436,6 +515,7 @@ def cmd_import_skills(args):
 
 # ── Argument parser ─────────────────────────────────────────────────
 
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="engram",
@@ -447,7 +527,9 @@ def build_parser():
     # search
     p_search = sub.add_parser("search", help="Search all memory")
     p_search.add_argument("query", nargs="*", help="Search query")
-    p_search.add_argument("-t", "--type", choices=["mistake", "pattern", "skill", "conversation", "prompt"])
+    p_search.add_argument(
+        "-t", "--type", choices=["mistake", "pattern", "skill", "conversation", "prompt"]
+    )
     p_search.add_argument("--tags", help="Comma-separated tags")
     p_search.add_argument("-n", "--limit", type=int, default=20)
     p_search.set_defaults(func=cmd_search)
@@ -455,7 +537,9 @@ def build_parser():
     # recent
     p_recent = sub.add_parser("recent", help="Show recent entries")
     p_recent.add_argument("-n", type=int, default=10)
-    p_recent.add_argument("-t", "--type", choices=["mistake", "pattern", "skill", "conversation", "prompt"])
+    p_recent.add_argument(
+        "-t", "--type", choices=["mistake", "pattern", "skill", "conversation", "prompt"]
+    )
     p_recent.set_defaults(func=cmd_recent)
 
     # add
@@ -519,7 +603,9 @@ def build_parser():
 
     # list
     p_list = sub.add_parser("list", help="List entries by type")
-    p_list.add_argument("kind", choices=["mistakes", "patterns", "skills", "conversations", "prompts"])
+    p_list.add_argument(
+        "kind", choices=["mistakes", "patterns", "skills", "conversations", "prompts"]
+    )
     p_list.set_defaults(func=cmd_list)
 
     # suggest
@@ -530,7 +616,9 @@ def build_parser():
     p_suggest.set_defaults(func=cmd_suggest)
 
     # import-skills
-    p_import = sub.add_parser("import-skills", help="Import skills from orchestrator SKILL.md files")
+    p_import = sub.add_parser(
+        "import-skills", help="Import skills from orchestrator SKILL.md files"
+    )
     p_import.add_argument("path", help="Path to skills directory")
     p_import.set_defaults(func=cmd_import_skills)
 
@@ -548,12 +636,18 @@ def build_parser():
 
     # doctor
     p_doctor = sub.add_parser("doctor", help="Run database diagnostics and repair")
-    p_doctor.add_argument("--repair", action="store_true", help="Attempt to auto-repair found issues")
+    p_doctor.add_argument(
+        "--repair", action="store_true", help="Attempt to auto-repair found issues"
+    )
     p_doctor.set_defaults(func=cmd_doctor)
 
     # backup
     p_backup = sub.add_parser("backup", help="Export database to JSON format")
-    p_backup.add_argument("--git", action="store_true", help="Automatically commit and push backup to Git if configured")
+    p_backup.add_argument(
+        "--git",
+        action="store_true",
+        help="Automatically commit and push backup to Git if configured",
+    )
     p_backup.set_defaults(func=cmd_backup)
 
     # init
