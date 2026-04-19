@@ -37,7 +37,7 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "src"
 
 from .database import get_connection, init_db, link_tags, index_in_fts, get_tags_for_item, get_db_path
-from .search import search, get_recent, get_stats
+from .search import search, get_recent, get_stats, semantic_search
 from .seed import seed_database
 
 
@@ -298,15 +298,30 @@ def _add_prompt(args):
 
 
 def cmd_suggest(args):
-    """Suggest a prompt based on task description."""
+    """Suggest a prompt or skill based on task description."""
     query = " ".join(args.query) if args.query else ""
-    results = search(query, item_type="prompt", limit=args.limit)
+    
+    # Try semantic search first if query is long enough
+    results = []
+    is_semantic = False
+    if len(query.split()) > 2:
+        sem_results = semantic_search(query, limit=args.limit)
+        # Filter for prompts or requested type
+        item_type = getattr(args, 'type', 'prompt')
+        results = [r for r in sem_results if r['item_type'] == item_type]
+        if results:
+            is_semantic = True
+
+    # Fallback to FTS5 lexical search
+    if not results:
+        results = search(query, item_type=getattr(args, 'type', 'prompt'), limit=args.limit)
 
     if not results:
-        print(fmt_dim("No matching prompts found."))
+        print(fmt_dim(f"No matching {getattr(args, 'type', 'prompt')}s found."))
         return
 
-    print(fmt_header(f"Suggested prompts for: {query}\n"))
+    search_type = "Semantic" if is_semantic else "Lexical"
+    print(fmt_header(f"Suggested {getattr(args, 'type', 'prompt')}s ({search_type}) for: {query}\n"))
     for r in results:
         print(f"  {fmt_type('prompt')} {fmt_bold(r['title'])}")
         if r["snippet"]:
@@ -496,8 +511,9 @@ def build_parser():
     p_list.set_defaults(func=cmd_list)
 
     # suggest
-    p_suggest = sub.add_parser("suggest", help="Suggest a prompt for a task")
+    p_suggest = sub.add_parser("suggest", help="Suggest a prompt or skill for a task")
     p_suggest.add_argument("query", nargs="*", help="Task description")
+    p_suggest.add_argument("-t", "--type", choices=["prompt", "skill", "mistake"], default="prompt")
     p_suggest.add_argument("-n", "--limit", type=int, default=3)
     p_suggest.set_defaults(func=cmd_suggest)
 

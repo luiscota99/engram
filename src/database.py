@@ -4,8 +4,19 @@ Uses SQLite with FTS5 for full-text search. Zero external dependencies.
 """
 
 import os
-import sqlite3
 from contextlib import contextmanager
+
+try:
+    import sqlean as sqlite3
+except ImportError:
+    import sqlite3
+
+try:
+    import sqlite_vec
+except ImportError:
+    sqlite_vec = None
+
+from .embeddings import embed_text
 
 DEFAULT_DB_PATH = os.path.join(
     os.path.expanduser("~"), ".engram", "memory.db"
@@ -117,6 +128,13 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Vector search table (sqlite-vec)
+-- Contains embeddings for all memory items to enable semantic search
+-- dimension 768 matches nomic-embed-text / typical embedding models
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory USING vec0(
+    embedding float[768]
+);
 """
 
 
@@ -134,6 +152,13 @@ def get_connection(db_path=None):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    
+    # Load vector extension if available
+    if sqlite_vec is not None:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        
     try:
         yield conn
         conn.commit()
@@ -195,14 +220,26 @@ def get_tags_for_item(conn, item_type, item_id):
 
 
 def index_in_fts(conn, item_type, item_id, title, content, tags_list):
-    """Insert or replace an item in the FTS index."""
+    """Insert or replace an item in the FTS index and generate its embedding."""
     # Remove old entry if exists
     conn.execute(
         "DELETE FROM memory_fts WHERE item_type = ? AND item_id = ?",
         (item_type, str(item_id)),
     )
     tags_str = " ".join(tags_list) if tags_list else ""
-    conn.execute(
+    cursor = conn.execute(
         "INSERT INTO memory_fts (item_type, item_id, title, content, tags) VALUES (?, ?, ?, ?, ?)",
         (item_type, str(item_id), title, content, tags_str),
     )
+    rowid = cursor.lastrowid
+    
+    # Generate and store embedding
+    full_text = f"{title}\n{content}\n{tags_str}"
+    embedding = embed_text(full_text)
+    
+    if embedding and sqlite_vec is not None:
+        conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rowid,))
+        conn.execute(
+            "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
+            (rowid, json.dumps(embedding))
+        )

@@ -179,8 +179,21 @@ engram import-skills ~/.cursor/skills/
 engram link-pattern "Alpha Compositing Edge Artifacts" \
   --conversation "abc123" \
   --date 2026-04-19 \
-  --notes "Seen during frame overlay"
+  --notes "Occurred again when blending water textures."
 ```
+
+### IDE Auto-Suggest (Cursor Hooks)
+
+Engram includes a Cursor hook that automatically searches for relevant skills based on your latest prompt and injects them into the agent's context.
+
+1. Ensure `nomic-embed-text` is running via `ollama run nomic-embed-text` (optional, for semantic search).
+2. Copy the hook script:
+```bash
+mkdir -p ~/.cursor/hooks
+cp cursor-hooks/engram-auto-suggest.js ~/.cursor/hooks/
+chmod +x ~/.cursor/hooks/engram-auto-suggest.js
+```
+Now, whenever you ask Cursor a question, it will silently check Engram and surface known skills!
 
 ## MCP Tools
 

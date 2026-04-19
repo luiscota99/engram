@@ -2,8 +2,50 @@
 Search module — FTS5 full-text search with ranking and filtering.
 """
 
+import json
+import urllib.request
 from .database import get_connection
 
+
+from .database import get_connection
+from .embeddings import embed_text
+
+def semantic_search(query, limit=10, db_path=None):
+    """
+    Search vec_memory using KNN vector search.
+    Requires sqlite-vec extension and a running Ollama instance.
+    """
+    embedding = embed_text(query)
+    if not embedding:
+        return []
+
+    with get_connection(db_path) as conn:
+        try:
+            # Query vec_memory, join with FTS to get the item details
+            # We assume rowid matches between memory_fts and vec_memory
+            sql = """
+                SELECT f.item_type, f.item_id, f.title, f.content as snippet, f.tags, v.distance
+                FROM vec_memory v
+                JOIN memory_fts f ON v.rowid = f.rowid
+                WHERE v.embedding MATCH ? AND k = ?
+                ORDER BY v.distance
+            """
+            rows = conn.execute(sql, [json.dumps(embedding), limit]).fetchall()
+            results = []
+            for row in rows:
+                results.append({
+                    "item_type": row["item_type"],
+                    "item_id": row["item_id"],
+                    "title": row["title"],
+                    "snippet": row["snippet"][:200] if row["snippet"] else "",
+                    "tags": row["tags"],
+                    "rank": row["distance"], # lower distance is better
+                    "is_semantic": True
+                })
+            return results
+        except Exception as e:
+            # sqlite-vec might not be loaded
+            return []
 
 def search(query, item_type=None, tags=None, limit=20, db_path=None):
     """
