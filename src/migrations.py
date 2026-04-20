@@ -16,6 +16,24 @@ MIGRATIONS = {
         "ALTER TABLE prompts ADD COLUMN usage_count INTEGER DEFAULT 0;",
         "ALTER TABLE prompts ADD COLUMN last_used_at TEXT;",
     ],
+    4: [
+        """CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL UNIQUE,
+            tech_stack TEXT,
+            domain TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );""",
+        """CREATE TABLE IF NOT EXISTS item_projects (
+            item_type TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            affinity TEXT DEFAULT 'used',
+            PRIMARY KEY (item_type, item_id, project_id)
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_item_projects_project ON item_projects(project_id);",
+    ],
 }
 
 

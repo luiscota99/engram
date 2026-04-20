@@ -24,7 +24,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
 DB_PATH = os.environ.get("ENGRAM_DB_PATH", DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -146,12 +146,32 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory USING vec0(
     embedding float[768]
 );
 
+-- Project registry: tracks which projects memories are affiliated with
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL UNIQUE,
+    tech_stack TEXT,
+    domain TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Junction: which memories belong to which projects
+CREATE TABLE IF NOT EXISTS item_projects (
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    affinity TEXT DEFAULT 'used',
+    PRIMARY KEY (item_type, item_id, project_id)
+);
+
 -- Standard B-Tree Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_mistakes_date ON mistakes(date);
 CREATE INDEX IF NOT EXISTS idx_conversations_date ON conversations(date);
 CREATE INDEX IF NOT EXISTS idx_skills_domain ON skills(domain);
 CREATE INDEX IF NOT EXISTS idx_prompts_domain ON prompts(domain);
+CREATE INDEX IF NOT EXISTS idx_item_projects_project ON item_projects(project_id);
 """
 
 
@@ -335,6 +355,69 @@ def record_usage(item_type, item_id, success=True, db_path=None):
             (item_id,),
         )
     return True
+
+
+def get_or_create_project(project_path, name=None, db_path=None):
+    """Get or create a project entry from its filesystem path.
+    Uses the git root if available, otherwise the given path.
+    """
+    import subprocess
+
+    # Try to resolve to git root for consistent project identity
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            project_path = result.stdout.strip()
+    except Exception:
+        pass
+
+    # Derive name from path basename if not provided
+    if not name:
+        name = os.path.basename(project_path)
+
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM projects WHERE path = ?", (project_path,)).fetchone()
+        if row:
+            return dict(row)
+        cursor = conn.execute(
+            "INSERT INTO projects (name, path) VALUES (?, ?)", (name, project_path)
+        )
+        return {"id": cursor.lastrowid, "name": name, "path": project_path}
+
+
+def link_item_to_project(item_type, item_id, project_id, affinity="used", db_path=None):
+    """Associate a memory item with a project."""
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO item_projects (item_type, item_id, project_id, affinity) VALUES (?, ?, ?, ?)",
+            (item_type, int(item_id), project_id, affinity),
+        )
+    return True
+
+
+def get_project_affinities(results, project_id, db_path=None):
+    """Batch fetch project affinities for a list of search results.
+    Returns dict of (item_type, item_id) -> affinity string.
+    """
+    if not results or not project_id:
+        return {}
+
+    affinities = {}
+    with get_connection(db_path) as conn:
+        for r in results:
+            row = conn.execute(
+                "SELECT affinity FROM item_projects WHERE item_type = ? AND item_id = ? AND project_id = ?",
+                (r["item_type"], int(r["item_id"]), project_id),
+            ).fetchone()
+            if row:
+                affinities[(r["item_type"], int(r["item_id"]))] = row["affinity"]
+    return affinities
 
 
 def delete_item(conn, item_type, item_id):

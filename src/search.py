@@ -4,7 +4,7 @@ Search module — FTS5 full-text search with ranking and filtering.
 
 import json
 
-from .database import get_connection
+from .database import get_connection, get_or_create_project, get_project_affinities
 from .embeddings import embed_text
 
 
@@ -64,7 +64,7 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
             return []
 
 
-def search(query, item_type=None, tags=None, limit=20, db_path=None):
+def search(query, item_type=None, tags=None, limit=20, project_path=None, db_path=None):
     """
     Hybrid Search: Combines FTS5 lexical matching with KNN Semantic Vector matching.
     """
@@ -143,21 +143,41 @@ def search(query, item_type=None, tags=None, limit=20, db_path=None):
         "conversation": "conversations",
         "prompt": "prompts",
     }
+    
+    usage_counts = {}
     with get_connection(db_path) as conn:
-        for r in results:
-            table = table_map.get(r["item_type"])
-            usage_count = 0
-            if table:
-                u_row = conn.execute(
-                    f"SELECT usage_count FROM {table} WHERE id = ?", (r["item_id"],)
-                ).fetchone()
-                if u_row:
-                    usage_count = u_row[0]
+        # Group IDs by table to batch queries and avoid N+1 query slowdown
+        # Note: FTS5 stores item_id as text, core tables use integer — normalize to int
+        for item_type, table in table_map.items():
+            ids = [int(r["item_id"]) for r in results if r["item_type"] == item_type]
+            if ids:
+                placeholders = ",".join("?" * len(ids))
+                rows = conn.execute(
+                    f"SELECT id, usage_count FROM {table} WHERE id IN ({placeholders})", ids
+                ).fetchall()
+                for row in rows:
+                    usage_counts[(item_type, row["id"])] = row["usage_count"] or 0
 
+        for r in results:
+            usage_count = usage_counts.get((r["item_type"], int(r["item_id"])), 0)
             # Base score: semantic matches get 100, FTS matches get 50.
             # Boost: +15 points per successful usage.
             base_score = 100.0 if r.get("is_semantic") else 50.0
             r["utility_score"] = base_score + (usage_count * 15.0)
+
+    # 4. Project Affinity Boost
+    if project_path:
+        try:
+            project = get_or_create_project(project_path, db_path=db_path)
+            affinities = get_project_affinities(results, project["id"], db_path=db_path)
+            affinity_boost = {"created": 40.0, "used": 25.0, "relevant": 10.0}
+            for r in results:
+                key = (r["item_type"], int(r["item_id"]))
+                if key in affinities:
+                    r["utility_score"] += affinity_boost.get(affinities[key], 10.0)
+                    r["project_affinity"] = affinities[key]
+        except Exception:
+            pass  # Project context is a boost, not a requirement
 
     # Re-sort by utility score descending
     results.sort(key=lambda x: x.get("utility_score", 0), reverse=True)

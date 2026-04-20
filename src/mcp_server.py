@@ -31,9 +31,11 @@ from src.database import (
     delete_item,
     get_connection,
     get_item,
+    get_or_create_project,
     get_tags_for_item,
     index_in_fts,
     init_db,
+    link_item_to_project,
     link_tags,
     record_usage,
 )
@@ -113,6 +115,10 @@ TOOLS = [
                     "type": "integer",
                     "description": "Max results to return (default: 10)",
                     "default": 10,
+                },
+                "project_path": {
+                    "type": "string",
+                    "description": "Optional: current project working directory for context-aware ranking",
                 },
             },
             "required": ["query"],
@@ -318,6 +324,40 @@ TOOLS = [
         "description": "Get database statistics — counts of each memory type.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "memory_session_review",
+        "description": "MANDATORY: Call this tool at the END of every session. It returns a structured reflection checklist that forces you to reflect on what happened, what went wrong, and what was learned. You MUST draft the entries in a markdown block and present them to the user for approval before logging.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "conversation_id": {
+                    "type": "string",
+                    "description": "The current conversation/session ID",
+                },
+                "project_path": {
+                    "type": "string",
+                    "description": "Current project working directory",
+                },
+                "tasks_completed": {
+                    "type": "string",
+                    "description": "What was accomplished this session",
+                },
+                "bugs_fixed": {
+                    "type": "string",
+                    "description": "Any bugs fixed — each should become a mistake entry",
+                },
+                "new_patterns_noticed": {
+                    "type": "string",
+                    "description": "Recurring issues noticed — each should become a pattern entry",
+                },
+                "workflows_used": {
+                    "type": "string",
+                    "description": "Multi-step workflows that worked — each should become a skill entry",
+                },
+            },
+            "required": ["conversation_id", "tasks_completed"],
+        },
+    },
 ]
 
 
@@ -383,6 +423,9 @@ def handle_memory_read_item(args):
     if not item:
         return f"Error: Could not find {item_type} with ID {item_id}."
 
+    # Auto-track: reading the full item means you're using it
+    record_usage(item_type, item_id)
+
     return json.dumps(item, indent=2).strip()
 
 
@@ -391,7 +434,8 @@ def handle_memory_search(args):
     item_type = args.get("type")
     tags = args.get("tags", "").split(",") if args.get("tags") else None
     limit = args.get("limit", 10)
-    results = memory_search(query, item_type=item_type, tags=tags, limit=limit)
+    project_path = args.get("project_path")
+    results = memory_search(query, item_type=item_type, tags=tags, limit=limit, project_path=project_path)
     if not results:
         return "No results found."
     return format_and_truncate_results(results)
@@ -632,6 +676,79 @@ def handle_memory_stats(args):
     return "\n".join(lines)
 
 
+def handle_memory_session_review(args):
+    """Return a structured reflection prompt for end-of-session learning."""
+    conversation_id = args.get("conversation_id", "unknown")
+    project_path = args.get("project_path")
+    tasks_completed = args.get("tasks_completed", "")
+    bugs_fixed = args.get("bugs_fixed", "")
+    new_patterns = args.get("new_patterns_noticed", "")
+    workflows_used = args.get("workflows_used", "")
+
+    # Register project if provided
+    project_info = ""
+    if project_path:
+        try:
+            project = get_or_create_project(project_path)
+            project_info = f"\nProject: {project['name']} ({project['path']})"
+        except Exception:
+            pass
+
+    # Search for similar existing entries to prevent duplicates
+    similar_section = ""
+    search_terms = []
+    if bugs_fixed:
+        search_terms.append(bugs_fixed)
+    if new_patterns:
+        search_terms.append(new_patterns)
+    if workflows_used:
+        search_terms.append(workflows_used)
+
+    if search_terms:
+        combined_query = " ".join(search_terms)[:200]
+        existing = memory_search(combined_query, limit=5, project_path=project_path)
+        if existing:
+            similar_section = "\n\n## ⚠️ Similar Existing Entries (check for duplicates before logging):\n"
+            for e in existing:
+                similar_section += f"  [{e['item_type'].upper()} ID:{e['item_id']}] {e['title']}\n"
+
+    # Build reflection prompt
+    prompt = f"""# Session Retrospective — {conversation_id[:12]}
+{project_info}
+
+## Tasks Completed
+{tasks_completed}
+
+## Reflection Checklist
+
+### 1. Mistakes to Log
+{f'Bugs fixed this session: {bugs_fixed}' if bugs_fixed else 'No bugs reported.'}
+→ For each bug fixed, draft a `memory_add_mistake` call with: date, context, mistake, root_cause, fix, prevention, tags
+→ Present the draft to the user for approval before logging.
+
+### 2. Patterns to Log
+{f'Patterns noticed: {new_patterns}' if new_patterns else 'No new patterns reported.'}
+→ For each recurring issue, draft a `memory_add_pattern` call with: name, symptoms, root_cause, standard_fix, tags
+→ Search existing patterns first to avoid duplicates.
+
+### 3. Skills to Log
+{f'Workflows used: {workflows_used}' if workflows_used else 'No workflows reported.'}
+→ For each multi-step workflow that succeeded, draft a `memory_add_skill` call with: name, domain, trigger, workflow, pitfalls, tags
+→ If the workflow had >3 steps and could be reused, it's a strong skill candidate.
+
+### 4. Conversation Summary
+→ Draft a `memory_add_conversation` call to log this session for cross-session continuity.
+{similar_section}
+
+## Instructions
+1. Draft ALL entries above in a markdown block.
+2. Present them to the user for explicit approval.
+3. Only after approval, call the respective memory_add_* tools.
+4. Do NOT log anything without user confirmation."""
+
+    return prompt
+
+
 TOOL_HANDLERS = {
     "memory_record_usage": handle_memory_record_usage,
     "memory_read_item": handle_memory_read_item,
@@ -645,6 +762,7 @@ TOOL_HANDLERS = {
     "memory_add_prompt": handle_memory_add_prompt,
     "memory_list": handle_memory_list,
     "memory_stats": handle_memory_stats,
+    "memory_session_review": handle_memory_session_review,
 }
 
 
