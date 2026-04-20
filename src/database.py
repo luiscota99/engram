@@ -257,3 +257,34 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
         conn.execute(
             "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)", (rowid, json.dumps(embedding))
         )
+
+
+def delete_item(conn, item_type, item_id):
+    """Deeply delete an item from its core table, tags, FTS, and vector index."""
+    # 1. Delete from core table
+    tables = {
+        "mistake": "mistakes",
+        "pattern": "patterns",
+        "skill": "skills",
+        "conversation": "conversations",
+        "prompt": "prompts",
+    }
+    table = tables.get(item_type)
+    if not table:
+        raise ValueError(f"Unknown item type: {item_type}")
+
+    conn.execute(f"DELETE FROM {table} WHERE id = ?", (item_id,))
+
+    # 2. Delete tags
+    conn.execute("DELETE FROM item_tags WHERE item_type = ? AND item_id = ?", (item_type, item_id))
+
+    # 3. Find FTS rowid to delete from vec_memory, then delete from FTS
+    row = conn.execute(
+        "SELECT rowid FROM memory_fts WHERE item_type = ? AND item_id = ?",
+        (item_type, str(item_id)),
+    ).fetchone()
+    if row:
+        rowid = row["rowid"]
+        conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rowid,))
+        if sqlite_vec is not None:
+            conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rowid,))

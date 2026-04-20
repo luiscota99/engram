@@ -2,6 +2,10 @@
 Database diagnostics and integrity repair tool.
 """
 
+import os
+import urllib.error
+import urllib.request
+
 from .database import get_connection
 
 
@@ -77,6 +81,46 @@ def run_diagnostics(repair=False):
                 print("✓ Vectors: Semantic index matches search index perfectly.")
         except Exception:
             print(fmt_dim("- Vectors: sqlite-vec not active, skipping semantic integrity check."))
+
+        # 4. Semantic Engine Health (Ollama)
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        try:
+            req = urllib.request.Request(ollama_host, method="GET")
+            with urllib.request.urlopen(req, timeout=2) as response:
+                if response.status == 200:
+                    print("✓ Semantic Engine: Ollama is reachable.")
+                else:
+                    issues_found += 1
+                    print(
+                        fmt_error(
+                            f"Semantic Engine Error: Ollama returned status {response.status}."
+                        )
+                    )
+        except urllib.error.URLError as e:
+            issues_found += 1
+            print(
+                fmt_error(
+                    f"Semantic Engine Offline: Could not connect to Ollama at {ollama_host}. Vector search will fail silently! ({e.reason})"
+                )
+            )
+        except Exception as e:
+            issues_found += 1
+            print(fmt_error(f"Semantic Engine Offline: {str(e)}"))
+
+        # 5. Dynamic Index Suggestions (Anti-Bloat/Performance)
+        for table in ["mistakes", "patterns", "skills", "conversations", "prompts"]:
+            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            if count > 10000:
+                print(
+                    fmt_error(
+                        f"Performance Warning: The `{table}` table has >10,000 rows ({count})."
+                    )
+                )
+                print(
+                    fmt_dim(
+                        f"  → Consider adding a covering index (e.g., `CREATE INDEX idx_{table}_domain_date ON {table}(domain, date)`) to maintain fast query speeds."
+                    )
+                )
 
         print(
             f"\nDiagnostics complete. {issues_found} issues found. {issues_fixed} issues repaired."

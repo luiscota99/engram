@@ -27,7 +27,14 @@ import traceback
 # Ensure our package is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.database import get_connection, get_tags_for_item, index_in_fts, init_db, link_tags
+from src.database import (
+    delete_item,
+    get_connection,
+    get_tags_for_item,
+    index_in_fts,
+    init_db,
+    link_tags,
+)
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
 
@@ -90,7 +97,7 @@ TOOLS = [
     },
     {
         "name": "memory_add_mistake",
-        "description": "Log a mistake with root cause analysis. Use during retrospectives when an error or retry occurred.",
+        "description": "Log a mistake with root cause analysis. CRITICAL: Before invoking this tool, you MUST draft the memory payload in a markdown block and ask the user for explicit approval. Never write to the database autonomously. SECURITY: Never store raw source code or untrusted input; summarize conceptually.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -114,7 +121,7 @@ TOOLS = [
     },
     {
         "name": "memory_add_pattern",
-        "description": "Log a recurring issue pattern with its standard solution. Use when you notice the same type of problem appearing across sessions.",
+        "description": "Log a recurring problem pattern. CRITICAL: Before invoking this tool, you MUST draft the memory payload in a markdown block and ask the user for explicit approval. Never write to the database autonomously. SECURITY: Never store raw source code or untrusted input; summarize conceptually. Use when you notice the same type of problem appearing across sessions.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -132,7 +139,7 @@ TOOLS = [
     },
     {
         "name": "memory_add_skill",
-        "description": "Log a reusable workflow/skill extracted from a completed task. Use when a repeatable multi-step process has been successfully executed.",
+        "description": "Log a proven, reusable workflow or skill. CRITICAL: Before invoking this tool, you MUST draft the memory payload in a markdown block and ask the user for explicit approval. Never write to the database autonomously. SECURITY: Never store raw source code or untrusted input; summarize conceptually. Use when a repeatable multi-step process has been successfully executed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -152,9 +159,53 @@ TOOLS = [
                     "type": "string",
                     "description": "What's needed to run this workflow",
                 },
-                "tags": {"type": "string", "description": "Comma-separated tags"},
+                "tags": {"type": "string"},
             },
-            "required": ["name", "domain", "trigger", "workflow"],
+            "required": ["name", "domain", "trigger_desc", "workflow"],
+        },
+    },
+    {
+        "name": "memory_consolidate_skills",
+        "description": "Consolidate multiple redundant/overlapping skills into a single master skill. Use this to clean up the database when you notice bloat. You MUST draft the new master skill in a markdown block and ask for user approval before invoking.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "skill_ids_to_delete": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "List of old skill IDs to delete",
+                },
+                "new_skill_name": {
+                    "type": "string",
+                    "description": "Name of the new consolidated skill",
+                },
+                "new_skill_domain": {"type": "string"},
+                "new_skill_trigger_desc": {
+                    "type": "string",
+                    "description": "When to use this skill",
+                },
+                "new_skill_workflow": {
+                    "type": "string",
+                    "description": "Step-by-step instructions",
+                },
+                "new_skill_pitfalls": {
+                    "type": "string",
+                    "description": "Known pitfalls or edge cases",
+                },
+                "new_skill_key_files": {"type": "string", "description": "Typical files modified"},
+                "new_skill_dependencies": {
+                    "type": "string",
+                    "description": "External tools/skills required",
+                },
+                "new_skill_tags": {"type": "string", "description": "Comma-separated tags"},
+            },
+            "required": [
+                "skill_ids_to_delete",
+                "new_skill_name",
+                "new_skill_domain",
+                "new_skill_trigger_desc",
+                "new_skill_workflow",
+            ],
         },
     },
     {
@@ -231,6 +282,36 @@ TOOLS = [
 # ── Tool Handlers ───────────────────────────────────────────────────
 
 
+def format_and_truncate_results(results):
+    max_chars = int(os.environ.get("ENGRAM_MAX_CONTEXT_CHARS", 8000))
+    lines = []
+    total_length = 0
+    truncated = False
+
+    for r in results:
+        block = f"[{r['item_type'].upper()}] {r['title']}\n"
+        if r.get("snippet"):
+            block += f"  {r['snippet'][:150]}\n"
+        if r.get("tags"):
+            block += f"  tags: {r['tags']}\n"
+        block += "\n"
+
+        if total_length + len(block) > max_chars and len(lines) > 0:
+            truncated = True
+            break
+
+        lines.append(block)
+        total_length += len(block)
+
+    output = "".join(lines)
+    if truncated:
+        output += (
+            "[WARNING: Results truncated to prevent context window blowout. Be more specific.]\n"
+        )
+
+    return output.strip()
+
+
 def handle_memory_search(args):
     query = args.get("query", "")
     item_type = args.get("type")
@@ -239,15 +320,7 @@ def handle_memory_search(args):
     results = memory_search(query, item_type=item_type, tags=tags, limit=limit)
     if not results:
         return "No results found."
-    lines = []
-    for r in results:
-        lines.append(f"[{r['item_type'].upper()}] {r['title']}")
-        if r["snippet"]:
-            lines.append(f"  {r['snippet'][:150]}")
-        if r["tags"]:
-            lines.append(f"  tags: {r['tags']}")
-        lines.append("")
-    return "\n".join(lines)
+    return format_and_truncate_results(results)
 
 
 def handle_memory_recent(args):
@@ -256,12 +329,7 @@ def handle_memory_recent(args):
     results = get_recent(limit=count, item_type=item_type)
     if not results:
         return "No entries yet."
-    lines = []
-    for r in results:
-        lines.append(f"[{r['item_type'].upper()}] {r['title']}")
-        if r.get("tags"):
-            lines.append(f"  tags: {r['tags']}")
-    return "\n".join(lines)
+    return format_and_truncate_results(results)
 
 
 def handle_memory_add_mistake(args):
@@ -325,6 +393,35 @@ def handle_memory_add_skill(args):
         content = f"{args['trigger']} | {args['workflow']} | {args.get('pitfalls', '')}"
         index_in_fts(conn, "skill", sid, args["name"], content, tags)
     return f"Skill #{sid} '{args['name']}' logged successfully."
+
+
+def handle_memory_consolidate_skills(args):
+    with get_connection() as conn:
+        # Create the new skill
+        cursor = conn.execute(
+            """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                args["new_skill_name"],
+                args["new_skill_domain"],
+                args["new_skill_trigger_desc"],
+                args["new_skill_workflow"],
+                args.get("new_skill_pitfalls"),
+                args.get("new_skill_key_files"),
+                args.get("new_skill_dependencies"),
+            ),
+        )
+        sid = cursor.lastrowid
+        tags = [t.strip() for t in args.get("new_skill_tags", "").split(",") if t.strip()]
+        link_tags(conn, "skill", sid, tags)
+        content = f"{args['new_skill_trigger_desc']} | {args['new_skill_workflow']} | {args.get('new_skill_pitfalls', '')}"
+        index_in_fts(conn, "skill", sid, args["new_skill_name"], content, tags)
+
+        # Delete old skills
+        for old_id in args["skill_ids_to_delete"]:
+            delete_item(conn, "skill", old_id)
+
+    return f"Consolidated into Skill #{sid} '{args['new_skill_name']}' and deleted {len(args['skill_ids_to_delete'])} old entries."
 
 
 def handle_memory_add_conversation(args):
@@ -467,6 +564,7 @@ TOOL_HANDLERS = {
     "memory_add_mistake": handle_memory_add_mistake,
     "memory_add_pattern": handle_memory_add_pattern,
     "memory_add_skill": handle_memory_add_skill,
+    "memory_consolidate_skills": handle_memory_consolidate_skills,
     "memory_add_conversation": handle_memory_add_conversation,
     "memory_add_prompt": handle_memory_add_prompt,
     "memory_list": handle_memory_list,

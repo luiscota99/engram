@@ -37,6 +37,7 @@ if __name__ == "__main__" and __package__ is None:
 
 from .backup import run_backup
 from .database import (
+    delete_item,
     get_connection,
     get_db_path,
     get_tags_for_item,
@@ -327,6 +328,39 @@ def cmd_doctor(args):
 def cmd_backup(args):
     """Export database to JSON and optionally sync to Git."""
     run_backup(git_sync=args.git)
+
+
+def cmd_consolidate(args):
+    ids = [int(i.strip()) for i in args.delete_ids.split(",") if i.strip()]
+    if not ids:
+        print("Error: --delete-ids requires at least one ID.")
+        sys.exit(1)
+
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                args.name,
+                args.domain,
+                args.trigger,
+                args.workflow,
+                args.pitfalls,
+                args.key_files,
+                args.deps,
+            ),
+        )
+        sid = cursor.lastrowid
+        tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else []
+        link_tags(conn, "skill", sid, tags)
+
+        content = f"{args.trigger} | {args.workflow} | {args.pitfalls or ''}"
+        index_in_fts(conn, "skill", sid, args.name, content, tags)
+
+        for old_id in ids:
+            delete_item(conn, "skill", old_id)
+
+    print(f"✓ Consolidated {len(ids)} skills into new Master Skill #{sid}.")
 
 
 def cmd_init(args):
@@ -649,6 +683,21 @@ def build_parser():
         help="Automatically commit and push backup to Git if configured",
     )
     p_backup.set_defaults(func=cmd_backup)
+
+    # consolidate
+    p_cons = sub.add_parser("consolidate", help="Consolidate multiple skills into one")
+    p_cons.add_argument(
+        "--delete-ids", required=True, help="Comma-separated IDs of old skills to delete"
+    )
+    p_cons.add_argument("--name", required=True)
+    p_cons.add_argument("--domain", required=True)
+    p_cons.add_argument("--trigger", required=True)
+    p_cons.add_argument("--workflow", required=True)
+    p_cons.add_argument("--pitfalls")
+    p_cons.add_argument("--key-files")
+    p_cons.add_argument("--deps")
+    p_cons.add_argument("--tags")
+    p_cons.set_defaults(func=cmd_consolidate)
 
     # init
     p_init = sub.add_parser("init", help="Initialize the database")
