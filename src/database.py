@@ -24,7 +24,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
 DB_PATH = os.environ.get("ENGRAM_DB_PATH", DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 7
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS skills (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
--- Conversations: structured index of past sessions
+-- Conversations: structured index of past sessions (Legacy, superseded by sessions)
 CREATE TABLE IF NOT EXISTS conversations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL UNIQUE,
@@ -93,6 +93,51 @@ CREATE TABLE IF NOT EXISTS conversations (
     usage_count INTEGER DEFAULT 0,
     last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Sessions: Committee-driven session ledgers
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    date TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    workflow_used TEXT,
+    tasks_completed TEXT,
+    key_decisions TEXT,
+    action_items TEXT,
+    usage_count INTEGER DEFAULT 0,
+    last_used_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Session Transcripts: Subagent outputs for a session
+CREATE TABLE IF NOT EXISTS session_transcripts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    timestamp TEXT DEFAULT (datetime('now'))
+);
+
+-- Roles: Subagent profiles (Facilitator, Analyst, etc)
+CREATE TABLE IF NOT EXISTS roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    charter TEXT NOT NULL,
+    heuristics TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Workflows: Standard operating procedures for the committee
+CREATE TABLE IF NOT EXISTS workflows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL,
+    steps TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
 );
 
 -- Tags
@@ -165,13 +210,29 @@ CREATE TABLE IF NOT EXISTS item_projects (
     PRIMARY KEY (item_type, item_id, project_id)
 );
 
+-- Codebase Knowledge: file-level summaries and structural metadata
+CREATE TABLE IF NOT EXISTS codebase_knowledge (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    exports TEXT, -- JSON array of functions/classes
+    dependencies TEXT, -- JSON array of imports/dependencies
+    last_indexed_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(project_id, file_path)
+);
+
 -- Standard B-Tree Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_mistakes_date ON mistakes(date);
 CREATE INDEX IF NOT EXISTS idx_conversations_date ON conversations(date);
+CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
+CREATE INDEX IF NOT EXISTS idx_session_transcripts_session ON session_transcripts(session_id);
 CREATE INDEX IF NOT EXISTS idx_skills_domain ON skills(domain);
 CREATE INDEX IF NOT EXISTS idx_prompts_domain ON prompts(domain);
 CREATE INDEX IF NOT EXISTS idx_item_projects_project ON item_projects(project_id);
+CREATE INDEX IF NOT EXISTS idx_codebase_knowledge_project ON codebase_knowledge(project_id);
 """
 
 
@@ -307,6 +368,70 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
         )
 
 
+def rebuild_fts(conn):
+    """Fully rebuild the FTS index from core tables.
+
+    Clears all existing FTS rows and re-inserts from mistakes, patterns,
+    skills, conversations, prompts, and sessions. Also regenerates
+    embeddings for any FTS row that lacks a vec_memory entry.
+    Call this from `doctor --repair` or as part of migration v6.
+    """
+    # Clear entire FTS index (and cascade-delete vec_memory via shared rowids)
+    conn.execute("DELETE FROM memory_fts")
+    conn.execute("DELETE FROM vec_memory")
+
+    rebuild_specs = [
+        (
+            "mistake", "mistakes",
+            "mistake",
+            "context || ' | ' || mistake || ' | ' || COALESCE(root_cause,'') || ' | ' || fix",
+        ),
+        (
+            "pattern", "patterns",
+            "name",
+            "symptoms || ' | ' || root_cause || ' | ' || standard_fix",
+        ),
+        (
+            "skill", "skills",
+            "name",
+            "trigger_desc || ' | ' || workflow || ' | ' || COALESCE(pitfalls,'')",
+        ),
+        (
+            "conversation", "conversations",
+            "title",
+            "COALESCE(tasks_completed,'') || ' | ' || COALESCE(key_decisions,'')",
+        ),
+        (
+            "prompt", "prompts",
+            "name",
+            "role || ' | ' || description || ' | ' || COALESCE(best_for,'')",
+        ),
+        (
+            "session", "sessions",
+            "session_id",
+            "title || ' | ' || COALESCE(workflow_used,'')",
+        ),
+    ]
+
+    for item_type, table, title_col, content_expr in rebuild_specs:
+        rows = conn.execute(
+            f"""SELECT id, {title_col} as title, {content_expr} as content
+                FROM {table}"""
+        ).fetchall()
+        for row in rows:
+            # Fetch tags for this item
+            tag_rows = conn.execute(
+                """SELECT t.name FROM tags t
+                   JOIN item_tags it ON t.id = it.tag_id
+                   WHERE it.item_type = ? AND it.item_id = ?""",
+                (item_type, row["id"]),
+            ).fetchall()
+            tags_str = " ".join(t["name"] for t in tag_rows)
+            index_in_fts(conn, item_type, row["id"], row["title"], row["content"], tags_str.split())
+
+    return True
+
+
 def get_item(item_type, item_id, db_path=None):
     """Fetch the full structured data for a specific item, including its tags."""
     table_map = {
@@ -314,6 +439,9 @@ def get_item(item_type, item_id, db_path=None):
         "pattern": "patterns",
         "skill": "skills",
         "conversation": "conversations",
+        "session": "sessions",
+        "role": "roles",
+        "workflow": "workflows",
         "prompt": "prompts",
     }
     table = table_map.get(item_type)
@@ -336,6 +464,25 @@ def get_item(item_type, item_id, db_path=None):
         return result
 
 
+def get_session_details(session_id, db_path=None):
+    """Fetch a session by its string ID, including all transcripts and decisions."""
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+        if not row:
+            return None
+        
+        session_data = dict(row)
+        
+        # Fetch transcripts
+        transcripts = conn.execute(
+            "SELECT role, content, timestamp FROM session_transcripts WHERE session_id = ? ORDER BY id ASC",
+            (session_id,)
+        ).fetchall()
+        
+        session_data["transcripts"] = [dict(t) for t in transcripts]
+        return session_data
+
+
 def record_usage(item_type, item_id, success=True, db_path=None):
     """Increment usage count for a memory item."""
     table_map = {
@@ -343,6 +490,9 @@ def record_usage(item_type, item_id, success=True, db_path=None):
         "pattern": "patterns",
         "skill": "skills",
         "conversation": "conversations",
+        "session": "sessions",
+        "role": "roles",
+        "workflow": "workflows",
         "prompt": "prompts",
     }
     table = table_map.get(item_type)
@@ -428,6 +578,9 @@ def delete_item(conn, item_type, item_id):
         "pattern": "patterns",
         "skill": "skills",
         "conversation": "conversations",
+        "session": "sessions",
+        "role": "roles",
+        "workflow": "workflows",
         "prompt": "prompts",
     }
     table = tables.get(item_type)

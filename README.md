@@ -1,318 +1,127 @@
 # 🧠 Engram
 
-**Persistent memory for AI-assisted development.** Tracks mistakes, patterns, skills, and conversation history across sessions with full-text search.
+![Engram Hero Banner](engram_hero_banner_1776720650127.png)
 
-Engram gives AI coding assistants long-term memory — so they stop repeating the same mistakes, reuse proven workflows, and recognize familiar problems instantly.
+**Persistent engineering memory for AI-assisted development.**  
+Stop repeating mistakes. Reuse proven workflows. Recognize familiar problems instantly.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-green.svg)](https://python.org)
-[![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-orange.svg)](#architecture)
+[![Ollama Semantic](https://img.shields.io/badge/Search-Semantic-cyan.svg)](#architecture)
+
+---
 
 ## Why Engram?
 
-AI assistants forget everything between sessions. Engram fixes that by maintaining a **queryable memory database** that persists across conversations:
+AI assistants are brilliant but stateless. They forget every lesson learned as soon as a chat session ends. Engram fixes this by maintaining a **queryable memory database** that persists across sessions and projects:
 
 - **Mistakes** — "We tried flood-fill on alpha edges before, it doesn't work. Use the tinting approach."
 - **Patterns** — "This looks like the API Parameter Mismatch pattern. Look up the ID from the listing endpoint first."
 - **Skills** — "There's already a proven workflow for this. Follow steps 1-5 instead of figuring it out again."
-- **Conversations** — "Last session we made these decisions. Here's where we left off."
-
-## Quick Start
-
-### Try it out
-The easiest way to run Engram (and its embedded Ollama semantic search engine) is via Docker Compose:
-
-```bash
-git clone https://github.com/luismiguelcota/engram.git
-cd engram
-
-# Spins up the database, the semantic engine, and pulls the embedding model automatically
-docker compose up -d
-```
-
-Once running, you can interact with it via the CLI:
-```bash
-docker compose run --rm engram stats                         # See what's in memory
-docker compose run --rm engram search "alpha compositing"    # Full-text search
-docker compose run --rm engram recent -n 5                   # Last 5 entries
-```
-
-### Local Dev Setup (Optional)
-If you want to run the CLI directly on your host machine without Docker:
-
-```bash
-pip install -e .
-engram init
-engram stats
-```
-> [!NOTE]
-> If you run Engram locally instead of via Docker, you must have Ollama running on your Mac (`localhost:11434`) with the `nomic-embed-text` model pulled.
-
-## IDE Integration
-
-### Cursor IDE
-
-Add to `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "command": "python3",
-      "args": ["/absolute/path/to/engram/src/mcp_server.py"],
-      "enabled": true,
-      "timeout": 30
-    }
-  }
-}
-```
-
-Then copy the Cursor rule for automatic agent integration:
-
-```bash
-cp cursor-rules/engram.mdc ~/.cursor/rules/
-```
-
-### Cursor via Docker
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-v", "~/.engram:/data",
-        "engram"
-      ],
-      "enabled": true,
-      "timeout": 30
-    }
-  }
-}
-```
-
-### Claude Desktop
-
-Add the same config to your Claude Desktop MCP settings.
-
-## CLI Reference
-
-### Search
-
-```bash
-engram search "query"                    # Full-text search across all memory
-engram search "query" -t mistake         # Filter by type
-engram search --tags python,pillow       # Filter by tags
-engram search "black edges" -n 3         # Limit results
-```
-
-### Browse
-
-```bash
-engram recent                            # Last 10 entries
-engram recent -n 5 -t skill             # Last 5 skills
-engram list mistakes                     # All mistakes
-engram list patterns                     # All patterns
-engram list skills                       # All skills
-engram list conversations                # All conversations
-engram list prompts                      # All system prompts
-engram stats                             # Database overview
-```
-
-### Add Entries
-
-```bash
-# Log a mistake
-engram add mistake \
-  --date 2026-04-19 \
-  --context "Building image pipeline" \
-  --mistake "Forgot color bleed in unified script" \
-  --root-cause "Feature loss during script unification" \
-  --fix "Ported flood-fill logic from source script" \
-  --prevention "Checklist all source features before unifying" \
-  --tags "python,image-processing"
-
-# Log a pattern
-engram add pattern \
-  --name "Alpha Compositing Edge Artifacts" \
-  --symptoms "Dark fringes at transparent edges" \
-  --root-cause "Anti-aliased pixels blend with wrong color" \
-  --fix "Tint overlay using alpha mask" \
-  --tags "image-processing,pillow"
-
-# Log a skill
-engram add skill \
-  --name "Image Proxy Pipeline" \
-  --domain "image-processing" \
-  --trigger "User wants print-ready proxy cards" \
-  --workflow "1. Fetch → 2. Upscale → 3. Bleed → 4. Frame → 5. Save" \
-  --pitfalls "API IDs != display names; tint frame alpha edges" \
-  --tags "python,pillow"
-
-# Log a conversation
-engram add conversation \
-  --id "abc123-def456" \
-  --title "Built Image Processing Pipeline" \
-  --date 2026-04-19 \
-  --domain "image-processing" \
-  --tasks "Built proxy pipeline, fixed alpha compositing" \
-  --tags "python,pillow"
-
-# Log an LLM Prompt
-engram add prompt \
-  --name "Log Analyzer" \
-  --role "Expert system/application log analyst" \
-  --domain "debugging" \
-  --description "Analyzes logs, traces, and detects errors" \
-  --file "/path/to/Prompt.md" \
-  --tags "debugging,logs"
-```
-
-### Advanced Operations
-
-```bash
-# Suggest a prompt for a task
-engram suggest "need to write an optimized CV for a software job"
-
-# Import skills from KS Cursor Orchestrator
-engram import-skills ~/.cursor/skills/
-
-# Link a pattern to a conversation
-engram link-pattern "Alpha Compositing Edge Artifacts" \
-  --conversation "abc123" \
-  --date 2026-04-19 \
-  --notes "Occurred again when blending water textures."
-```
-
-### IDE Auto-Suggest (Cursor Hooks)
-
-Engram includes a Cursor hook that automatically searches for relevant skills based on your latest prompt and injects them into the agent's context.
-
-1. Ensure `nomic-embed-text` is running via `ollama run nomic-embed-text` (optional, for semantic search).
-2. Copy the hook script:
-```bash
-mkdir -p ~/.cursor/hooks
-cp cursor-hooks/engram-auto-suggest.js ~/.cursor/hooks/
-chmod +x ~/.cursor/hooks/engram-auto-suggest.js
-```
-Now, whenever you ask Cursor a question, it will silently check Engram and surface known skills!
-
-## MCP Tools
-
-When connected via MCP, AI agents get these tools:
-
-| Tool | Description |
-|------|-------------|
-| `memory_search` | Full-text search across all memory types |
-| `memory_recent` | Get most recent entries |
-| `memory_add_mistake` | Log a mistake with root cause analysis |
-| `memory_add_pattern` | Log a recurring issue pattern |
-| `memory_add_skill` | Log a reusable workflow |
-| `memory_add_conversation` | Log a session summary |
-| `memory_list` | List all entries of a type |
-| `memory_stats` | Database statistics |
-
-## Memory Types
-
-| Type | Purpose | Example |
-|------|---------|---------|
-| **Mistakes** | Error instances with root cause and prevention | "Forgot color bleed when merging scripts" |
-| **Patterns** | Recurring issue types with standard solutions | "Alpha edges cause fringes → tint with mask" |
-| **Skills** | Reusable multi-step workflows | "Image proxy pipeline: fetch → upscale → bleed → frame" |
-| **Conversations** | Structured session summaries | "Built proxy pipeline, made 3 key decisions" |
-| **Prompts** | Reusable LLM system prompts | "Log Analyzer: extracts errors from raw log dumps" |
-| **Tags** | Cross-cutting labels for filtering | `python`, `image-processing`, `api` |
+- **Codebase Knowledge** — "I've mapped this project. Here are the key file summaries without re-reading everything."
 
 ## Architecture
 
-### System Flow Diagram
+Engram uses a hybrid search engine combining **SQLite FTS5** (lexical) and **sqlite-vec** (semantic) to retrieve relevant context.
 
 ```mermaid
 graph TD
     %% Actors/Interfaces
-    U[User] -->|Terminal Commands| CLI[CLI Handler]
-    IDE[Cursor IDE / Claude] -->|MCP Protocol JSON-RPC| MCP[MCP Server]
-    Hook[Auto-Suggest Hook] -.->|Background Process| CLI
+    U[User] -->|Terminal| CLI[CLI Handler]
+    IDE[Cursor / Claude] -->|MCP Protocol| MCP[MCP Server]
     
     %% Core Logic
     subgraph Engram Core
         CLI --> SE[Search Engine]
         MCP --> SE[Search Engine]
-        CLI --> DB_Int[Database Interface]
-        MCP --> DB_Int[Database Interface]
-        SE --> DB_Int
+        SE --> DB_Int[Database Interface]
     end
     
     %% AI Model
-    SE -- "Generate Vector Embedding" --> Ollama[(Local Ollama<br/>nomic-embed-text)]
-    DB_Int -- "Generate Vector Embedding" --> Ollama
+    SE -- "Embeddings" --> Ollama[(Local Ollama<br/>nomic-embed-text)]
     
-    %% Database Layer
+    %% Storage Layer
     subgraph Storage Layer
-        DB_Int --> Driver[sqlean-py Driver]
-        Driver --> SQLite[(memory.db SQLite)]
-        
-        SQLite --- FTS[FTS5 Index<br/>Lexical Search]
-        SQLite --- VEC[sqlite-vec<br/>Semantic Search]
+        DB_Int --> SQLite[(memory.db SQLite)]
+        SQLite --- FTS[FTS5 Index<br/>Lexical]
+        SQLite --- VEC[sqlite-vec<br/>Semantic]
     end
-    
-    %% Layout styling
-    classDef primary fill:#2563eb,stroke:#1e40af,color:white;
-    classDef db fill:#059669,stroke:#047857,color:white;
-    classDef ai fill:#d97706,stroke:#b45309,color:white;
-    
-    class CLI,MCP,SE,DB_Int primary;
-    class SQLite,FTS,VEC,Driver db;
-    class Ollama ai;
 ```
 
-### Directory Structure
+## Quick Start
 
-```text
-engram/
-├── src/
-│   ├── cli.py           # CLI entry point (engram command)
-│   ├── mcp_server.py    # MCP server (Cursor/Claude integration)
-│   ├── database.py      # SQLite schema + FTS5
-│   ├── search.py        # Full-text search logic
-│   └── seed.py          # Sample data for bootstrapping
-├── cursor-rules/
-│   └── engram.mdc       # Cursor rule for auto-integration
-├── data/                # Database volume (Docker)
-├── scripts/
-│   └── install.sh       # Local installation
-├── Dockerfile
-├── docker-compose.yml
-├── LICENSE              # MIT
-├── CONTRIBUTING.md
-└── CHANGELOG.md
+The easiest way to get started is using the unified setup script:
+
+```bash
+git clone https://github.com/luismiguelcota/engram.git
+cd engram
+bash scripts/setup.sh
 ```
 
-### Technical Details
+This script will:
+1. Check your Python environment (>= 3.9).
+2. Install dependencies (`sqlite-vec`, `sqlean-py`).
+3. Configure **Ollama** for semantic search.
+4. Initialize and seed your local memory database.
 
-- **Database:** SQLite with FTS5 full-text search
-- **Dependencies:** Zero — Python 3.9+ standard library only
-- **Storage:** Single `.db` file at `~/.engram/memory.db`
-- **Transport:** JSON-RPC over stdio (MCP protocol)
-- **Concurrency:** WAL mode for safe concurrent reads
-- **Portability:** Copy the `.db` file to migrate all memory
+## Agent Integration
 
-### Environment Variables
+Engram turns AI assistants into senior partners who remember your project's history.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENGRAM_DB_PATH` | `~/.engram/memory.db` | Database file location |
+### 1. Bootstrap your Project
+Run this in any repository you want your AI agent to remember:
+```bash
+engram bootstrap
+```
+This creates `.cursor/rules/engram.mdc` for Cursor and `.antigravity/instructions.md` for Antigravity, enforcing the **Committee-Driven Workflow**.
 
-## Portability
+### 2. Committee-Driven Workflow
+Engram encourages a structured SDLC where agents act as a "committee" (Analyst, Researcher, Skeptic, Archivist) to prevent shallow decisions.
 
-The entire memory is a single SQLite file. To migrate to a new machine:
+```mermaid
+sequenceDiagram
+    participant A as AI Agent
+    participant E as Engram Memory
+    participant U as User
 
-1. Copy `~/.engram/memory.db` to the new machine
-2. Clone this repo
-3. Run `bash scripts/install.sh`
+    A->>E: memory_search(task context)
+    E-->>A: [Mistakes, Skills, Patterns]
+    A->>U: Propose plan based on memory
+    U->>A: Approve
+    A->>A: Execute Task
+    A->>E: memory_session_review()
+    E-->>A: [Reflection Checklist]
+    A->>E: memory_add_mistake() / memory_add_skill()
+```
 
-Or with Docker — mount the database as a volume.
+## Claw-Code Integration (Optional)
+
+Engram integrates directly with **Claw-Code** for high-performance execution. Use Claw as your agent's execution engine to get ultra-fast results while logging everything to Engram:
+
+```bash
+engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
+```
+
+*Note: Requires `claw` binary to be in your PATH or configured in `.env`.*
+
+## CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `engram search "query"` | Search all memory (lexical + semantic) |
+| `engram recent` | Show the 10 most recent memory entries |
+| `engram add mistake` | Log a new mistake with root cause |
+| `engram index-project` | Create a persistent map of the current codebase |
+| `engram query-codebase` | Search project-specific file summaries |
+| `engram doctor` | Run diagnostics and fix database issues |
+
+## Troubleshooting
+
+If things aren't working as expected, run the built-in diagnostic tool:
+```bash
+engram doctor --repair
+```
+It will check for database drift, orphaned tags, and semantic engine connectivity.
 
 ## License
 

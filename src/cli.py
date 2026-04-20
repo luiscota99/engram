@@ -3,32 +3,34 @@
 Engram — persistent memory for AI-assisted development.
 
 Usage:
-    engram search "query"             Search all memory
-    engram search "query" -t mistake  Search specific type
-    engram search --tags python,api   Search by tags
-    engram recent                     Show recent entries
-    engram recent -n 5 -t skill       Recent skills
+    engram search "query"             Search all memory (lexical + semantic)
+    engram search "query" -t mistake  Search specific type (mistake, pattern, skill, etc.)
+    engram search --tags python,api   Filter search by comma-separated tags
+    engram recent                     Show the 10 most recent memory entries
+    engram recent -n 5 -t skill       Show recent skills only
 
-    engram add mistake ...            Log a new mistake
-    engram add pattern ...            Log a new pattern
-    engram add skill ...              Log a new skill
-    engram add conversation ...       Log a conversation
-
-    engram list mistakes              List all mistakes
-    engram list patterns              List all patterns
-    engram list skills                List all skills
-    engram list conversations         List all conversations
-
-    engram link-pattern "name" ...    Link pattern to conversation
-    engram stats                      Show database statistics
-    engram init                       Initialize database
-    engram seed                       Seed with historical data
+    engram add [type] ...             Log a new memory entry (mistake, pattern, skill, etc.)
+    engram list [type]                List all entries of a specific type
+    
+    engram bootstrap                  Auto-setup agent rules for the current project
+    engram doctor [--repair]          Run diagnostics and fix database/index issues
+    engram stats                      Show memory statistics and database health
+    engram init                       Initialize a fresh memory database
+    engram seed                       Seed with professional engineering patterns
+    engram backup [--git]             Backup memory to JSON and optionally sync to Git
+    
+    engram index-project [--path P]   Index file summaries for a project (Codebase Knowledge)
+    engram query-codebase "query"     Search project-specific file summaries
+    engram clean-codebase             Remove stale entries from the codebase index
 """
 
 import argparse
 import json
 import os
 import sys
+import hashlib
+import subprocess
+import shutil
 
 # Allow running as `python -m src.cli` or directly
 if __name__ == "__main__" and __package__ is None:
@@ -36,6 +38,8 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "src"
 
 from .backup import run_backup
+from .benchmark import run_benchmark
+from .token_simulation import run_simulation
 from .database import (
     delete_item,
     get_connection,
@@ -44,10 +48,25 @@ from .database import (
     index_in_fts,
     init_db,
     link_tags,
+    get_session_details,
 )
 from .doctor import run_diagnostics
 from .search import get_recent, get_stats, search, semantic_search
 from .seed import seed_database
+from .database import get_or_create_project
+from .compression import compress_caveman, get_caveman_prompt
+
+
+def calculate_hash(file_path):
+    """Calculate SHA-256 hash of a file."""
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except Exception as e:
+        return f"error:{e}"
 
 # ── Formatting helpers ──────────────────────────────────────────────
 
@@ -121,6 +140,12 @@ def cmd_add(args):
         _add_conversation(args)
     elif kind == "prompt":
         _add_prompt(args)
+    elif kind == "session":
+        _add_session(args)
+    elif kind == "transcript":
+        _add_transcript(args)
+    elif kind == "decision":
+        cmd_add_decision(args)
     else:
         print(f"Unknown type: {kind}")
         sys.exit(1)
@@ -211,6 +236,211 @@ def _add_conversation(args):
     print(f"✓ Conversation #{cid} '{args.title}' logged.")
 
 
+def _add_session(args):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """INSERT INTO sessions (session_id, title, date, domain, workflow_used)
+               VALUES (?, ?, ?, ?, ?)""",
+            (args.id, args.title, args.date, args.domain, args.workflow_used),
+        )
+        sid = cursor.lastrowid
+        content = f"{args.title} | {args.workflow_used or ''}"
+        index_in_fts(conn, "session", sid, args.id, content, [])
+    print(f"✓ Session '{args.id}' initialized.")
+
+
+def _add_transcript(args):
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO session_transcripts (session_id, role, content)
+               VALUES (?, ?, ?)""",
+            (args.session_id, args.role, args.content),
+        )
+    print(f"✓ Transcript entry for '{args.role}' added to session '{args.session_id}'.")
+
+
+def cmd_add_decision(args):
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE sessions SET key_decisions = IFNULL(key_decisions, '') || char(10) || ?
+               WHERE session_id = ?""",
+            (args.decision, args.session_id),
+        )
+    print(f"✓ Decision added to session '{args.session_id}'.")
+
+
+def cmd_index_project(args):
+    """Index or update codebase knowledge for a project."""
+    project_path = args.path or os.getcwd()
+    project = get_or_create_project(project_path)
+    project_id = project["id"]
+    
+    # If a specific file is provided, just index that one
+    if args.file:
+        files = [args.file]
+    else:
+        # Walk and find files (excluding hidden/ignored)
+        files = []
+        exclude_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".engram"}
+        for root, dirs, filenames in os.walk(project_path):
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            for f in filenames:
+                if f.endswith((".py", ".js", ".ts", ".go", ".rs", ".c", ".cpp", ".h", ".md", ".json", ".sql")):
+                    rel_path = os.path.relpath(os.path.join(root, f), project_path)
+                    files.append(rel_path)
+
+    stale_files = []
+    with get_connection() as conn:
+        for rel_path in files:
+            abs_path = os.path.join(project_path, rel_path)
+            if not os.path.exists(abs_path):
+                continue
+                
+            current_hash = calculate_hash(abs_path)
+            
+            # Check if exists and hash matches
+            existing = conn.execute(
+                "SELECT file_hash, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? AND file_path = ?",
+                (project_id, rel_path)
+            ).fetchone()
+            
+            if existing and existing["file_hash"] == current_hash and not args.force:
+                if args.verbose:
+                    print(f"  - {rel_path} (unchanged)")
+                continue
+
+            if hasattr(args, 'check') and args.check:
+                stale_files.append({
+                    "file_path": rel_path,
+                    "old_hash": existing["file_hash"] if existing else None,
+                    "new_hash": current_hash,
+                    "old_summary": existing["summary"] if existing else None
+                })
+                continue
+
+            # Need summary - this is usually provided by the agent via CLI args
+            # If not provided, we try to preserve the existing one
+            summary = args.summary
+            if not summary:
+                if existing and existing["summary"] and not existing["summary"].startswith("Knowledge entry for"):
+                    summary = existing["summary"]
+                else:
+                    summary = "Knowledge entry for " + rel_path
+            
+            exports = args.exports if args.exports else (existing["exports"] if existing else None)
+            deps = args.deps if args.deps else (existing["dependencies"] if existing else None)
+
+            # Apply Caveman compression if requested
+            if hasattr(args, 'caveman') and args.caveman:
+                if summary and summary != "Knowledge entry for " + rel_path:
+                    summary = compress_caveman(summary, level=args.caveman_level or "full")
+                # Also note the exports and deps can be compressed if they are large JSONs,
+                # but usually they are short lists.
+
+            conn.execute(
+                """INSERT INTO codebase_knowledge (project_id, file_path, file_hash, summary, exports, dependencies)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(project_id, file_path) DO UPDATE SET
+                   file_hash = excluded.file_hash,
+                   summary = excluded.summary,
+                   exports = excluded.exports,
+                   dependencies = excluded.dependencies,
+                   last_indexed_at = datetime('now')""",
+                (project_id, rel_path, current_hash, summary, exports, deps)
+            )
+            if not args.verbose:
+                print(f"✓ Indexed {rel_path}")
+
+    if hasattr(args, 'check') and args.check:
+        print(json.dumps(stale_files, indent=2))
+
+
+def cmd_query_codebase(args):
+    """Search codebase knowledge for a project."""
+    project_path = args.path or os.getcwd()
+    project = get_or_create_project(project_path)
+    project_id = project["id"]
+    
+    query = " ".join(args.query) if args.query else ""
+    
+    with get_connection() as conn:
+        if query:
+            # Simple LIKE search for now, could use FTS if needed
+            rows = conn.execute(
+                """SELECT file_path, summary, exports, dependencies 
+                   FROM codebase_knowledge 
+                   WHERE project_id = ? AND (file_path LIKE ? OR summary LIKE ?)
+                   ORDER BY file_path""",
+                (project_id, f"%{query}%", f"%{query}%")
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT file_path, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? ORDER BY file_path",
+                (project_id,)
+            ).fetchall()
+            
+    if not rows:
+        print("No codebase knowledge found for this project matching your query.")
+        return
+
+    print(fmt_header(f"Codebase Knowledge for {project['name']} ({len(rows)} files):\n"))
+    for r in rows:
+        summary = r['summary']
+        if hasattr(args, 'caveman') and args.caveman:
+            summary = compress_caveman(summary, level=args.caveman_level or "full")
+            
+        print(f"  {fmt_bold(r['file_path'])}")
+        print(f"    Summary: {summary}")
+        if r['exports']:
+            print(f"    Exports: {fmt_dim(r['exports'])}")
+        if r['dependencies']:
+            print(f"    Deps:    {fmt_dim(r['dependencies'])}")
+        print()
+
+def cmd_clean_codebase(args):
+    """Remove stale codebase knowledge entries (files that no longer exist)."""
+    project_path = args.path or os.getcwd()
+    project = get_or_create_project(project_path)
+    project_id = project["id"]
+    
+    removed = 0
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT file_path FROM codebase_knowledge WHERE project_id = ?", (project_id,)
+        ).fetchall()
+        
+        for r in rows:
+            abs_path = os.path.join(project_path, r["file_path"])
+            if not os.path.exists(abs_path):
+                conn.execute(
+                    "DELETE FROM codebase_knowledge WHERE project_id = ? AND file_path = ?",
+                    (project_id, r["file_path"])
+                )
+                removed += 1
+                print(f"  - Cleaned stale entry: {r['file_path']}")
+                
+    if removed:
+        print(f"\n✓ Removed {removed} stale entries from codebase knowledge.")
+    else:
+        print("✓ Codebase knowledge is already clean.")
+
+def _batch_tags(conn, item_type, ids):
+    """Fetch tags for a batch of item IDs in a single query.
+    Returns a dict of {item_id: [tag, ...]} for O(1) lookup in display loops.
+    """
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT it.item_id, GROUP_CONCAT(t.name, ',') as tags
+            FROM item_tags it JOIN tags t ON t.id = it.tag_id
+            WHERE it.item_type = ? AND it.item_id IN ({placeholders})
+            GROUP BY it.item_id""",
+        [item_type] + list(ids),
+    ).fetchall()
+    return {r["item_id"]: r["tags"].split(",") if r["tags"] else [] for r in rows}
+
+
 def cmd_list(args):
     kind = args.kind
     with get_connection() as conn:
@@ -218,9 +448,10 @@ def cmd_list(args):
             rows = conn.execute(
                 "SELECT id, date, mistake, fix FROM mistakes ORDER BY date DESC"
             ).fetchall()
+            tags_map = _batch_tags(conn, "mistake", [r["id"] for r in rows])
             print(fmt_header(f"Mistakes ({len(rows)}):\n"))
             for r in rows:
-                tags = get_tags_for_item(conn, "mistake", r["id"])
+                tags = tags_map.get(r["id"], [])
                 print(f"  {fmt_type('mistake')} #{r['id']} [{r['date']}] {r['mistake'][:80]}")
                 print(f"    Fix: {fmt_dim(r['fix'][:100])}")
                 if tags:
@@ -231,12 +462,16 @@ def cmd_list(args):
             rows = conn.execute(
                 "SELECT id, name, symptoms, standard_fix FROM patterns ORDER BY name"
             ).fetchall()
+            tags_map = _batch_tags(conn, "pattern", [r["id"] for r in rows])
+            # Batch occurrence counts in one query
+            occ_rows = conn.execute(
+                "SELECT pattern_id, COUNT(*) as c FROM pattern_occurrences GROUP BY pattern_id"
+            ).fetchall()
+            occ_map = {r["pattern_id"]: r["c"] for r in occ_rows}
             print(fmt_header(f"Patterns ({len(rows)}):\n"))
             for r in rows:
-                occ = conn.execute(
-                    "SELECT COUNT(*) as c FROM pattern_occurrences WHERE pattern_id = ?", (r["id"],)
-                ).fetchone()["c"]
-                tags = get_tags_for_item(conn, "pattern", r["id"])
+                tags = tags_map.get(r["id"], [])
+                occ = occ_map.get(r["id"], 0)
                 print(
                     f"  {fmt_type('pattern')} {fmt_bold(r['name'])} ({occ} occurrence{'s' if occ != 1 else ''})"
                 )
@@ -250,9 +485,10 @@ def cmd_list(args):
             rows = conn.execute(
                 "SELECT id, name, domain, trigger_desc FROM skills ORDER BY name"
             ).fetchall()
+            tags_map = _batch_tags(conn, "skill", [r["id"] for r in rows])
             print(fmt_header(f"Skills ({len(rows)}):\n"))
             for r in rows:
-                tags = get_tags_for_item(conn, "skill", r["id"])
+                tags = tags_map.get(r["id"], [])
                 print(f"  {fmt_type('skill')} {fmt_bold(r['name'])} [{r['domain']}]")
                 print(f"    When: {fmt_dim(r['trigger_desc'][:100])}")
                 if tags:
@@ -263,9 +499,10 @@ def cmd_list(args):
             rows = conn.execute(
                 "SELECT id, conversation_id, title, date, domain FROM conversations ORDER BY date DESC"
             ).fetchall()
+            tags_map = _batch_tags(conn, "conversation", [r["id"] for r in rows])
             print(fmt_header(f"Conversations ({len(rows)}):\n"))
             for r in rows:
-                tags = get_tags_for_item(conn, "conversation", r["id"])
+                tags = tags_map.get(r["id"], [])
                 print(f"  {fmt_type('conversation')} [{r['date']}] {fmt_bold(r['title'])}")
                 print(
                     f"    Domain: {r['domain']} | ID: {fmt_dim(r['conversation_id'][:12] + '...')}"
@@ -274,13 +511,24 @@ def cmd_list(args):
                     print(f"    {fmt_dim('tags: ' + ', '.join(tags))}")
                 print()
 
+        elif kind == "sessions":
+            rows = conn.execute(
+                "SELECT id, session_id, title, date, domain, workflow_used FROM sessions ORDER BY date DESC"
+            ).fetchall()
+            print(fmt_header(f"Sessions ({len(rows)}):\n"))
+            for r in rows:
+                print(f"  {fmt_type('session')} [{r['date']}] {fmt_bold(r['title'])}")
+                print(f"    Domain: {r['domain']} | ID: {fmt_dim(r['session_id'][:12] + '...')} | Workflow: {r['workflow_used']}")
+                print()
+
         elif kind == "prompts":
             rows = conn.execute(
                 "SELECT id, name, role, domain, best_for FROM prompts ORDER BY name"
             ).fetchall()
+            tags_map = _batch_tags(conn, "prompt", [r["id"] for r in rows])
             print(fmt_header(f"Prompts ({len(rows)}):\n"))
             for r in rows:
-                tags = get_tags_for_item(conn, "prompt", r["id"])
+                tags = tags_map.get(r["id"], [])
                 print(f"  {fmt_type('prompt')} {fmt_bold(r['name'])} [{r['domain']}]")
                 print(f"    Role: {fmt_dim(r['role'][:100])}")
                 if r["best_for"]:
@@ -294,6 +542,7 @@ def cmd_list(args):
             sys.exit(1)
 
 
+
 def cmd_link_pattern(args):
     with get_connection() as conn:
         pattern = conn.execute("SELECT id FROM patterns WHERE name = ?", (args.name,)).fetchone()
@@ -305,6 +554,19 @@ def cmd_link_pattern(args):
             (pattern["id"], args.conversation, args.date, args.notes),
         )
     print(f"✓ Linked pattern '{args.name}' to conversation.")
+
+
+def cmd_get_role(args):
+    with get_connection() as conn:
+        row = conn.execute("SELECT charter, heuristics FROM roles WHERE name = ?", (args.name,)).fetchone()
+        if not row:
+            print(f"Role '{args.name}' not found.")
+            return
+        print(fmt_header(f"Role: {args.name}\n"))
+        print(fmt_bold("Charter:"))
+        print(row["charter"])
+        print("\n" + fmt_bold("Heuristics:"))
+        print(row["heuristics"])
 
 
 def cmd_stats(args):
@@ -368,8 +630,63 @@ def cmd_init(args):
     print(f"✓ Database initialized at {get_db_path()}")
 
 
+def cmd_bootstrap(args):
+    """Bootstrap agent rules for the current project."""
+    import shutil
+    project_root = os.getcwd()
+    engram_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # 0. Ensure Engram is initialized
+    db_path = get_db_path()
+    if not os.path.exists(db_path):
+        print(fmt_header("Engram database not found. Initializing..."))
+        init_db()
+        print(f"✓ Created database at {db_path}")
+
+    # 1. Cursor
+    cursor_rules_dir = os.path.join(project_root, ".cursor", "rules")
+    os.makedirs(cursor_rules_dir, exist_ok=True)
+    source_cursor = os.path.join(engram_root, "cursor-rules", "engram-committee.mdc")
+    if os.path.exists(source_cursor):
+        shutil.copy2(source_cursor, os.path.join(cursor_rules_dir, "engram.mdc"))
+        print(f"✓ Created {os.path.join('.cursor', 'rules', 'engram.mdc')}")
+    else:
+        print(fmt_dim(f"Warning: Source rule {source_cursor} not found."))
+
+    # 2. Antigravity
+    antigravity_dir = os.path.join(project_root, ".antigravity")
+    os.makedirs(antigravity_dir, exist_ok=True)
+    ag_instructions = os.path.join(antigravity_dir, "instructions.md")
+    source_ag = os.path.join(engram_root, "antigravity-skills", "engram-committee-workflow.md")
+    
+    with open(ag_instructions, "w") as f:
+        f.write("# 🧠 Engram Project Instructions\n\n")
+        f.write("You are operating in a project backed by the **Engram Persistent Memory System**.\n")
+        f.write("You MUST follow the Engram Committee-Driven Workflow for all complex tasks, architectural analysis, and codebase reviews.\n\n")
+        if os.path.exists(source_ag):
+            with open(source_ag, "r") as src:
+                f.write("## Engram Committee-Driven Workflow\n")
+                f.write(src.read())
+        print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}")
+
+    # 3. Codebase Knowledge Indexing Suggestion
+    print(fmt_header("\nProject successfully bootstrapped for AI Agents!"))
+    print("Cursor and Antigravity will now default to the Committee Workflow.")
+    print(f"\n{fmt_bold('Next Step:')} Run `{fmt_bold('engram index-project')}` to create a persistent map of this codebase.")
+
+
 def cmd_seed(args):
     seed_database()
+
+
+def cmd_benchmark(args):
+    """Run the LLM benchmarking suite."""
+    run_benchmark()
+
+
+def cmd_simulate(args):
+    """Run token usage simulation."""
+    run_simulation(mock=args.mock)
 
 
 def _add_prompt(args):
@@ -399,6 +716,110 @@ def _add_prompt(args):
         content = f"{args.role} | {args.description} | {args.best_for or ''} | {prompt_text[:500]}"
         index_in_fts(conn, "prompt", pid, args.name, content, tags)
     print(f"✓ Prompt #{pid} '{args.name}' stored.")
+
+
+def cmd_get_session(args):
+    """Fetch session details including transcripts and decisions."""
+    session = get_session_details(args.id)
+    if not session:
+        print(f"Session '{args.id}' not found.")
+        sys.exit(1)
+
+    print(fmt_header(f"Session: {session['title']} ({session['session_id']})\n"))
+    print(f"Date:   {session['date']}")
+    print(f"Domain: {session['domain']}")
+    if session.get('workflow_used'):
+        print(f"Workflow: {session['workflow_used']}")
+    print("")
+
+    if session.get('key_decisions'):
+        print(fmt_bold("Key Decisions:"))
+        print(session['key_decisions'])
+        print("")
+
+    if session.get('transcripts'):
+        print(fmt_bold("Transcripts:"))
+        for t in session['transcripts']:
+            print(f"  {fmt_type('transcript')} [{t['role']}] {t['timestamp']}")
+            print(f"    {fmt_dim(t['content'])}")
+            print()
+
+
+def cmd_run(args):
+    """Run a prompt using Claw-Code and log to Engram."""
+    prompt_text = " ".join(args.prompt)
+    claw_path = args.claw_path or os.environ.get("CLAW_PATH")
+
+    # Try to find claw in common locations if not provided
+    if not claw_path:
+        claw_path = shutil.which("claw")
+
+    if not claw_path:
+        # Check standard dev location relative to AI root
+        # /Users/luismiguel/Desktop/AI/engram/src/cli.py -> /Users/luismiguel/Desktop/AI
+        ai_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        dev_path = os.path.join(ai_root, "claw-code", "rust", "target", "release", "claw")
+        if os.path.exists(dev_path):
+            claw_path = dev_path
+        else:
+            dev_path_debug = os.path.join(ai_root, "claw-code", "rust", "target", "debug", "claw")
+            if os.path.exists(dev_path_debug):
+                claw_path = dev_path_debug
+
+    if not claw_path:
+        print(fmt_header("Error: Claw-Code binary ('claw') not found."))
+        print("Please build claw-code (cargo build --release) or set CLAW_PATH environment variable.")
+        sys.exit(1)
+
+    # 1. Fetch Role context if provided
+    context_prefix = ""
+    if args.role:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT charter, heuristics FROM roles WHERE name = ?", (args.role,)
+            ).fetchone()
+            if row:
+                context_prefix = f"Role: {args.role}\nCharter: {row['charter']}\nHeuristics: {row['heuristics']}\n\n"
+
+    full_prompt = context_prefix + prompt_text
+
+    # 2. Build claw command
+    # Use 'prompt' subcommand of claw
+    cmd = [claw_path, "prompt", full_prompt]
+    if args.model:
+        # claw supports --model flag before subcommand or after? 
+        # usually it's claw --model sonnet prompt "..."
+        cmd = [claw_path, "--model", args.model, "prompt", full_prompt]
+
+    print(fmt_header(f"Executing via Claw ({claw_path})...\n"))
+
+    # 3. Execute
+    try:
+        # We use a subprocess and pipe output to capture it while still showing it to the user
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+
+        output_lines = []
+        for line in process.stdout:
+            print(line, end="")
+            output_lines.append(line)
+
+        process.wait()
+        full_output = "".join(output_lines)
+
+        # 4. Log to Engram if session_id is provided
+        if args.session_id:
+            with get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO session_transcripts (session_id, role, content) VALUES (?, ?, ?)",
+                    (args.session_id, args.role or "Claw", full_output),
+                )
+            print(f"\n✓ Output logged to Engram session '{args.session_id}'.")
+
+    except Exception as e:
+        print(f"\nError executing claw: {e}")
+        sys.exit(1)
 
 
 def cmd_suggest(args):
@@ -622,7 +1043,53 @@ def build_parser():
     p_ac.add_argument("--skills")
     p_ac.add_argument("--tags")
 
+    # add session
+    p_asess = add_sub.add_parser("session", help="Initialize a session")
+    p_asess.add_argument("--id", required=True)
+    p_asess.add_argument("--title", required=True)
+    p_asess.add_argument("--date", required=True)
+    p_asess.add_argument("--domain", required=True)
+    p_asess.add_argument("--workflow-used")
+
+    # add transcript
+    p_at = add_sub.add_parser("transcript", help="Add transcript entry")
+    p_at.add_argument("--session-id", required=True)
+    p_at.add_argument("--role", required=True)
+    p_at.add_argument("--content", required=True)
+
+    # add decision
+    p_ad = add_sub.add_parser("decision", help="Add decision to session")
+    p_ad.add_argument("--session-id", required=True)
+    p_ad.add_argument("--decision", required=True)
+
     p_add.set_defaults(func=cmd_add)
+
+    # index-project
+    p_idx = sub.add_parser("index-project", help="Index project codebase knowledge")
+    p_idx.add_argument("--path", help="Project path (default: current)")
+    p_idx.add_argument("--file", help="Specific file to index")
+    p_idx.add_argument("--summary", help="Summary of the file")
+    p_idx.add_argument("--exports", help="Exported symbols (JSON string)")
+    p_idx.add_argument("--deps", help="Dependencies (JSON string)")
+    p_idx.add_argument("--force", action="store_true", help="Force re-indexing even if hash matches")
+    p_idx.add_argument("--check", action="store_true", help="Just check for stale files and return JSON")
+    p_idx.add_argument("--caveman", action="store_true", help="Compress summaries using Caveman protocol")
+    p_idx.add_argument("--caveman-level", choices=["lite", "full", "ultra"], default="full")
+    p_idx.add_argument("--verbose", action="store_true")
+    p_idx.set_defaults(func=cmd_index_project)
+
+    # query-codebase
+    p_qc = sub.add_parser("query-codebase", help="Query indexed codebase knowledge")
+    p_qc.add_argument("query", nargs="*", help="Query string")
+    p_qc.add_argument("--path", help="Project path")
+    p_qc.add_argument("--caveman", action="store_true", help="Show results in Caveman format")
+    p_qc.add_argument("--caveman-level", choices=["lite", "full", "ultra"], default="full")
+    p_qc.set_defaults(func=cmd_query_codebase)
+
+    # clean-codebase
+    p_clean = sub.add_parser("clean-codebase", help="Remove stale entries from codebase knowledge")
+    p_clean.add_argument("--path", help="Project path")
+    p_clean.set_defaults(func=cmd_clean_codebase)
 
     # add prompt
     p_apr = add_sub.add_parser("prompt", help="Store an LLM prompt")
@@ -638,7 +1105,7 @@ def build_parser():
     # list
     p_list = sub.add_parser("list", help="List entries by type")
     p_list.add_argument(
-        "kind", choices=["mistakes", "patterns", "skills", "conversations", "prompts"]
+        "kind", choices=["mistakes", "patterns", "skills", "conversations", "prompts", "sessions"]
     )
     p_list.set_defaults(func=cmd_list)
 
@@ -648,6 +1115,16 @@ def build_parser():
     p_suggest.add_argument("-t", "--type", choices=["prompt", "skill", "mistake"], default="prompt")
     p_suggest.add_argument("-n", "--limit", type=int, default=3)
     p_suggest.set_defaults(func=cmd_suggest)
+
+    # get-session
+    p_session = sub.add_parser("get-session", help="Get full details of a session")
+    p_session.add_argument("--id", required=True, help="Session ID to fetch")
+    p_session.set_defaults(func=cmd_get_session)
+
+    # get-role
+    p_role = sub.add_parser("get-role", help="Get a subagent role profile")
+    p_role.add_argument("name", help="Name of the role")
+    p_role.set_defaults(func=cmd_get_role)
 
     # import-skills
     p_import = sub.add_parser(
@@ -703,9 +1180,31 @@ def build_parser():
     p_init = sub.add_parser("init", help="Initialize the database")
     p_init.set_defaults(func=cmd_init)
 
+    # bootstrap
+    p_bootstrap = sub.add_parser("bootstrap", help="Bootstrap agent rules for the current project")
+    p_bootstrap.set_defaults(func=cmd_bootstrap)
+
     # seed
     p_seed = sub.add_parser("seed", help="Seed with historical data")
     p_seed.set_defaults(func=cmd_seed)
+
+    # benchmark
+    p_benchmark = sub.add_parser("benchmark", help="Run LLM benchmark suite")
+    p_benchmark.set_defaults(func=cmd_benchmark)
+
+    # simulate
+    p_simulate = sub.add_parser("simulate", help="Simulate token usage of Engram vs Traditional")
+    p_simulate.add_argument("--mock", action="store_true", help="Run simulation using estimated token counts (no API key required)")
+    p_simulate.set_defaults(func=cmd_simulate)
+
+    # run (Claw-Code Bridge)
+    p_run = sub.add_parser("run", help="Run a prompt using Claw-Code execution engine")
+    p_run.add_argument("prompt", nargs="+", help="The prompt to execute")
+    p_run.add_argument("--role", help="Engram role to use (e.g., Analyst, Facilitator)")
+    p_run.add_argument("--model", help="Override model (e.g., opus, sonnet, haiku)")
+    p_run.add_argument("--session-id", help="Engram session ID to associate with")
+    p_run.add_argument("--claw-path", help="Path to claw binary")
+    p_run.set_defaults(func=cmd_run)
 
     return parser
 

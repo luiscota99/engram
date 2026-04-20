@@ -6,7 +6,7 @@ import os
 import urllib.error
 import urllib.request
 
-from .database import get_connection
+from .database import get_connection, rebuild_fts
 
 
 # Simple formatting helpers so we don't circularly import from cli if we don't have to
@@ -47,7 +47,7 @@ def run_diagnostics(repair=False):
 
         # 2. FTS Drift
         core_count = 0
-        for table in ["mistakes", "patterns", "skills", "conversations", "prompts"]:
+        for table in ["mistakes", "patterns", "skills", "conversations", "prompts", "sessions"]:
             core_count += conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
         fts_count = conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0]
@@ -59,7 +59,10 @@ def run_diagnostics(repair=False):
                 )
             )
             if repair:
-                print("  ⚠️ Repair: Full FTS rebuild from core tables is required. (Coming soon)")
+                print(fmt_dim("  Running FTS Rebuild from core tables..."))
+                rebuild_fts(conn)
+                issues_fixed += 1
+                print("  ✓ Repair: FTS index rebuilt successfully. All core items are now indexed.")
         else:
             print("✓ FTS Search: Lexical index matches core tables perfectly.")
 
@@ -129,7 +132,7 @@ def run_diagnostics(repair=False):
             print(fmt_error(f"Semantic Engine Offline: {str(e)}"))
 
         # 5. Dynamic Index Suggestions (Anti-Bloat/Performance)
-        for table in ["mistakes", "patterns", "skills", "conversations", "prompts"]:
+        for table in ["mistakes", "patterns", "skills", "conversations", "prompts", "sessions"]:
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             if count > 10000:
                 print(

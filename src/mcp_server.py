@@ -38,6 +38,7 @@ from src.database import (
     link_item_to_project,
     link_tags,
     record_usage,
+    get_session_details,
 )
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
@@ -358,6 +359,106 @@ TOOLS = [
             "required": ["conversation_id", "tasks_completed"],
         },
     },
+    {
+        "name": "memory_init_session",
+        "description": "Initialize a new Committee session. Call this at the start of any complex task to setup the session ledger.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Unique session ID (e.g., YYYY-MM-DD__NNNN)"},
+                "title": {"type": "string", "description": "Descriptive title for the task"},
+                "date": {"type": "string", "description": "Date (YYYY-MM-DD)"},
+                "domain": {"type": "string", "description": "Primary domain (e.g., 'image-processing')"},
+                "workflow_used": {"type": "string", "description": "Name of the workflow to use"}
+            },
+            "required": ["session_id", "title", "date", "domain"]
+        }
+    },
+    {
+        "name": "memory_add_transcript",
+        "description": "Add a subagent output to the session transcript.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "role": {"type": "string", "description": "Subagent role (Facilitator, Analyst, Researcher, Skeptic, Archivist)"},
+                "content": {"type": "string", "description": "The output content from the subagent"}
+            },
+            "required": ["session_id", "role", "content"]
+        }
+    },
+    {
+        "name": "memory_add_decision",
+        "description": "Log a formal decision to the session ledger.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "decision": {"type": "string", "description": "The decision made, with tradeoffs and rationale"}
+            },
+            "required": ["session_id", "decision"]
+        }
+    },
+    {
+        "name": "memory_get_role",
+        "description": "Retrieve the charter and heuristics for a specific subagent role.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Name of the role (e.g., 'Analyst')"}
+            },
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "memory_get_session",
+        "description": "Get full details of a session, including transcripts and decisions. Use this when continuing a previous session to securely load its context.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "The ID of the session to fetch"}
+            },
+            "required": ["session_id"]
+        }
+    },
+    {
+        "name": "memory_index_file",
+        "description": "Index a specific file's knowledge (summary, exports, deps). CRITICAL: You must provide a concise conceptual summary of the file's purpose and logic. Use this after reading a file to persist your understanding for future sessions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "description": "Project root path"},
+                "file_path": {"type": "string", "description": "Relative path to the file"},
+                "summary": {"type": "string", "description": "Conceptual summary of the file"},
+                "exports": {"type": "string", "description": "JSON array of exported symbols"},
+                "dependencies": {"type": "string", "description": "JSON array of imports/dependencies"}
+            },
+            "required": ["project_path", "file_path", "summary"]
+        }
+    },
+    {
+        "name": "memory_query_codebase",
+        "description": "Query the persistent codebase knowledge for a project. Returns summaries of files matching the query. Use this to 'map' the project structure without re-reading all files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "description": "Project root path"},
+                "query": {"type": "string", "description": "Optional search term"}
+            },
+            "required": ["project_path"]
+        }
+    },
+    {
+        "name": "memory_get_stale_files",
+        "description": "Find files in the project whose content has changed since they were last indexed. Returns a JSON list of stale files with their old summaries.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "description": "Project root path"}
+            },
+            "required": ["project_path"]
+        }
+    },
 ]
 
 
@@ -588,6 +689,131 @@ def handle_memory_add_prompt(args):
     return f"Prompt #{pid} '{args['name']}' stored successfully."
 
 
+def handle_memory_get_session(args):
+    session_id = args.get("session_id")
+    if not session_id:
+        return "Error: session_id is required."
+
+    session = get_session_details(session_id)
+    if not session:
+        return f"Session '{session_id}' not found."
+
+    lines = [f"Session: {session['title']} ({session['session_id']})", f"Date: {session['date']}", f"Domain: {session['domain']}"]
+    if session.get('workflow_used'):
+        lines.append(f"Workflow: {session['workflow_used']}")
+    lines.append("")
+
+    if session.get('key_decisions'):
+        lines.append("Key Decisions:")
+        lines.append(session['key_decisions'])
+        lines.append("")
+
+    if session.get('transcripts'):
+        lines.append("Transcripts:")
+        for t in session['transcripts']:
+            lines.append(f"[{t['role']}] {t['timestamp']}")
+            lines.append(t['content'])
+            lines.append("")
+            
+    return "\n".join(lines)
+
+
+def handle_memory_init_session(args):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """INSERT INTO sessions (session_id, title, date, domain, workflow_used)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                args["session_id"],
+                args["title"],
+                args["date"],
+                args["domain"],
+                args.get("workflow_used"),
+            ),
+        )
+        sid = cursor.lastrowid
+        content = f"{args['title']} | {args.get('workflow_used', '')}"
+        index_in_fts(conn, "session", sid, args["session_id"], content, [])
+    return f"Session '{args['session_id']}' initialized successfully."
+
+
+def handle_memory_add_transcript(args):
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO session_transcripts (session_id, role, content)
+               VALUES (?, ?, ?)""",
+            (args["session_id"], args["role"], args["content"]),
+        )
+    return f"Transcript entry for '{args['role']}' added to session '{args['session_id']}'."
+
+
+def handle_memory_add_decision(args):
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE sessions SET key_decisions = IFNULL(key_decisions, '') || char(10) || ?
+               WHERE session_id = ?""",
+            (args["decision"], args["session_id"]),
+        )
+    return f"Decision added to session '{args['session_id']}'."
+
+
+def handle_memory_get_role(args):
+    with get_connection() as conn:
+        row = conn.execute("SELECT charter, heuristics FROM roles WHERE name = ?", (args["name"],)).fetchone()
+        if not row:
+            return f"Role '{args['name']}' not found in database."
+        return f"Charter:\n{row['charter']}\n\nHeuristics:\n{row['heuristics']}"
+
+
+def handle_memory_index_file(args):
+    project_path = args["project_path"]
+    file_path = args["file_path"]
+    summary = args["summary"]
+    exports = args.get("exports")
+    deps = args.get("dependencies")
+    
+    # Use CLI logic via subprocess to ensure consistency and handle hashing
+    import subprocess
+    cmd = [
+        "python3", "-m", "src.cli", "index-project",
+        "--path", project_path,
+        "--file", file_path,
+        "--summary", summary
+    ]
+    if exports: cmd += ["--exports", exports]
+    if deps: cmd += ["--deps", deps]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        return f"Error indexing file: {e.stderr}"
+
+
+def handle_memory_query_codebase(args):
+    project_path = args["project_path"]
+    query = args.get("query", "")
+    
+    import subprocess
+    cmd = ["python3", "-m", "src.cli", "query-codebase", "--path", project_path]
+    if query: cmd.append(query)
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+def handle_memory_get_stale_files(args):
+    project_path = args["project_path"]
+    
+    import subprocess
+    cmd = ["python3", "-m", "src.cli", "index-project", "--path", project_path, "--check"]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        return f"Error checking for stale files: {e.stderr}"
+
+
 def handle_memory_list(args):
     item_type = args["type"]
     with get_connection() as conn:
@@ -763,6 +989,14 @@ TOOL_HANDLERS = {
     "memory_list": handle_memory_list,
     "memory_stats": handle_memory_stats,
     "memory_session_review": handle_memory_session_review,
+    "memory_init_session": handle_memory_init_session,
+    "memory_add_transcript": handle_memory_add_transcript,
+    "memory_add_decision": handle_memory_add_decision,
+    "memory_get_role": handle_memory_get_role,
+    "memory_get_session": handle_memory_get_session,
+    "memory_index_file": handle_memory_index_file,
+    "memory_query_codebase": handle_memory_query_codebase,
+    "memory_get_stale_files": handle_memory_get_stale_files,
 }
 
 

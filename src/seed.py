@@ -7,177 +7,162 @@ from .database import get_connection, index_in_fts, init_db, link_tags
 
 SEED_MISTAKES = [
     {
-        "date": "2026-04-18",
-        "context": "Updating LinkedIn profile sections via browser subagent",
-        "mistake": "Browser subagent invented content — changed '6 years' to '8+ years', made up job titles, merged separate companies into one entry",
-        "root_cause": "Browser subagents hallucinate when given loose prompts. Optimized for what looked better rather than following exact content",
-        "fix": "Manually reviewed each section via screenshots. Rewrote About section, deleted incorrect entries, re-added with exact specified content",
-        "prevention": "Always verify subagent output against prepared content. Use exact copy-paste text in subagent prompts. Review screenshots after every action",
-        "conversation_id": "dde56edf-1eb3-4887-a9a4-02dca808dd4c",
-        "tags": ["browser-subagent", "linkedin", "content-accuracy", "hallucination"],
+        "date": "2026-04-10",
+        "context": "Implementing a new search endpoint that returns users and their roles.",
+        "mistake": "Fetched roles individually inside a loop iterating over users, causing database CPU spikes.",
+        "root_cause": "The ORM lazy-loaded the relationships by default inside the loop without prefetching.",
+        "fix": "Refactored the query to use a batched IN (...) statement to fetch all roles in one query.",
+        "prevention": "Always use IN (...) or JOIN statements when fetching related entities for a collection. Add a performance test for endpoints returning lists.",
+        "conversation_id": "conv-perf-opt-001",
+        "tags": ["database", "performance", "n-plus-one", "orm"],
     },
     {
-        "date": "2026-04-18",
-        "context": "Building make_proxies.py to create print-ready Pokemon proxy cards",
-        "mistake": "When combining upscaling + frame overlay into unified script, forgot to port color bleed logic from add_bleed.py",
-        "root_cause": "Combining multiple scripts without reviewing all features. Frame overlay was the exciting new feature and overshadowed existing bleed requirement",
-        "fix": "Injected the same color-scanning and flood-fill logic into make_proxies.py after frame compositing step",
-        "prevention": "When unifying scripts, explicitly list ALL features from each source as a checklist before writing the combined version",
-        "conversation_id": "da2c45e6-1df8-4a66-ad50-73d7cff11f85",
-        "tags": ["python", "image-processing", "script-unification", "feature-loss"],
+        "date": "2026-04-12",
+        "context": "AI Agent refactoring a helper function in a large utility file.",
+        "mistake": "Replaced the entire file content just to update one function, accidentally overwriting concurrent changes.",
+        "root_cause": "Used a full-file overwrite tool instead of a targeted multi-line replace tool.",
+        "fix": "Restored the file from git history and re-applied the specific function change using AST-based edits.",
+        "prevention": "Always use targeted multi-line replace tools or AST-based edits instead of full-file overwrites for minor changes.",
+        "conversation_id": "conv-agent-tools-002",
+        "tags": ["ai-assistant", "tool-usage", "git", "refactoring"],
     },
     {
-        "date": "2026-04-18",
-        "context": "Overlaying transparent Frame.png on card images for print bleed",
-        "mistake": "After compositing, tiny black outlines remained at rounded corners of the card",
-        "root_cause": "Two compounding issues: (1) original card scan had black square corners, (2) Frame.png has anti-aliased semi-transparent inner edges — flood-fill stops at semi-transparent pixels",
-        "fix": "Rewrote pipeline: flood-fill card corners first → tint Frame.png to match border color using alpha mask → composite",
-        "prevention": "When compositing with alpha channels and rounded edges, tint the overlay to match target color using alpha mask. Anti-aliased edges require color-aware compositing",
-        "conversation_id": "da2c45e6-1df8-4a66-ad50-73d7cff11f85",
-        "tags": ["python", "pillow", "alpha-compositing", "image-processing", "anti-aliasing"],
-    },
-    {
-        "date": "2026-04-18",
-        "context": "Created HTML/CSS CV for print",
-        "mistake": "Initial CSS used generous spacing that looked good on screen but didn't fit on a single A4 page",
-        "root_cause": "Designed for screen aesthetics without testing print constraints. Missing @page rules and A4 container sizing",
-        "fix": "Compacted spacing, reduced fonts ~15-20%, set container to A4 (210mm x 297mm), added @page print rules",
-        "prevention": "For print-targeted documents, start from paper constraints first (@page { size: A4 }, container 210mm). Design within bounds",
-        "conversation_id": "dde56edf-1eb3-4887-a9a4-02dca808dd4c",
-        "tags": ["css", "print-layout", "a4", "cv-design"],
-    },
-    {
-        "date": "2026-04-18",
-        "context": "Fetching energy cards from Call of Legends expansion",
-        "mistake": "First API query used the marketing name directly, returned no results",
-        "root_cause": "Pokemon TCG API uses internal set IDs (col1) that differ from marketing names (Call of Legends)",
-        "fix": "Queried /v2/sets first to find correct set ID, then used that ID in card query",
-        "prevention": "Always look up resource ID from listing endpoint first. Never assume API parameter matches display name",
-        "conversation_id": "da2c45e6-1df8-4a66-ad50-73d7cff11f85",
-        "tags": ["api", "pokemon-tcg", "parameter-mismatch"],
+        "date": "2026-04-15",
+        "context": "Fetching data on component mount in React UI.",
+        "mistake": "Left the useEffect dependency array out entirely, causing an infinite render loop and DDOSing the backend.",
+        "root_cause": "Developer forgot to add the empty array [] to specify the effect should only run on mount.",
+        "fix": "Added the empty dependency array [] to the useEffect call.",
+        "prevention": "Always include [] for mount-only effects, and enable ESLint rules (exhaustive-deps) to catch missing arrays.",
+        "conversation_id": "conv-ui-debug-003",
+        "tags": ["react", "frontend", "infinite-loop", "hooks"],
     },
 ]
 
 SEED_PATTERNS = [
     {
-        "name": "Alpha Compositing Edge Artifacts",
-        "symptoms": "Dark fringes, black outlines, or color bleeding at edges where images with transparency are composited",
-        "root_cause": "Anti-aliased edges have semi-transparent pixels that blend with wrong background color (usually black from RGBA default)",
-        "standard_fix": "Tint the overlay image to match target background color using its alpha channel as a mask",
-        "tags": ["image-processing", "pillow", "alpha-compositing", "anti-aliasing"],
+        "name": "Unhandled Asynchronous State (Race Conditions)",
+        "symptoms": "UI shows wrong data intermittently when clicking rapidly; logs show responses processed out of order.",
+        "root_cause": "Firing multiple async requests without aborting previous ones or disabling UI interactions.",
+        "standard_fix": "Implement an AbortController for fetch requests or a unique request ID check before updating state.",
+        "tags": ["async", "race-condition", "frontend", "state-management"],
         "occurrences": [
-            ("da2c45e6-1df8-4a66-ad50-73d7cff11f85", "2026-04-18", "Frame overlay on energy cards")
+            ("conv-ui-debug-003", "2026-04-15", "Search input debouncing failed due to race conditions")
         ],
     },
     {
-        "name": "Feature Loss During Script Unification",
-        "symptoms": "Combined script works but is missing functionality from one of the source scripts",
-        "root_cause": "When merging scripts, exciting new features get attention while existing features are overlooked",
-        "standard_fix": "Enumerate ALL features from each source as a checklist before writing combined version",
-        "tags": ["script-unification", "feature-loss", "python"],
+        "name": "Silent Failure on API Schema Drift",
+        "symptoms": "Frontend application renders blank components without explicit console errors.",
+        "root_cause": "The backend changed a field from string to null, and the frontend blindly tried to call string methods on it.",
+        "standard_fix": "Use strict schema validation (e.g., Zod or Pydantic) at the API boundary to catch contract violations early.",
+        "tags": ["api", "schema", "validation", "silent-failure"],
         "occurrences": [
-            (
-                "da2c45e6-1df8-4a66-ad50-73d7cff11f85",
-                "2026-04-18",
-                "add_bleed.py logic missing from make_proxies.py",
-            )
+            ("conv-schema-drift-004", "2026-04-18", "User profile payload dropped the middle_name field")
         ],
-    },
-    {
-        "name": "Browser Subagent Content Hallucination",
-        "symptoms": "Text on web form is different from specified. Numbers, titles, or descriptions are improved or fabricated",
-        "root_cause": "Browser subagents have limited context and may optimize for appearance rather than following exact instructions",
-        "standard_fix": "Provide exact copy-paste text in prompts. Verify every action via screenshot before proceeding",
-        "tags": ["browser-subagent", "hallucination", "content-accuracy"],
-        "occurrences": [
-            (
-                "dde56edf-1eb3-4887-a9a4-02dca808dd4c",
-                "2026-04-18",
-                "LinkedIn experience entries and About section modified",
-            )
-        ],
-    },
-    {
-        "name": "API Parameter Name != Display Name",
-        "symptoms": "API query returns empty results when using human-readable name",
-        "root_cause": "APIs use internal IDs/slugs/codes that differ from marketing names. Spaces and case sensitivity compound the problem",
-        "standard_fix": "Look up resource ID from a listing/search endpoint first, then use returned ID in subsequent queries",
-        "tags": ["api", "parameter-mismatch", "lookup-first"],
-        "occurrences": [
-            ("da2c45e6-1df8-4a66-ad50-73d7cff11f85", "2026-04-18", "Call of Legends vs col1")
-        ],
-    },
-    {
-        "name": "Print Layout Overflow",
-        "symptoms": "HTML/CSS looks fine on screen but overflows target paper size when printed",
-        "root_cause": "Designing for screen without constraining to physical dimensions. Missing @page CSS rules",
-        "standard_fix": "Start from paper constraints (A4: 210mm x 297mm). Set @page { size: A4 } and container from the start",
-        "tags": ["css", "print-layout", "a4"],
-        "occurrences": [("dde56edf-1eb3-4887-a9a4-02dca808dd4c", "2026-04-18", "CV design")],
     },
 ]
 
 SEED_SKILLS = [
     {
-        "name": "Pokemon Proxy Pipeline",
-        "domain": "image-processing",
-        "trigger_desc": "User wants print-ready Pokemon TCG proxy cards from any expansion",
-        "workflow": "1. Fetch card images from pokemontcg.io (set ID lookup → card query → HD download)\n2. Upscale to 1995x2799 using Lanczos\n3. Apply color bleed (sample border color → floodfill black edges)\n4. Overlay Frame.png with color-tinted alpha compositing\n5. Save at 800 DPI as PNG",
-        "pitfalls": "API set IDs != marketing names; Frame alpha edges cause black outlines if not tinted; Must floodfill card corners BEFORE frame; Sample color 15px inward to avoid anti-aliased edge",
-        "key_files": '["~/Desktop/luismi/create printable Proxy/make_proxies.py", "~/Desktop/luismi/add_bleed.py", "~/Desktop/luismi/upscale_energies.py"]',
-        "dependencies": "Python 3, Pillow, pokemontcg.io API key",
-        "tags": ["python", "pillow", "pokemon-tcg", "print-production", "image-processing"],
+        "name": "Safe Database Migration Workflow",
+        "domain": "backend",
+        "trigger_desc": "User wants to alter a database schema or add new tables in a production environment",
+        "workflow": "1. Create up/down migration scripts.\n2. Test locally on a copy of production data.\n3. Run dry-run via CI/CD.\n4. Deploy migration *before* code that depends on it.\n5. Monitor error rates.",
+        "pitfalls": "Locking tables for too long; dropping columns without a deprecation phase; failing to test the rollback (down) script.",
+        "key_files": '["migrations/", "schema.sql"]',
+        "dependencies": "Migration tool (Alembic, Flyway, etc.), staging DB",
+        "tags": ["database", "migrations", "deployment", "safety"],
     },
     {
-        "name": "LinkedIn Profile Automation",
-        "domain": "career",
-        "trigger_desc": "User wants to optimize, audit, or update their LinkedIn profile",
-        "workflow": "1. Audit current profile via browser subagent\n2. Gather career info from user\n3. Craft ALL content in text artifact FIRST\n4. Update one section at a time, verify each via screenshot\n5. Generate assets (banner, CV)",
-        "pitfalls": "Browser subagents hallucinate content — provide exact text; LinkedIn modals appear frequently; Rate limiting after many actions; For CVs, start from A4 constraints",
-        "key_files": '["~/Desktop/luismi/cv/index.html", "~/Desktop/luismi/cv/style.css"]',
-        "dependencies": "Browser access, LinkedIn login",
-        "tags": ["linkedin", "career", "browser-automation", "cv"],
+        "name": "Context-Aware Debugging",
+        "domain": "ai-assistance",
+        "trigger_desc": "User pastes an error stack trace or describes a bug",
+        "workflow": "1. Do not immediately suggest a fix based on the error string.\n2. Use grep_search to find where the error is thrown.\n3. Read the surrounding 50 lines to understand state.\n4. Check git history to see when the code was introduced.\n5. Propose a targeted, localized fix.",
+        "pitfalls": "Hallucinating a fix for a framework version the user isn't actually using; guessing variable types without checking definitions.",
+        "key_files": '[]',
+        "dependencies": "grep_search, view_file",
+        "tags": ["debugging", "workflow", "ai-assistant", "investigation"],
     },
+    {
+        "name": "Engram Committee-Driven Workflow",
+        "domain": "architecture",
+        "trigger_desc": "When given a complex engineering task requiring architectural decisions",
+        "workflow": "1. Initialize session using 'engram add session'\n2. Route reasoning to virtual personas (Analyst, Researcher, Skeptic, Archivist)\n3. Persist outputs using 'engram add transcript'\n4. Log key technical decisions using 'engram add decision'\n5. Present structured Facilitator summary to the user.",
+        "pitfalls": "Skipping session initialization; forgetting to log decisions; acting as a single-agent solver.",
+        "key_files": '["antigravity-skills/engram-committee-workflow.md", "cursor-rules/engram-committee.mdc"]',
+        "dependencies": "Engram CLI",
+        "tags": ["committee", "workflow", "mcp", "architecture"],
+    },
+    {
+        "name": "Caveman Mode",
+        "domain": "communication",
+        "trigger_desc": "User wants ultra-compressed communication to save tokens",
+        "workflow": "1. Activate 'Caveman' system prompt.\n2. Respond terse like smart caveman.\n3. Keep technical terms exact.\n4. Drop articles and filler words.",
+        "pitfalls": "Losing clarity in complex instructions; dropping important URLs or code blocks.",
+        "key_files": '[]',
+        "dependencies": "src/compression.py",
+        "tags": ["caveman", "token-efficiency", "compression"],
+    },
+    {
+        "name": "Caveman Commit",
+        "domain": "git",
+        "trigger_desc": "Generating a git commit message",
+        "workflow": "1. Analyze staged changes.\n2. Write terse, exact commit message in Conventional Commits format.\n3. Why over what.\n4. Body only for non-obvious context.",
+        "pitfalls": "Over-compressing breaking changes; omitting linked issues.",
+        "key_files": '[]',
+        "dependencies": "git",
+        "tags": ["git", "commit", "terse", "caveman"],
+    },
+    {
+        "name": "Caveman Review",
+        "domain": "code-review",
+        "trigger_desc": "Reviewing a Pull Request or diff",
+        "workflow": "1. Analyze the diff for bugs, risks, or nits.\n2. Each finding is one line: L<line>: <problem>. <fix>.\n3. No throat-clearing or pleasantries.",
+        "pitfalls": "Missing security nuances due to brevity.",
+        "key_files": '[]',
+        "dependencies": "grep_search, view_file",
+        "tags": ["code-review", "terse", "caveman"],
+    },
+]
+
+SEED_PROMPTS = [
+    {
+        "name": "Caveman Protocol",
+        "role": "expert-compressor",
+        "domain": "communication",
+        "description": "System prompt for ultra-terse, token-efficient communication.",
+        "prompt_text": "Respond terse like smart caveman. All technical substance stay. Only fluff die. Intensity levels: lite, full, ultra. Drop articles, filler, pleasantries, hedging. [thing] [action] [reason]. [next step]. Keep code unchanged.",
+        "best_for": "Saving tokens in long chat sessions.",
+        "tags": ["caveman", "system-prompt", "efficiency"],
+    }
 ]
 
 SEED_CONVERSATIONS = [
     {
-        "conversation_id": "da2c45e6-1df8-4a66-ad50-73d7cff11f85",
-        "title": "Sourcing High-Definition Pokemon Cards",
-        "date": "2026-04-18",
-        "domain": "image-processing",
-        "tasks_completed": "Fetched energy cards via API; built upscaling script; built color bleed script; generated custom Lucario card; built unified proxy pipeline; fixed alpha compositing; set up 800 DPI; created gravity alias",
-        "key_decisions": "Target 1995x2799 (800 DPI); Lanczos resampling; tint frame approach over flood-fill",
-        "mistakes_summary": "API set ID mismatch; forgot color bleed in unified script; black corner outlines from untinted alpha",
-        "skills_extracted": "Pokemon Proxy Pipeline",
-        "tags": ["python", "pillow", "image-processing", "pokemon-tcg", "api", "print-production"],
+        "conversation_id": "conv-perf-opt-001",
+        "title": "Optimizing API Performance",
+        "date": "2026-04-10",
+        "domain": "backend",
+        "tasks_completed": "Analyzed slow endpoint; identified N+1 query issue; refactored ORM queries to use batching; added load test.",
+        "key_decisions": "Use explicit prefetching for all list endpoints going forward; implement APM tracing.",
+        "mistakes_summary": "Unbatched database queries inside a loop.",
+        "skills_extracted": "None",
+        "tags": ["backend", "performance", "optimization", "database"],
     },
     {
-        "conversation_id": "dde56edf-1eb3-4887-a9a4-02dca808dd4c",
-        "title": "Optimizing LinkedIn Profile Content",
-        "date": "2026-04-18",
-        "domain": "career",
-        "tasks_completed": "Audited blank profile; gathered career info; crafted headline/about/experience; updated via browser; fixed hallucinated content; added education/skills; created HTML/CSS CV; fixed A4 overflow",
-        "key_decisions": "Senior Fullstack Engineer positioning; remote US/Canada/Mexico target; HTML+CSS CV format",
-        "mistakes_summary": "Browser subagent hallucinated content; CV didn't fit A4; browser rate-limited",
-        "skills_extracted": "LinkedIn Profile Automation",
-        "tags": ["linkedin", "career", "browser-automation", "html", "css", "cv"],
-    },
-    {
-        "conversation_id": "9daa751e-30ca-4372-89dc-7051da381ced",
-        "title": "Setting Up Cursor Orchestration + Memory System",
-        "date": "2026-04-19",
-        "domain": "knowledge-management",
-        "tasks_completed": "Cloned LLM-Prompts and ks-cursor-orchestrator repos; created KIs for both; designed persistent memory system; built SQLite memory database with Docker",
-        "key_decisions": "KI-based then SQLite-backed memory; automatic retrospectives; Docker for portability",
-        "mistakes_summary": "None significant",
-        "skills_extracted": "None (infrastructure work)",
-        "tags": ["cursor", "knowledge-management", "agentic", "memory-system", "docker", "sqlite"],
+        "conversation_id": "conv-ui-debug-003",
+        "title": "Refactoring User Authentication Flow",
+        "date": "2026-04-15",
+        "domain": "frontend",
+        "tasks_completed": "Migrated auth context to Redux; fixed infinite render loops; handled race conditions in login requests.",
+        "key_decisions": "Use AbortController for all authentication fetch requests; strict ESLint hooks rules.",
+        "mistakes_summary": "Missing dependency array in useEffect.",
+        "skills_extracted": "None",
+        "tags": ["react", "frontend", "authentication", "refactoring"],
     },
 ]
 
 
-def seed_database(db_path=None):
+def seed_database(db_path=None): # Seed initial memory data (v2)
     """Populate the database with existing data from conversation history."""
     init_db(db_path)
 
@@ -275,6 +260,27 @@ def seed_database(db_path=None):
             index_in_fts(conn, "conversation", cid, c["title"], content, c["tags"])
 
         print(f"  ✓ {len(SEED_CONVERSATIONS)} conversations")
+
+        # Seed prompts
+        for p in SEED_PROMPTS:
+            cursor = conn.execute(
+                """INSERT INTO prompts (name, role, domain, description, prompt_text, best_for)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    p["name"],
+                    p["role"],
+                    p["domain"],
+                    p["description"],
+                    p["prompt_text"],
+                    p["best_for"],
+                ),
+            )
+            pid = cursor.lastrowid
+            link_tags(conn, "prompt", pid, p["tags"])
+            content = f"{p['role']} | {p['description']} | {p['best_for']} | {p['prompt_text'][:500]}"
+            index_in_fts(conn, "prompt", pid, p["name"], content, p["tags"])
+
+        print(f"  ✓ {len(SEED_PROMPTS)} prompts")
         print("Done!")
 
 

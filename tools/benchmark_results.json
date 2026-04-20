@@ -1,0 +1,222 @@
+{
+  "meta": {
+    "mode": "both",
+    "turns": 10,
+    "counter_mode": "simulation",
+    "model": "simulation"
+  },
+  "traditional": [
+    {
+      "turn": 1,
+      "label": "FTS5 Setup",
+      "input_tokens": 79,
+      "output_tokens": 300,
+      "cumulative_input": 79,
+      "cumulative_output": 300,
+      "cumulative_total": 379,
+      "history_length": 2
+    },
+    {
+      "turn": 2,
+      "label": "Partial Match Bug",
+      "input_tokens": 424,
+      "output_tokens": 300,
+      "cumulative_input": 503,
+      "cumulative_output": 600,
+      "cumulative_total": 1103,
+      "history_length": 4
+    },
+    {
+      "turn": 3,
+      "label": "Tagging Schema",
+      "input_tokens": 775,
+      "output_tokens": 300,
+      "cumulative_input": 1278,
+      "cumulative_output": 900,
+      "cumulative_total": 2178,
+      "history_length": 6
+    },
+    {
+      "turn": 4,
+      "label": "Vector Search",
+      "input_tokens": 1129,
+      "output_tokens": 300,
+      "cumulative_input": 2407,
+      "cumulative_output": 1200,
+      "cumulative_total": 3607,
+      "history_length": 8
+    },
+    {
+      "turn": 5,
+      "label": "Segfault Debug",
+      "input_tokens": 1477,
+      "output_tokens": 300,
+      "cumulative_input": 3884,
+      "cumulative_output": 1500,
+      "cumulative_total": 5384,
+      "history_length": 10
+    },
+    {
+      "turn": 6,
+      "label": "Hybrid Scoring",
+      "input_tokens": 1826,
+      "output_tokens": 300,
+      "cumulative_input": 5710,
+      "cumulative_output": 1800,
+      "cumulative_total": 7510,
+      "history_length": 12
+    },
+    {
+      "turn": 7,
+      "label": "Schema Migrations",
+      "input_tokens": 2178,
+      "output_tokens": 300,
+      "cumulative_input": 7888,
+      "cumulative_output": 2100,
+      "cumulative_total": 9988,
+      "history_length": 14
+    },
+    {
+      "turn": 8,
+      "label": "MCP Server",
+      "input_tokens": 2529,
+      "output_tokens": 300,
+      "cumulative_input": 10417,
+      "cumulative_output": 2400,
+      "cumulative_total": 12817,
+      "history_length": 16
+    },
+    {
+      "turn": 9,
+      "label": "MCP Hang Debug",
+      "input_tokens": 2881,
+      "output_tokens": 300,
+      "cumulative_input": 13298,
+      "cumulative_output": 2700,
+      "cumulative_total": 15998,
+      "history_length": 18
+    },
+    {
+      "turn": 10,
+      "label": "pytest SQLite",
+      "input_tokens": 3230,
+      "output_tokens": 300,
+      "cumulative_input": 16528,
+      "cumulative_output": 3000,
+      "cumulative_total": 19528,
+      "history_length": 20
+    }
+  ],
+  "engram": [
+    {
+      "turn": 1,
+      "label": "FTS5 Setup",
+      "input_tokens": 414,
+      "output_tokens": 300,
+      "cumulative_input": 414,
+      "cumulative_output": 300,
+      "cumulative_total": 714,
+      "engram_query": "SQLite FTS5 setup Python full-text search",
+      "system_length": 1516
+    },
+    {
+      "turn": 2,
+      "label": "Partial Match Bug",
+      "input_tokens": 428,
+      "output_tokens": 300,
+      "cumulative_input": 842,
+      "cumulative_output": 600,
+      "cumulative_total": 1442,
+      "engram_query": "FTS5 partial word match prefix search",
+      "system_length": 1577
+    },
+    {
+      "turn": 3,
+      "label": "Tagging Schema",
+      "input_tokens": 387,
+      "output_tokens": 300,
+      "cumulative_input": 1229,
+      "cumulative_output": 900,
+      "cumulative_total": 2129,
+      "engram_query": "SQLite schema many-to-many tagging polymorphic",
+      "system_length": 1395
+    },
+    {
+      "turn": 4,
+      "label": "Vector Search",
+      "input_tokens": 427,
+      "output_tokens": 300,
+      "cumulative_input": 1656,
+      "cumulative_output": 1200,
+      "cumulative_total": 2856,
+      "engram_query": "sqlite-vec vector embeddings semantic search hybrid",
+      "system_length": 1547
+    },
+    {
+      "turn": 5,
+      "label": "Segfault Debug",
+      "input_tokens": 406,
+      "output_tokens": 300,
+      "cumulative_input": 2062,
+      "cumulative_output": 1500,
+      "cumulative_total": 3562,
+      "engram_query": "sqlite-vec segfault float32 numpy embedding error",
+      "system_length": 1479
+    },
+    {
+      "turn": 6,
+      "label": "Hybrid Scoring",
+      "input_tokens": 413,
+      "output_tokens": 300,
+      "cumulative_input": 2475,
+      "cumulative_output": 1800,
+      "cumulative_total": 4275,
+      "engram_query": "hybrid search FTS5 vector scoring weighted ranking",
+      "system_length": 1505
+    },
+    {
+      "turn": 7,
+      "label": "Schema Migrations",
+      "input_tokens": 387,
+      "output_tokens": 300,
+      "cumulative_input": 2862,
+      "cumulative_output": 2100,
+      "cumulative_total": 4962,
+      "engram_query": "SQLite schema migration strategy safe ALTER TABLE",
+      "system_length": 1393
+    },
+    {
+      "turn": 8,
+      "label": "MCP Server",
+      "input_tokens": 385,
+      "output_tokens": 300,
+      "cumulative_input": 3247,
+      "cumulative_output": 2400,
+      "cumulative_total": 5647,
+      "engram_query": "MCP server implementation Python tool protocol",
+      "system_length": 1392
+    },
+    {
+      "turn": 9,
+      "label": "MCP Hang Debug",
+      "input_tokens": 387,
+      "output_tokens": 300,
+      "cumulative_input": 3634,
+      "cumulative_output": 2700,
+      "cumulative_total": 6334,
+      "engram_query": "MCP server hang timeout debugging subprocess",
+      "system_length": 1385
+    },
+    {
+      "turn": 10,
+      "label": "pytest SQLite",
+      "input_tokens": 384,
+      "output_tokens": 300,
+      "cumulative_input": 4018,
+      "cumulative_output": 3000,
+      "cumulative_total": 7018,
+      "engram_query": "pytest fixtures SQLite in-memory database testing isolation",
+      "system_length": 1390
+    }
+  ]
+}
