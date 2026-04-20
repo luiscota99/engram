@@ -170,11 +170,15 @@ def get_connection(db_path=None):
 
     try:
         # Dynamic Initialization & Migrations
-        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta'")
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta'"
+        )
         if not cursor.fetchone():
             # Brand new database setup
             conn.executescript(SCHEMA_SQL)
-            conn.execute("INSERT INTO schema_meta (key, value) VALUES ('version', ?)", (str(SCHEMA_VERSION),))
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES ('version', ?)", (str(SCHEMA_VERSION),)
+            )
         else:
             # Check for migrations
             existing = conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()
@@ -182,7 +186,7 @@ def get_connection(db_path=None):
                 current_version = int(existing["value"])
                 if current_version < SCHEMA_VERSION:
                     run_migrations(conn, current_version, SCHEMA_VERSION)
-                    
+
         yield conn
         conn.commit()
     except Exception:

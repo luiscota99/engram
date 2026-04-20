@@ -291,7 +291,7 @@ def format_and_truncate_results(results):
     for r in results:
         block = f"[{r['item_type'].upper()}] {r['title']}\n"
         if r.get("snippet"):
-            block += f"  {r['snippet'][:150]}\n"
+            block += f"  {r['snippet']}\n"
         if r.get("tags"):
             block += f"  tags: {r['tags']}\n"
         block += "\n"
