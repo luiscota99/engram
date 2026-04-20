@@ -24,7 +24,7 @@ DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
 DB_PATH = os.environ.get("ENGRAM_DB_PATH", DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS mistakes (
     fix TEXT NOT NULL,
     prevention TEXT,
     conversation_id TEXT,
+    usage_count INTEGER DEFAULT 0,
+    last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -47,6 +49,8 @@ CREATE TABLE IF NOT EXISTS patterns (
     symptoms TEXT NOT NULL,
     root_cause TEXT NOT NULL,
     standard_fix TEXT NOT NULL,
+    usage_count INTEGER DEFAULT 0,
+    last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -69,6 +73,8 @@ CREATE TABLE IF NOT EXISTS skills (
     pitfalls TEXT,
     key_files TEXT,
     dependencies TEXT,
+    usage_count INTEGER DEFAULT 0,
+    last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -84,6 +90,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     key_decisions TEXT,
     mistakes_summary TEXT,
     skills_extracted TEXT,
+    usage_count INTEGER DEFAULT 0,
+    last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -119,6 +127,8 @@ CREATE TABLE IF NOT EXISTS prompts (
     prompt_text TEXT NOT NULL,
     source_path TEXT,
     best_for TEXT,
+    usage_count INTEGER DEFAULT 0,
+    last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -304,6 +314,27 @@ def get_item(item_type, item_id, db_path=None):
         ).fetchall()
         result["tags"] = [t["name"] for t in tags]
         return result
+
+
+def record_usage(item_type, item_id, success=True, db_path=None):
+    """Increment usage count for a memory item."""
+    table_map = {
+        "mistake": "mistakes",
+        "pattern": "patterns",
+        "skill": "skills",
+        "conversation": "conversations",
+        "prompt": "prompts",
+    }
+    table = table_map.get(item_type)
+    if not table:
+        return False
+
+    with get_connection(db_path) as conn:
+        conn.execute(
+            f"UPDATE {table} SET usage_count = usage_count + 1, last_used_at = datetime('now') WHERE id = ?",
+            (item_id,),
+        )
+    return True
 
 
 def delete_item(conn, item_type, item_id):

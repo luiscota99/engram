@@ -35,6 +35,7 @@ from src.database import (
     index_in_fts,
     init_db,
     link_tags,
+    record_usage,
 )
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
@@ -49,6 +50,28 @@ PROTOCOL_VERSION = "2024-11-05"
 # ── Tool Definitions ────────────────────────────────────────────────
 
 TOOLS = [
+    {
+        "name": "memory_record_usage",
+        "description": "Increment the usage count for a memory item (skill, pattern, mistake). You MUST call this tool immediately after successfully utilizing a memory item to help the system mathematically boost its future search rank.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "item_type": {
+                    "type": "string",
+                    "description": "Type of item (e.g., 'skill')",
+                },
+                "item_id": {
+                    "type": "integer",
+                    "description": "ID of the item",
+                },
+                "success": {
+                    "type": "boolean",
+                    "description": "Whether the application of the item was successful",
+                },
+            },
+            "required": ["item_type", "item_id"],
+        },
+    },
     {
         "name": "memory_read_item",
         "description": "Fetch the deep structured content (e.g. full workflow, exact mistake context) of a specific memory item. Use this when a memory_search returns an item that is relevant to your current task.",
@@ -336,6 +359,20 @@ def format_and_truncate_results(results):
     return output
 
 
+def handle_memory_record_usage(args):
+    item_type = args.get("item_type")
+    item_id = args.get("item_id")
+    success = args.get("success", True)
+
+    if not item_type or not item_id:
+        return "Error: item_type and item_id are required."
+
+    result = record_usage(item_type, item_id, success)
+    if result:
+        return f"Successfully recorded usage for {item_type} ID {item_id}. Its search rank has been boosted."
+    return f"Failed to record usage for {item_type} ID {item_id}."
+
+
 def handle_memory_read_item(args):
     item_type = args.get("item_type")
     item_id = args.get("item_id")
@@ -596,6 +633,7 @@ def handle_memory_stats(args):
 
 
 TOOL_HANDLERS = {
+    "memory_record_usage": handle_memory_record_usage,
     "memory_read_item": handle_memory_read_item,
     "memory_search": handle_memory_search,
     "memory_recent": handle_memory_recent,

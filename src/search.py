@@ -135,6 +135,32 @@ def search(query, item_type=None, tags=None, limit=20, db_path=None):
                     }
                 )
 
+    # 3. Utility Boost (Apply usage_count)
+    table_map = {
+        "mistake": "mistakes",
+        "pattern": "patterns",
+        "skill": "skills",
+        "conversation": "conversations",
+        "prompt": "prompts",
+    }
+    with get_connection(db_path) as conn:
+        for r in results:
+            table = table_map.get(r["item_type"])
+            usage_count = 0
+            if table:
+                u_row = conn.execute(
+                    f"SELECT usage_count FROM {table} WHERE id = ?", (r["item_id"],)
+                ).fetchone()
+                if u_row:
+                    usage_count = u_row[0]
+
+            # Base score: semantic matches get 100, FTS matches get 50.
+            # Boost: +15 points per successful usage.
+            base_score = 100.0 if r.get("is_semantic") else 50.0
+            r["utility_score"] = base_score + (usage_count * 15.0)
+
+    # Re-sort by utility score descending
+    results.sort(key=lambda x: x.get("utility_score", 0), reverse=True)
     return results[:limit]
 
 
