@@ -11,26 +11,26 @@ Usage:
 
     engram add [type] ...             Log a new memory entry (mistake, pattern, skill, etc.)
     engram list [type]                List all entries of a specific type
-    
+
     engram bootstrap                  Auto-setup agent rules for the current project
     engram doctor [--repair]          Run diagnostics and fix database/index issues
     engram stats                      Show memory statistics and database health
     engram init                       Initialize a fresh memory database
     engram seed                       Seed with professional engineering patterns
     engram backup [--git]             Backup memory to JSON and optionally sync to Git
-    
+
     engram index-project [--path P]   Index file summaries for a project (Codebase Knowledge)
     engram query-codebase "query"     Search project-specific file summaries
     engram clean-codebase             Remove stale entries from the codebase index
 """
 
 import argparse
+import hashlib
 import json
 import os
-import sys
-import hashlib
-import subprocess
 import shutil
+import subprocess
+import sys
 
 # Allow running as `python -m src.cli` or directly
 if __name__ == "__main__" and __package__ is None:
@@ -39,22 +39,21 @@ if __name__ == "__main__" and __package__ is None:
 
 from .backup import run_backup
 from .benchmark import run_benchmark
-from .token_simulation import run_simulation
+from .compression import compress_caveman
 from .database import (
     delete_item,
     get_connection,
     get_db_path,
-    get_tags_for_item,
+    get_or_create_project,
+    get_session_details,
     index_in_fts,
     init_db,
     link_tags,
-    get_session_details,
 )
 from .doctor import run_diagnostics
 from .search import get_recent, get_stats, search, semantic_search
 from .seed import seed_database
-from .database import get_or_create_project
-from .compression import compress_caveman, get_caveman_prompt
+from .token_simulation import run_simulation
 
 
 def calculate_hash(file_path):
@@ -274,7 +273,7 @@ def cmd_index_project(args):
     project_path = args.path or os.getcwd()
     project = get_or_create_project(project_path)
     project_id = project["id"]
-    
+
     # If a specific file is provided, just index that one
     if args.file:
         files = [args.file]
@@ -295,15 +294,15 @@ def cmd_index_project(args):
             abs_path = os.path.join(project_path, rel_path)
             if not os.path.exists(abs_path):
                 continue
-                
+
             current_hash = calculate_hash(abs_path)
-            
+
             # Check if exists and hash matches
             existing = conn.execute(
                 "SELECT file_hash, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? AND file_path = ?",
                 (project_id, rel_path)
             ).fetchone()
-            
+
             if existing and existing["file_hash"] == current_hash and not args.force:
                 if args.verbose:
                     print(f"  - {rel_path} (unchanged)")
@@ -326,7 +325,7 @@ def cmd_index_project(args):
                     summary = existing["summary"]
                 else:
                     summary = "Knowledge entry for " + rel_path
-            
+
             exports = args.exports if args.exports else (existing["exports"] if existing else None)
             deps = args.deps if args.deps else (existing["dependencies"] if existing else None)
 
@@ -360,15 +359,15 @@ def cmd_query_codebase(args):
     project_path = args.path or os.getcwd()
     project = get_or_create_project(project_path)
     project_id = project["id"]
-    
+
     query = " ".join(args.query) if args.query else ""
-    
+
     with get_connection() as conn:
         if query:
             # Simple LIKE search for now, could use FTS if needed
             rows = conn.execute(
-                """SELECT file_path, summary, exports, dependencies 
-                   FROM codebase_knowledge 
+                """SELECT file_path, summary, exports, dependencies
+                   FROM codebase_knowledge
                    WHERE project_id = ? AND (file_path LIKE ? OR summary LIKE ?)
                    ORDER BY file_path""",
                 (project_id, f"%{query}%", f"%{query}%")
@@ -378,7 +377,7 @@ def cmd_query_codebase(args):
                 "SELECT file_path, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? ORDER BY file_path",
                 (project_id,)
             ).fetchall()
-            
+
     if not rows:
         print("No codebase knowledge found for this project matching your query.")
         return
@@ -388,7 +387,7 @@ def cmd_query_codebase(args):
         summary = r['summary']
         if hasattr(args, 'caveman') and args.caveman:
             summary = compress_caveman(summary, level=args.caveman_level or "full")
-            
+
         print(f"  {fmt_bold(r['file_path'])}")
         print(f"    Summary: {summary}")
         if r['exports']:
@@ -402,13 +401,13 @@ def cmd_clean_codebase(args):
     project_path = args.path or os.getcwd()
     project = get_or_create_project(project_path)
     project_id = project["id"]
-    
+
     removed = 0
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT file_path FROM codebase_knowledge WHERE project_id = ?", (project_id,)
         ).fetchall()
-        
+
         for r in rows:
             abs_path = os.path.join(project_path, r["file_path"])
             if not os.path.exists(abs_path):
@@ -418,7 +417,7 @@ def cmd_clean_codebase(args):
                 )
                 removed += 1
                 print(f"  - Cleaned stale entry: {r['file_path']}")
-                
+
     if removed:
         print(f"\n✓ Removed {removed} stale entries from codebase knowledge.")
     else:
@@ -635,7 +634,7 @@ def cmd_bootstrap(args):
     import shutil
     project_root = os.getcwd()
     engram_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
+
     # 0. Ensure Engram is initialized
     db_path = get_db_path()
     if not os.path.exists(db_path):
@@ -658,7 +657,7 @@ def cmd_bootstrap(args):
     os.makedirs(antigravity_dir, exist_ok=True)
     ag_instructions = os.path.join(antigravity_dir, "instructions.md")
     source_ag = os.path.join(engram_root, "antigravity-skills", "engram-committee-workflow.md")
-    
+
     with open(ag_instructions, "w") as f:
         f.write("# 🧠 Engram Project Instructions\n\n")
         f.write("You are operating in a project backed by the **Engram Persistent Memory System**.\n")
@@ -787,7 +786,7 @@ def cmd_run(args):
     # Use 'prompt' subcommand of claw
     cmd = [claw_path, "prompt", full_prompt]
     if args.model:
-        # claw supports --model flag before subcommand or after? 
+        # claw supports --model flag before subcommand or after?
         # usually it's claw --model sonnet prompt "..."
         cmd = [claw_path, "--model", args.model, "prompt", full_prompt]
 

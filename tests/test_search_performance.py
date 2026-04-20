@@ -28,7 +28,7 @@ def test_search_performance_with_many_items(test_db):
             values = values_template.replace("{}", str(i))
             cursor = conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({values})")
             item_id = cursor.lastrowid
-            tags = [f"tag-{i % 5}", f"perf-test"]
+            tags = [f"tag-{i % 5}", "perf-test"]
             link_tags(conn, item_type, item_id, tags)
             index_in_fts(conn, item_type, item_id, f"{item_type} title {i}", f"content for {item_type} number {i} with searchable text", tags)
             item_count += 1

@@ -470,15 +470,15 @@ def get_session_details(session_id, db_path=None):
         row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
         if not row:
             return None
-        
+
         session_data = dict(row)
-        
+
         # Fetch transcripts
         transcripts = conn.execute(
             "SELECT role, content, timestamp FROM session_transcripts WHERE session_id = ? ORDER BY id ASC",
             (session_id,)
         ).fetchall()
-        
+
         session_data["transcripts"] = [dict(t) for t in transcripts]
         return session_data
 

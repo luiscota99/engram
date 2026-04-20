@@ -32,13 +32,12 @@ from src.database import (
     get_connection,
     get_item,
     get_or_create_project,
+    get_session_details,
     get_tags_for_item,
     index_in_fts,
     init_db,
-    link_item_to_project,
     link_tags,
     record_usage,
-    get_session_details,
 )
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
@@ -714,7 +713,7 @@ def handle_memory_get_session(args):
             lines.append(f"[{t['role']}] {t['timestamp']}")
             lines.append(t['content'])
             lines.append("")
-            
+
     return "\n".join(lines)
 
 
@@ -771,7 +770,7 @@ def handle_memory_index_file(args):
     summary = args["summary"]
     exports = args.get("exports")
     deps = args.get("dependencies")
-    
+
     # Use CLI logic via subprocess to ensure consistency and handle hashing
     import subprocess
     cmd = [
@@ -780,9 +779,11 @@ def handle_memory_index_file(args):
         "--file", file_path,
         "--summary", summary
     ]
-    if exports: cmd += ["--exports", exports]
-    if deps: cmd += ["--deps", deps]
-    
+    if exports:
+        cmd += ["--exports", exports]
+    if deps:
+        cmd += ["--deps", deps]
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return result.stdout.strip()
@@ -793,20 +794,25 @@ def handle_memory_index_file(args):
 def handle_memory_query_codebase(args):
     project_path = args["project_path"]
     query = args.get("query", "")
-    
+
     import subprocess
     cmd = ["python3", "-m", "src.cli", "query-codebase", "--path", project_path]
-    if query: cmd.append(query)
-    
+    if query:
+        cmd.append(query)
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        return f"Error querying codebase: {e.stderr}"
+
+
 def handle_memory_get_stale_files(args):
     project_path = args["project_path"]
-    
+
     import subprocess
     cmd = ["python3", "-m", "src.cli", "index-project", "--path", project_path, "--check"]
-    
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return result.stdout.strip()

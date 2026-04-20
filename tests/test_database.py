@@ -1,6 +1,7 @@
-from src.database import SCHEMA_VERSION, link_tags, index_in_fts, get_tags_for_item
+
+from src.database import SCHEMA_VERSION, get_tags_for_item, index_in_fts, link_tags
 from src.search import search
-import json
+
 
 def test_database_initialization(test_db):
     """Test that the database initializes with the correct schema version."""
@@ -17,10 +18,10 @@ def test_tag_linking(test_db):
         ("2026-04-19", "Test context", "Test mistake", "Test fix")
     )
     mid = cursor.lastrowid
-    
+
     link_tags(conn, "mistake", mid, ["test-tag", "pytest"])
     tags = get_tags_for_item(conn, "mistake", mid)
-    
+
     assert "test-tag" in tags
     assert "pytest" in tags
 
@@ -30,7 +31,7 @@ def test_fts_indexing_and_search(test_db):
     conn.execute("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')")
     index_in_fts(conn, "skill", 1, "Testing FTS", "This is a test of the lexical search.", ["test-tag"])
     conn.commit()
-    
+
     # Search for "lexical"
     results = search("lexical", db_path=test_db["path"])
     assert len(results) == 1

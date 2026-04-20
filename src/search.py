@@ -143,7 +143,7 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
         "conversation": "conversations",
         "prompt": "prompts",
     }
-    
+
     usage_counts = {}
     with get_connection(db_path) as conn:
         # Group IDs by table to batch queries and avoid N+1 query slowdown

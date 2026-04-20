@@ -2,8 +2,7 @@ import json
 import os
 import time
 import urllib.request
-import sys
-from typing import Dict, List, Any
+from typing import Any, Dict, List
 
 PROVIDERS = {
     "Groq": {
@@ -60,7 +59,7 @@ def make_request(provider_name: str, config: Dict[str, str], messages: List[Dict
         "Content-Type": "application/json",
         "User-Agent": "EngramBenchmark/1.0 (Python/urllib)"
     }
-    
+
     # OpenRouter recommends passing HTTP-Referer
     if provider_name == "OpenRouter":
         headers["HTTP-Referer"] = "https://github.com/engram-memory/engram"
@@ -84,15 +83,15 @@ def make_request(provider_name: str, config: Dict[str, str], messages: List[Dict
         with urllib.request.urlopen(req, timeout=30) as response:
             latency = time.time() - start_time
             result = json.loads(response.read().decode("utf-8"))
-            
+
             # Extract basic usage if available
             usage = result.get("usage", {})
             prompt_tokens = usage.get("prompt_tokens", 0)
             completion_tokens = usage.get("completion_tokens", 0)
             total_tokens = usage.get("total_tokens", 0)
-            
+
             content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-            
+
             return {
                 "latency": latency,
                 "content": content,
@@ -106,7 +105,7 @@ def make_request(provider_name: str, config: Dict[str, str], messages: List[Dict
 
 def run_benchmark():
     active_providers = {name: conf for name, conf in PROVIDERS.items() if os.environ.get(conf["env_var"])}
-    
+
     if not active_providers:
         print("No provider API keys found in environment.")
         print("Please set at least one of the following environment variables to run benchmarks:")
@@ -115,7 +114,7 @@ def run_benchmark():
         return
 
     print(f"Starting Engram Benchmark with {len(active_providers)} active provider(s): {', '.join(active_providers.keys())}\n")
-    
+
     results = []
 
     for task in TEST_TASKS:
@@ -127,7 +126,7 @@ def run_benchmark():
                 print(f" [FAILED: {res['error']}]")
             else:
                 print(f" [{res['latency']:.2f}s]")
-                
+
             results.append({
                 "provider": provider_name,
                 "model": config["model"],
@@ -136,12 +135,12 @@ def run_benchmark():
                 "total_tokens": res.get("total_tokens", 0),
                 "error": res.get("error", None)
             })
-    
+
     # Print Markdown Table
     print("\n### Benchmark Results\n")
     print("| Provider | Model | Task | Latency (s) | Tokens | Status |")
     print("|---|---|---|---|---|---|")
-    
+
     for r in results:
         status = "❌ " + r["error"] if r["error"] else "✅ OK"
         latency_str = f"{r['latency']:.2f}s" if r.get('latency') else "N/A"

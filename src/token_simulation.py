@@ -1,8 +1,7 @@
 import json
 import os
 import urllib.request
-import time
-from typing import List, Dict, Any
+from typing import Dict, List
 
 from .benchmark import PROVIDERS
 
@@ -46,7 +45,7 @@ def call_llm(messages: List[Dict[str, str]], provider_name: str, config: Dict[st
         "Content-Type": "application/json",
         "User-Agent": "EngramBenchmark/1.0 (Python/urllib)"
     }
-    
+
     if provider_name == "OpenRouter":
         headers["HTTP-Referer"] = "https://github.com/engram-memory/engram"
 
@@ -82,12 +81,12 @@ def estimate_tokens(messages: List[Dict[str, str]]) -> int:
     for msg in messages:
         total_chars += len(msg["content"])
     # Add base overhead and response estimate
-    return (total_chars // 4) + 50 
+    return (total_chars // 4) + 50
 
 
 def run_simulation(mock: bool = False):
     active_providers = {name: conf for name, conf in PROVIDERS.items() if os.environ.get(conf["env_var"])}
-    
+
     if not active_providers and not mock:
         print("No provider API keys found. Set GROQ_API_KEY (or others) to run the simulation, or use --mock.")
         return
@@ -99,7 +98,7 @@ def run_simulation(mock: bool = False):
         # Just pick the first active provider (e.g. Groq)
         provider_name = list(active_providers.keys())[0]
         config = active_providers[provider_name]
-    
+
     print(f"Starting Engram Token Simulation using {provider_name} ({config['model']})")
     print(f"Simulating {len(MOCK_CONVERSATION)} turns...\n")
 
@@ -112,16 +111,16 @@ def run_simulation(mock: bool = False):
     for i, user_msg in enumerate(MOCK_CONVERSATION):
         traditional_history.append({"role": "user", "content": user_msg})
         print(f"  Turn {i+1} (Trad): Waiting for response...", end="\r", flush=True)
-        
+
         if mock:
             tokens = estimate_tokens(traditional_history)
             response_text = "I'll help you with that."
         else:
             tokens, response_text = call_llm(traditional_history, provider_name, config)
-            
+
         traditional_cumulative_tokens += tokens
         traditional_turn_data.append(tokens)
-        
+
         traditional_history.append({"role": "assistant", "content": response_text})
         print(f"  Turn {i+1} (Trad): Used {tokens} tokens. Cumulative: {traditional_cumulative_tokens}")
 
@@ -136,13 +135,13 @@ def run_simulation(mock: bool = False):
             {"role": "user", "content": user_msg}
         ]
         print(f"  Turn {i+1} (Engram): Waiting for response...", end="\r", flush=True)
-        
+
         if mock:
             tokens = estimate_tokens(engram_prompt)
             response_text = "Retrieved context used."
         else:
             tokens, response_text = call_llm(engram_prompt, provider_name, config)
-            
+
         engram_cumulative_tokens += tokens
         engram_turn_data.append(tokens)
         print(f"  Turn {i+1} (Engram): Used {tokens} tokens. Cumulative: {engram_cumulative_tokens}")
@@ -158,7 +157,7 @@ def run_simulation(mock: bool = False):
             {"role": "user", "content": user_msg}
         ]
         print(f"  Turn {i+1} (Caveman): Waiting for response...", end="\r", flush=True)
-        
+
         if mock:
             # Caveman estimates use a 0.6x multiplier for the system prompt and context length
             # to simulate the "mouth being smaller" effect on output and the compressed context.
@@ -166,7 +165,7 @@ def run_simulation(mock: bool = False):
             response_text = "Caveman speak."
         else:
             tokens, response_text = call_llm(caveman_prompt, provider_name, config)
-            
+
         caveman_cumulative_tokens += tokens
         caveman_turn_data.append(tokens)
         print(f"  Turn {i+1} (Caveman): Used {tokens} tokens. Cumulative: {caveman_cumulative_tokens}")
@@ -180,13 +179,13 @@ def run_simulation(mock: bool = False):
     for i, user_msg in enumerate(MOCK_CONVERSATION):
         scenario_c_history.append({"role": "user", "content": user_msg})
         print(f"  Turn {i+1} (Long+Engram): Waiting for response...", end="\r", flush=True)
-        
+
         if mock:
             tokens = estimate_tokens(scenario_c_history)
             response_text = "Context injected."
         else:
             tokens, response_text = call_llm(scenario_c_history, provider_name, config)
-            
+
         scenario_c_cumulative_tokens += tokens
         scenario_c_turn_data.append(tokens)
         scenario_c_history.append({"role": "assistant", "content": response_text})
@@ -198,13 +197,13 @@ def run_simulation(mock: bool = False):
     print("|---|---|---|---|---|")
     for i in range(len(MOCK_CONVERSATION)):
         print(f"| {i+1} | {traditional_turn_data[i]} | {engram_turn_data[i]} | {scenario_c_turn_data[i]} | {caveman_turn_data[i]} |")
-    
+
     print("\n--- Summary ---")
     print(f"A. Traditional Chat Total Tokens:      {traditional_cumulative_tokens}")
     print(f"B. Stateless Engram Total Tokens:      {engram_cumulative_tokens}")
     print(f"C. Long Chat + Engram Total Tokens:    {scenario_c_cumulative_tokens}")
     print(f"D. Engram + Caveman Total Tokens:      {caveman_cumulative_tokens}")
-    
+
     if traditional_cumulative_tokens > 0:
         savings_vs_a = ((traditional_cumulative_tokens - engram_cumulative_tokens) / traditional_cumulative_tokens) * 100
         savings_vs_d = ((traditional_cumulative_tokens - caveman_cumulative_tokens) / traditional_cumulative_tokens) * 100
