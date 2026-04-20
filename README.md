@@ -19,36 +19,34 @@ AI assistants forget everything between sessions. Engram fixes that by maintaini
 
 ## Quick Start
 
-### Install locally (recommended)
+### Try it out
+The easiest way to run Engram (and its embedded Ollama semantic search engine) is via Docker Compose:
 
 ```bash
 git clone https://github.com/luismiguelcota/engram.git
 cd engram
+
+# Spins up the database, the semantic engine, and pulls the embedding model automatically
+docker compose up -d
+```
+
+Once running, you can interact with it via the CLI:
+```bash
+docker compose run --rm engram stats                         # See what's in memory
+docker compose run --rm engram search "alpha compositing"    # Full-text search
+docker compose run --rm engram recent -n 5                   # Last 5 entries
+```
+
+### Local Dev Setup (Optional)
+If you want to run the CLI directly on your host machine without Docker:
+
+```bash
 pip install -e .
-
-# Initialize the database
 engram init
+engram stats
 ```
-
-### Try it out
-
-```bash
-engram stats                         # See what's in memory
-engram search "alpha compositing"    # Full-text search
-engram list skills                   # Browse learned workflows
-engram recent -n 5                   # Last 5 entries
-```
-
-### Docker
-
-```bash
-docker compose build
-docker compose run --rm engram stats
-docker compose run --rm engram search "query"
-```
-
 > [!NOTE]
-> If you are using semantic vector search with Ollama, the `docker-compose.yml` automatically maps `host.docker.internal` to hit your host machine's Ollama instance. Ensure Ollama is running before starting the container!
+> If you run Engram locally instead of via Docker, you must have Ollama running on your Mac (`localhost:11434`) with the `nomic-embed-text` model pulled.
 
 ## IDE Integration
 
