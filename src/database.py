@@ -277,6 +277,35 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
         )
 
 
+def get_item(item_type, item_id, db_path=None):
+    """Fetch the full structured data for a specific item, including its tags."""
+    table_map = {
+        "mistake": "mistakes",
+        "pattern": "patterns",
+        "skill": "skills",
+        "conversation": "conversations",
+        "prompt": "prompts",
+    }
+    table = table_map.get(item_type)
+    if not table:
+        return None
+
+    with get_connection(db_path) as conn:
+        row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (item_id,)).fetchone()
+        if not row:
+            return None
+
+        result = dict(row)
+
+        # Fetch tags
+        tags = conn.execute(
+            "SELECT t.name FROM tags t JOIN item_tags it ON t.id = it.tag_id WHERE it.item_type = ? AND it.item_id = ?",
+            (item_type, item_id),
+        ).fetchall()
+        result["tags"] = [t["name"] for t in tags]
+        return result
+
+
 def delete_item(conn, item_type, item_id):
     """Deeply delete an item from its core table, tags, FTS, and vector index."""
     # 1. Delete from core table

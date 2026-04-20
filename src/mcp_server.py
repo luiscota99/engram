@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.database import (
     delete_item,
     get_connection,
+    get_item,
     get_tags_for_item,
     index_in_fts,
     init_db,
@@ -48,6 +49,24 @@ PROTOCOL_VERSION = "2024-11-05"
 # ── Tool Definitions ────────────────────────────────────────────────
 
 TOOLS = [
+    {
+        "name": "memory_read_item",
+        "description": "Fetch the deep structured content (e.g. full workflow, exact mistake context) of a specific memory item. Use this when a memory_search returns an item that is relevant to your current task.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "item_type": {
+                    "type": "string",
+                    "description": "Type of item (e.g., 'skill', 'mistake')",
+                },
+                "item_id": {
+                    "type": "integer",
+                    "description": "ID of the item to fetch",
+                },
+            },
+            "required": ["item_type", "item_id"],
+        },
+    },
     {
         "name": "memory_search",
         "description": "Search across all memory (mistakes, patterns, skills, conversations) using full-text search. Use this to find relevant context, similar issues, or applicable skills before starting work.",
@@ -283,20 +302,27 @@ TOOLS = [
 
 
 def format_and_truncate_results(results):
+    if not results:
+        return "No results found."
+
     max_chars = int(os.environ.get("ENGRAM_MAX_CONTEXT_CHARS", 8000))
-    lines = []
-    total_length = 0
+    lines = [
+        "Found results. NOTE: These are truncated summaries to save context tokens.\n",
+        "If an item looks relevant, you MUST use `memory_read_item(item_type, item_id)` to read the full context.\n\n",
+    ]
+    total_length = len(lines[0]) + len(lines[1])
     truncated = False
 
     for r in results:
-        block = f"[{r['item_type'].upper()}] {r['title']}\n"
+        block = f"[{r['item_type'].upper()} ID: {r['item_id']}] {r['title']}\n"
         if r.get("snippet"):
-            block += f"  {r['snippet']}\n"
+            snippet = r["snippet"].replace("\n", " ")
+            block += f"  Snippet: {snippet[:150]}...\n"
         if r.get("tags"):
-            block += f"  tags: {r['tags']}\n"
+            block += f"  Tags: {r['tags']}\n"
         block += "\n"
 
-        if total_length + len(block) > max_chars and len(lines) > 0:
+        if total_length + len(block) > max_chars and len(lines) > 2:
             truncated = True
             break
 
@@ -305,11 +331,22 @@ def format_and_truncate_results(results):
 
     output = "".join(lines)
     if truncated:
-        output += (
-            "[WARNING: Results truncated to prevent context window blowout. Be more specific.]\n"
-        )
+        output += f"[WARNING: Truncated at {max_chars} chars. Use memory_read_item on the IDs above to read more.]\n"
 
-    return output.strip()
+    return output
+
+
+def handle_memory_read_item(args):
+    item_type = args.get("item_type")
+    item_id = args.get("item_id")
+    if not item_type or not item_id:
+        return "Error: item_type and item_id are required."
+
+    item = get_item(item_type, item_id)
+    if not item:
+        return f"Error: Could not find {item_type} with ID {item_id}."
+
+    return json.dumps(item, indent=2).strip()
 
 
 def handle_memory_search(args):
@@ -559,6 +596,7 @@ def handle_memory_stats(args):
 
 
 TOOL_HANDLERS = {
+    "memory_read_item": handle_memory_read_item,
     "memory_search": handle_memory_search,
     "memory_recent": handle_memory_recent,
     "memory_add_mistake": handle_memory_add_mistake,
