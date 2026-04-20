@@ -74,23 +74,23 @@ def fmt_bold(text):
 
 
 def cmd_search(args):
+    """Search the memory database."""
     query = " ".join(args.query) if args.query else ""
-    tags = args.tags.split(",") if args.tags else None
-    results = search(query, item_type=args.type, tags=tags, limit=args.limit)
-
+    tag_list = [t.strip() for t in args.tags.split(",")] if args.tags else None
+    results = search(query, args.type, tag_list, args.limit)
     if not results:
-        print(fmt_dim("No results found."))
+        print("No results found.")
         return
 
-    print(fmt_header(f"Found {len(results)} result(s):\n"))
+    print(f"Found {len(results)} result(s):\n")
     for r in results:
-        print(f"  {fmt_type(r['item_type'])} {fmt_bold(r['title'])}")
+        badge = "[S]" if r.get("is_semantic") else "[K]"
+        print(fmt_header(f"  {badge} [{r['item_type'].upper()}] {r['title']}"))
         if r["snippet"]:
-            snippet = r["snippet"].replace("\n", " ")[:120]
-            print(f"    {fmt_dim(snippet)}")
+            print(f"    {r['snippet'][:120].replace(chr(10), ' ')}...")
         if r["tags"]:
-            print(f"    {fmt_dim('tags: ' + r['tags'])}")
-        print()
+            print(fmt_dim(f"    tags: {r['tags']}"))
+        print("")
 
 
 def cmd_recent(args):

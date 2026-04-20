@@ -74,9 +74,30 @@ def run_diagnostics(repair=False):
                     )
                 )
                 if repair:
-                    print(
-                        "  ⚠️ Repair: Vector rebuild requires re-running embeddings for missing rows. (Coming soon)"
-                    )
+                    print(fmt_dim("  Running Vector Repair: Generating missing embeddings..."))
+                    rows = conn.execute(
+                        "SELECT rowid, title, content, tags FROM memory_fts"
+                    ).fetchall()
+                    import json
+
+                    from .embeddings import embed_text
+
+                    fixed = 0
+                    for r in rows:
+                        has_vec = conn.execute(
+                            "SELECT rowid FROM vec_memory WHERE rowid = ?", (r["rowid"],)
+                        ).fetchone()
+                        if not has_vec:
+                            full_text = f"{r['title']}\n{r['content']}\n{r['tags']}"
+                            emb = embed_text(full_text)
+                            if emb:
+                                conn.execute(
+                                    "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
+                                    (r["rowid"], json.dumps(emb)),
+                                )
+                                fixed += 1
+                    issues_fixed += 1
+                    print(f"  ✓ Repair: Generated {fixed} missing embeddings.")
             else:
                 print("✓ Vectors: Semantic index matches search index perfectly.")
         except Exception:

@@ -3,6 +3,7 @@ services:
     build: .
     volumes:
       - ~/.engram:/data
+      - ./src:/app/src
     environment:
       - ENGRAM_DB_PATH=/data/memory.db
       - OLLAMA_HOST=http://ollama:11434
