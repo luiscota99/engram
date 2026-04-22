@@ -173,6 +173,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sc2.add_argument("--outcome", required=True)
     p_sc2.add_argument("--errors")
     p_sc2.add_argument("--files", help="Comma-separated list of files changed")
+    p_sc2.add_argument(
+        "--json",
+        action="store_true",
+        help="Print raw suggestion dict as JSON (for scripts and agents)",
+    )
     p_sc2.set_defaults(func=cmd_suggest_capture)
 
     # ── Codebase ─────────────────────────────────────────────────────

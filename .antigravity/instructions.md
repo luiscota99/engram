@@ -17,7 +17,7 @@ description: >
 
 Engram engagement is **adaptive**: minimal by default, escalating to the full Committee workflow only when the task warrants it. This prevents every trivial fix from becoming a multi-step committee session.
 
-> **Interface**: Antigravity uses the Engram **CLI** (`python3 -m src.cli ...`), not MCP tools.
+> **Interface**: Antigravity uses the Engram **CLI** (`python3 -m src.cli ...`), not MCP tools. Run commands from the **engram project root** (or with `PYTHONPATH` set) so `python3 -m src.cli` resolves.
 
 ---
 
@@ -26,14 +26,14 @@ Engram engagement is **adaptive**: minimal by default, escalating to the full Co
 | Level | What happens | When |
 |-------|-------------|------|
 | **OFF** | No Engram CLI calls | Trivial questions, user says "quick question" or "no engram" |
-| **LIGHT** | One `engram search` at start, no session/transcripts | Default for most tasks |
-| **FULL** | Session init + Committee workflow + transcripts + decisions | Complex tasks (see escalation triggers) |
+| **LIGHT** | One `search` at start; **at most one** `suggest-capture` at **session end** only if **significance** holds (see below). No session init, no committee, no transcripts | Default for most tasks |
+| **FULL** | Session init + Committee workflow + transcripts + decisions; **mandatory** `suggest-capture` before persisting memory at retrospective | Complex tasks (see escalation triggers) |
 
 ---
 
 ## Default Behavior: LIGHT Mode
 
-For most tasks, at the start of the session:
+For most tasks, at the **start** of the session:
 
 ```bash
 python3 -m src.cli search "keywords from task" -n 3
@@ -42,9 +42,30 @@ python3 -m src.cli search "keywords from task" -n 3
 1. Extract 2-4 keywords from the user's request
 2. Run the search above
 3. If a relevant **skill** or **pattern** is returned, mention it briefly before proceeding
-4. Proceed with the task normally — **no** session init, **no** transcripts, **no** retrospective
+4. Proceed with the task normally — **no** session init, **no** transcripts, **no** committee
 
 If no relevant result is found, proceed silently without mentioning Engram.
+
+### LIGHT — optional end-of-session capture (proactive, bounded)
+
+**Do not** run capture after every message. **Do not** use bare closings (`thanks`, `done`, `bye`, `ok`) *alone* as triggers—that causes noise.
+
+At **natural session end** (user signals they are done **and** you have finished substantive work), you **may** run **at most one** capture check if **significance** is met:
+
+- The session was **escalated to FULL** at any point, **or**
+- The task touched **multiple files** or many turns, **or**
+- A **non-trivial** fix or investigation was completed (refactor, debug, architecture, migration, etc.), **or**
+- The combined **task + outcome** plausibly merits a mistake, pattern, or skill
+
+If uncertain, run `suggest-capture` **once** and **only** surface the result to the user if the suggestion is **non-empty** (see `suggested_types` in `--json` output) **or** the default (non-JSON) text is not the "no strong signals" message. If the heuristic would produce nothing to save, skip the prompt or a single short "Nothing to capture—ok to close?"
+
+**Command (same heuristics as Cursor `session-capture` hooks):**
+
+```bash
+python3 -m src.cli suggest-capture --task "one-line task summary" --outcome "what was delivered or learned" --json
+```
+
+Use `--errors "..."` and `--files "a.py,b.py"` when applicable. Get **explicit user approval** before any `add mistake` / `add pattern` / `add skill` commands.
 
 ---
 
@@ -146,36 +167,30 @@ Present the final output in this format:
 - **Risks & Mitigations**
 - **Next Steps**
 
-### Step 7: End-of-Session Retrospective (FULL mode only)
+### Step 7: End-of-Session Retrospective (capture-first; FULL mode)
 
-After completing significant work, propose the following for user approval:
+After significant work, **do not** hand-draft long `add` blocks as the primary path. **Always start** with the heuristic engine (same as Cursor `suggest-capture` / `memory_suggest_capture`):
 
 ```bash
-# Log a mistake if one occurred
-python3 -m src.cli add mistake \
-  --date "YYYY-MM-DD" \
-  --context "What we were doing" \
-  --mistake "What went wrong" \
-  --root-cause "Why it happened" \
-  --fix "How it was resolved" \
-  --prevention "How to avoid next time"
-
-# Log a pattern if a recurring issue was identified
-python3 -m src.cli add pattern \
-  --name "Pattern Name" \
-  --symptoms "What it looks like" \
-  --root-cause "Why it happens" \
-  --fix "Standard resolution"
-
-# Log a skill if a repeatable workflow was used
-python3 -m src.cli add skill \
-  --name "Skill Name" \
-  --domain "engineering" \
-  --trigger "When to use this" \
-  --workflow "Step-by-step instructions"
+python3 -m src.cli suggest-capture \
+  --task "Concise task description" \
+  --outcome "What was completed and key learnings" \
+  --errors "Optional: errors, stack traces, wrong turns" \
+  --files "optional,comma,separated,paths" \
+  --json
 ```
 
-**Always draft these in a markdown block and ask the user for approval before running.**
+1. Run the command above (use `--json` for structured review, or omit `--json` for human-readable output).
+2. Present the result to the user. **Get explicit approval** before writing to memory.
+3. **After approval**, run the appropriate `add` subcommands with the approved fields, for example:
+
+```bash
+python3 -m src.cli add mistake --date "YYYY-MM-DD" --context "..." --mistake "..." --root-cause "..." --fix "..." --prevention "..."
+python3 -m src.cli add pattern --name "..." --symptoms "..." --root-cause "..." --fix "..."
+python3 -m src.cli add skill --name "..." --domain "engineering" --trigger "..." --workflow "..."
+```
+
+**Escape hatch:** If the heuristics miss something important, the user can ask for a **manual** `add` for a specific type; fill fields carefully and still ask for approval.
 
 ---
 
@@ -183,13 +198,13 @@ python3 -m src.cli add skill \
 
 When the session context is getting long or a major milestone is complete:
 
-1. Run the retrospective (Step 7 above)
-2. Log a final decision summarizing next steps
-3. Issue this alert:
+1. **First:** run the **capture check** (LIGHT optional rules or FULL Step 7): `suggest-capture` → user approval (if any entries) → `add` commands as needed. If there is **nothing to save**, proceed without blocking.
+2. If in FULL: log a final **decision** summarizing next steps (when a session is active)
+3. **Then** issue the context reset alert (below)
 
 > [!WARNING]
 > **SYSTEM ALERT: CONTEXT RESET REQUIRED**
-> All progress, patterns, and decisions have been saved to Engram memory.
+> Capture has been **attempted**; approved items are saved to Engram memory. If there was nothing to capture, you may still reset.
 >
 > **Action Required:**
 > 1. Open a new terminal/chat session.
@@ -214,6 +229,6 @@ When the session context is getting long or a major milestone is complete:
 
 ## Dependencies
 
-- Engram CLI: `python3 -m src.cli` (from the engram project root)
+- Engram CLI: `python3 -m src.cli` (from the engram project root, or with `PYTHONPATH` including the project)
 - Python 3.9+
 - `~/.engram/memory.db` must exist (run `engram init` if not)

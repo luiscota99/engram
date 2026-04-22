@@ -389,7 +389,10 @@ def cmd_suggest_consolidate(args):
 
 
 def cmd_suggest_capture(args):
+    import json
+
     from ...capture import format_capture_suggestion, suggest_capture
+
     files = [f.strip() for f in args.files.split(",")] if args.files else []
     suggestion = suggest_capture(
         task_description=args.task,
@@ -397,4 +400,12 @@ def cmd_suggest_capture(args):
         errors_encountered=args.errors or "",
         files_changed=files,
     )
-    print(format_capture_suggestion(suggestion))
+    if getattr(args, "json", False):
+        def _default(o):
+            if isinstance(o, (set, frozenset)):
+                return list(o)
+            raise TypeError
+
+        print(json.dumps(suggestion, indent=2, default=_default))
+    else:
+        print(format_capture_suggestion(suggestion))

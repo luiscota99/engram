@@ -177,6 +177,7 @@ class TestCmdSuggestCapture:
             outcome = "Resolved by adding a null check before rendering"
             errors = "TypeError: NoneType has no attribute render"
             files = "pipeline.py,renderer.py"
+            json = False
 
         output = _capture_output(cmd_suggest_capture, Args())
         assert "Engram Memory Capture Suggestion" in output
@@ -189,6 +190,25 @@ class TestCmdSuggestCapture:
             outcome = "Successfully deployed using the new process"
             errors = None
             files = None
+            json = False
 
         output = _capture_output(cmd_suggest_capture, Args())
         assert "Skill" in output
+
+    def test_json_flag_emits_valid_json(self, test_db):
+        import json
+
+        from src.cli.commands.memory import cmd_suggest_capture
+
+        class Args:
+            task = "Set up the deployment workflow"
+            outcome = "Successfully deployed using the new process"
+            errors = None
+            files = None
+            json = True
+
+        output = _capture_output(cmd_suggest_capture, Args())
+        data = json.loads(output)
+        assert "suggested_types" in data
+        assert "confidence" in data
+        assert "domain" in data
