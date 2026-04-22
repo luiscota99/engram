@@ -10,13 +10,11 @@ Supports:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
-import json
-from typing import Optional
 
-from .database import get_connection, get_tags_for_item, get_or_create_project
-
+from .database import get_connection, get_tags_for_item
 
 # ── Slug helpers ──────────────────────────────────────────────────────
 
@@ -65,7 +63,7 @@ def render_skill_md(skill: dict, tags: list[str] | None = None) -> str:
     lines = [
         "---",
         f"name: {name_slug}",
-        f"description: >-",
+        "description: >-",
         f"  {description}",
         "---",
         "",
@@ -135,7 +133,7 @@ def render_pattern_as_skill_md(pattern: dict, tags: list[str] | None = None) -> 
     lines = [
         "---",
         f"name: {name_slug}",
-        f"description: >-",
+        "description: >-",
         f"  {description}",
         "---",
         "",

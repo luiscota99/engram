@@ -1,0 +1,77 @@
+"""Miscellaneous tool commands: benchmark, simulate, run, browse."""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+
+from ...database import get_connection
+from ..fmt import fmt_header
+
+
+def cmd_benchmark(args):
+    from ...benchmark import run_benchmark
+    run_benchmark()
+
+
+def cmd_simulate(args):
+    from ...token_simulation import run_simulation
+    run_simulation(mock=args.mock)
+
+
+def cmd_browse(args):
+    from ...browse import run_browser
+    run_browser()
+
+
+def cmd_run(args):
+    prompt_text = " ".join(args.prompt)
+    claw_path = args.claw_path or os.environ.get("CLAW_PATH")
+
+    if not claw_path:
+        claw_path = shutil.which("claw")
+
+    if not claw_path:
+        ai_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        for rel in ("claw-code/rust/target/release/claw", "claw-code/rust/target/debug/claw"):
+            candidate = os.path.join(ai_root, rel)
+            if os.path.exists(candidate):
+                claw_path = candidate
+                break
+
+    if not claw_path:
+        print(fmt_header("Error: Claw-Code binary ('claw') not found."))
+        print("Build claw-code (cargo build --release) or set CLAW_PATH.")
+        sys.exit(1)
+
+    context_prefix = ""
+    if args.role:
+        with get_connection() as conn:
+            row = conn.execute("SELECT charter, heuristics FROM roles WHERE name = ?", (args.role,)).fetchone()
+            if row:
+                context_prefix = f"Role: {args.role}\nCharter: {row['charter']}\nHeuristics: {row['heuristics']}\n\n"
+
+    full_prompt = context_prefix + prompt_text
+    cmd = [claw_path, "--model", args.model, "prompt", full_prompt] if args.model else [claw_path, "prompt", full_prompt]
+
+    print(fmt_header(f"Executing via Claw ({claw_path})...\n"))
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        output_lines = []
+        for line in process.stdout:
+            print(line, end="")
+            output_lines.append(line)
+        process.wait()
+        full_output = "".join(output_lines)
+
+        if args.session_id:
+            with get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO session_transcripts (session_id, role, content) VALUES (?, ?, ?)",
+                    (args.session_id, args.role or "Claw", full_output),
+                )
+            print(f"\n✓ Output logged to Engram session '{args.session_id}'.")
+    except Exception as e:
+        print(f"\nError executing claw: {e}")
+        sys.exit(1)

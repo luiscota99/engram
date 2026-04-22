@@ -642,15 +642,23 @@ def get_project_affinities(results, project_id, db_path=None):
     if not results or not project_id:
         return {}
 
+    # Build a single query using a VALUES clause to avoid N+1 queries
+    params = []
+    value_rows = []
+    for r in results:
+        value_rows.append("(?, ?, ?)")
+        params.extend([r["item_type"], int(r["item_id"]), project_id])
+
     affinities = {}
     with get_connection(db_path) as conn:
-        for r in results:
-            row = conn.execute(
-                "SELECT affinity FROM item_projects WHERE item_type = ? AND item_id = ? AND project_id = ?",
-                (r["item_type"], int(r["item_id"]), project_id),
-            ).fetchone()
-            if row:
-                affinities[(r["item_type"], int(r["item_id"]))] = row["affinity"]
+        rows = conn.execute(
+            f"""SELECT item_type, item_id, affinity
+                FROM item_projects
+                WHERE (item_type, item_id, project_id) IN (VALUES {','.join(value_rows)})""",
+            params,
+        ).fetchall()
+        for row in rows:
+            affinities[(row["item_type"], int(row["item_id"]))] = row["affinity"]
     return affinities
 
 

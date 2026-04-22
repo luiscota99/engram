@@ -27,6 +27,16 @@ dev = [
 [project.scripts]
 engram = "src.cli:main"
 
+[project.entry-points."engram.commands"]
+# Sub-package registration (not a real entry point — documents the modular layout)
+memory = "src.cli.commands.memory"
+codebase = "src.cli.commands.codebase"
+sync = "src.cli.commands.sync"
+bootstrap = "src.cli.commands.bootstrap"
+maintenance = "src.cli.commands.maintenance"
+session = "src.cli.commands.session"
+tools = "src.cli.commands.tools"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src"]

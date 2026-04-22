@@ -136,11 +136,50 @@ def record_role_contribution(session_id: str, role: str, db_path=None) -> dict:
     return get_session_state(session_id, db_path=db_path)
 
 
+def _load_workflow_phases(session_id: str, db_path=None) -> tuple[list[str], dict[str, list[str]]]:
+    """Return (phases, phase_requirements) for the workflow attached to a session.
+
+    Looks up the session's workflow_used field and loads phases/requirements from
+    the workflows table. Falls back to DEFAULT_PHASES / DEFAULT_PHASE_REQUIREMENTS
+    if the session has no named workflow or the workflow record is missing.
+    """
+    with get_connection(db_path) as conn:
+        sess = conn.execute(
+            "SELECT workflow_used FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        workflow_name = sess["workflow_used"] if sess else None
+
+        if workflow_name:
+            wf = conn.execute(
+                "SELECT phases, phase_requirements FROM workflows WHERE name = ?",
+                (workflow_name,),
+            ).fetchone()
+            if wf:
+                phases = DEFAULT_PHASES[:]
+                requirements = DEFAULT_PHASE_REQUIREMENTS.copy()
+                if wf["phases"]:
+                    try:
+                        phases = json.loads(wf["phases"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if wf["phase_requirements"]:
+                    try:
+                        requirements = json.loads(wf["phase_requirements"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                return phases, requirements
+
+    return DEFAULT_PHASES[:], DEFAULT_PHASE_REQUIREMENTS.copy()
+
+
 def advance_phase(session_id: str, db_path=None) -> dict:
     """Attempt to advance the session to the next phase.
 
     Raises WorkflowViolationError if required roles have not all contributed.
     Returns the updated state after advancing.
+
+    Honors custom workflows: loads phase order and role requirements from the
+    workflow named in the session's workflow_used field, falling back to defaults.
     """
     state = get_session_state(session_id, db_path=db_path)
     if not state["current_phase"]:
@@ -153,14 +192,14 @@ def advance_phase(session_id: str, db_path=None) -> dict:
             f"roles still required: {missing}"
         )
 
-    # Determine next phase
-    phases = DEFAULT_PHASES
+    phases, phase_requirements = _load_workflow_phases(session_id, db_path=db_path)
+
     current_idx = phases.index(state["current_phase"]) if state["current_phase"] in phases else -1
     if current_idx == -1 or current_idx >= len(phases) - 1:
         return {**state, "message": f"Already at final phase '{state['current_phase']}'."}
 
     next_phase = phases[current_idx + 1]
-    next_required = DEFAULT_PHASE_REQUIREMENTS.get(next_phase, [])
+    next_required = phase_requirements.get(next_phase, [])
 
     with get_connection(db_path) as conn:
         conn.execute(

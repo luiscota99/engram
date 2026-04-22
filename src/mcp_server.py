@@ -160,6 +160,47 @@ TOOLS = [
         },
     },
     {
+        "name": "memory_add",
+        "description": (
+            "Unified tool to log a new memory entry. Use this instead of memory_add_mistake / memory_add_pattern / memory_add_skill. "
+            "Set 'type' to 'mistake', 'pattern', or 'skill' and supply the matching fields. "
+            "CRITICAL: Draft the payload in markdown and get explicit user approval before calling. "
+            "Never store raw source code — summarize conceptually."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["mistake", "pattern", "skill"],
+                    "description": "Memory type to log",
+                },
+                # ── mistake fields ──────────────────────────────────────
+                "date": {"type": "string", "description": "[mistake] Date (YYYY-MM-DD)"},
+                "context": {"type": "string", "description": "[mistake] What you were doing"},
+                "mistake": {"type": "string", "description": "[mistake] What went wrong"},
+                "root_cause": {"type": "string", "description": "[mistake/pattern] Why it happened"},
+                "fix": {"type": "string", "description": "[mistake] How it was resolved"},
+                "prevention": {"type": "string", "description": "[mistake] How to avoid next time"},
+                "conversation_id": {"type": "string", "description": "[mistake] Source conversation ID"},
+                # ── pattern fields ──────────────────────────────────────
+                "name": {"type": "string", "description": "[pattern/skill] Name"},
+                "symptoms": {"type": "string", "description": "[pattern] What the problem looks like"},
+                "standard_fix": {"type": "string", "description": "[pattern] What usually resolves it"},
+                # ── skill fields ────────────────────────────────────────
+                "domain": {"type": "string", "description": "[skill] Domain area (e.g., 'devops')"},
+                "trigger": {"type": "string", "description": "[skill] When to use this skill"},
+                "workflow": {"type": "string", "description": "[skill] Step-by-step workflow (markdown)"},
+                "pitfalls": {"type": "string", "description": "[skill] Known issues and gotchas"},
+                "key_files": {"type": "string", "description": "[skill] Relevant file paths"},
+                "dependencies": {"type": "string", "description": "[skill] What's needed to run this"},
+                # ── shared ──────────────────────────────────────────────
+                "tags": {"type": "string", "description": "Comma-separated tags"},
+            },
+            "required": ["type"],
+        },
+    },
+    {
         "name": "memory_add_mistake",
         "description": "Log a mistake with root cause analysis. CRITICAL: Before invoking this tool, you MUST draft the memory payload in a markdown block and ask the user for explicit approval. Never write to the database autonomously. SECURITY: Never store raw source code or untrusted input; summarize conceptually.",
         "inputSchema": {
@@ -225,7 +266,7 @@ TOOLS = [
                 },
                 "tags": {"type": "string"},
             },
-            "required": ["name", "domain", "trigger_desc", "workflow"],
+            "required": ["name", "domain", "trigger", "workflow"],
         },
     },
     {
@@ -632,6 +673,37 @@ TOOLS = [
             }
         }
     },
+    {
+        "name": "memory_suggest_capture",
+        "description": (
+            "Analyze a completed task and auto-generate draft memory entries (mistakes, patterns, skills) "
+            "for user review. Call this at the end of any non-trivial task to surface what's worth remembering. "
+            "Always present the output to the user for approval — never auto-save without explicit consent."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_description": {
+                    "type": "string",
+                    "description": "What the task was about (1-3 sentences)",
+                },
+                "outcome": {
+                    "type": "string",
+                    "description": "What was accomplished / how it was resolved",
+                },
+                "errors_encountered": {
+                    "type": "string",
+                    "description": "Any errors, wrong turns, or dead ends hit along the way (optional)",
+                },
+                "files_changed": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of file paths that were modified (optional)",
+                },
+            },
+            "required": ["task_description", "outcome"],
+        },
+    },
 ]
 
 
@@ -658,7 +730,7 @@ def format_and_truncate_results(results, semantic_status=None):
             f"[Note: semantic search {semantic_status} — results are lexical-only. "
             f"Run `engram doctor` to check Ollama/embedding status.]\n\n"
         )
-    total_length = sum(len(l) for l in lines)
+    total_length = sum(len(line) for line in lines)
     truncated = False
 
     for r in results:
@@ -743,6 +815,31 @@ def handle_memory_recent(args):
     if not results:
         return "No entries yet."
     return format_and_truncate_results(results)
+
+
+def handle_memory_add(args):
+    """Unified dispatcher: routes to the correct add handler based on args['type']."""
+    entry_type = args.get("type", "").lower()
+    if entry_type == "mistake":
+        required = {"date", "context", "mistake", "fix"}
+        missing = required - set(args)
+        if missing:
+            return f"Error: missing required fields for mistake: {', '.join(sorted(missing))}"
+        return handle_memory_add_mistake(args)
+    elif entry_type == "pattern":
+        required = {"name", "symptoms", "root_cause", "standard_fix"}
+        missing = required - set(args)
+        if missing:
+            return f"Error: missing required fields for pattern: {', '.join(sorted(missing))}"
+        return handle_memory_add_pattern(args)
+    elif entry_type == "skill":
+        required = {"name", "domain", "trigger", "workflow"}
+        missing = required - set(args)
+        if missing:
+            return f"Error: missing required fields for skill: {', '.join(sorted(missing))}"
+        return handle_memory_add_skill(args)
+    else:
+        return f"Error: unknown type '{entry_type}'. Must be 'mistake', 'pattern', or 'skill'."
 
 
 def handle_memory_add_mistake(args):
@@ -989,53 +1086,109 @@ def handle_memory_index_file(args):
     exports = args.get("exports")
     deps = args.get("dependencies")
 
-    # Use CLI logic via subprocess to ensure consistency and handle hashing
-    import subprocess
-    cmd = [
-        "python3", "-m", "src.cli", "index-project",
-        "--path", project_path,
-        "--file", file_path,
-        "--summary", summary
-    ]
-    if exports:
-        cmd += ["--exports", exports]
-    if deps:
-        cmd += ["--deps", deps]
+    import hashlib
+    import os as _os
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return f"Error indexing file: {e.stderr}"
+    project = get_or_create_project(project_path)
+    project_id = project["id"]
+
+    abs_path = _os.path.join(project_path, file_path) if not _os.path.isabs(file_path) else file_path
+    if not _os.path.exists(abs_path):
+        return f"Error: file not found: {abs_path}"
+
+    sha256 = hashlib.sha256()
+    with open(abs_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            sha256.update(chunk)
+    file_hash = sha256.hexdigest()
+    file_mtime = _os.path.getmtime(abs_path)
+    rel_path = _os.path.relpath(abs_path, project_path)
+
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO codebase_knowledge
+               (project_id, file_path, file_hash, file_mtime, summary, exports, dependencies)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(project_id, file_path) DO UPDATE SET
+               file_hash = excluded.file_hash,
+               file_mtime = excluded.file_mtime,
+               summary = excluded.summary,
+               exports = excluded.exports,
+               dependencies = excluded.dependencies,
+               last_indexed_at = datetime('now')""",
+            (project_id, rel_path, file_hash, file_mtime, summary, exports, deps),
+        )
+    return f"Indexed {rel_path} for project '{project['name']}'."
 
 
 def handle_memory_query_codebase(args):
     project_path = args["project_path"]
     query = args.get("query", "")
 
-    import subprocess
-    cmd = ["python3", "-m", "src.cli", "query-codebase", "--path", project_path]
-    if query:
-        cmd.append(query)
+    project = get_or_create_project(project_path)
+    project_id = project["id"]
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return f"Error querying codebase: {e.stderr}"
+    with get_connection() as conn:
+        if query:
+            rows = conn.execute(
+                """SELECT file_path, summary, exports, dependencies
+                   FROM codebase_knowledge
+                   WHERE project_id = ? AND (file_path LIKE ? OR summary LIKE ?)
+                   ORDER BY file_path""",
+                (project_id, f"%{query}%", f"%{query}%"),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT file_path, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? ORDER BY file_path",
+                (project_id,),
+            ).fetchall()
+
+    if not rows:
+        return f"No codebase knowledge found for project '{project['name']}'" + (f" matching '{query}'" if query else "") + "."
+
+    lines = [f"Codebase Knowledge for {project['name']} ({len(rows)} files):"]
+    for r in rows:
+        lines.append(f"\n  {r['file_path']}")
+        lines.append(f"    Summary: {r['summary']}")
+        if r["exports"]:
+            lines.append(f"    Exports: {r['exports']}")
+        if r["dependencies"]:
+            lines.append(f"    Deps: {r['dependencies']}")
+    return "\n".join(lines)
 
 
 def handle_memory_get_stale_files(args):
     project_path = args["project_path"]
 
-    import subprocess
-    cmd = ["python3", "-m", "src.cli", "index-project", "--path", project_path, "--check"]
+    import hashlib
+    import os as _os
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return f"Error checking for stale files: {e.stderr}"
+    project = get_or_create_project(project_path)
+    project_id = project["id"]
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT file_path, file_hash FROM codebase_knowledge WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+
+    stale = []
+    for r in rows:
+        abs_path = _os.path.join(project_path, r["file_path"])
+        if not _os.path.exists(abs_path):
+            stale.append({"file_path": r["file_path"], "reason": "deleted"})
+            continue
+        sha256 = hashlib.sha256()
+        with open(abs_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                sha256.update(chunk)
+        current_hash = sha256.hexdigest()
+        if current_hash != r["file_hash"]:
+            stale.append({"file_path": r["file_path"], "reason": "modified", "old_hash": r["file_hash"], "new_hash": current_hash})
+
+    if not stale:
+        return "All indexed files are up to date."
+    return json.dumps(stale, indent=2)
 
 
 def handle_memory_list(args):
@@ -1381,8 +1534,8 @@ def handle_memory_export_skill(args):
     from src.export import (
         export_skills,
         render_pattern_as_skill_md,
-        write_skill_file,
         slugify,
+        write_skill_file,
     )
 
     skill_id = args.get("skill_id")
@@ -1428,7 +1581,7 @@ def handle_memory_export_skill(args):
         with get_connection() as conn:
             tags = get_tags_for_item(conn, "pattern", pattern["id"])
 
-        from src.export import render_pattern_as_skill_md, write_skill_file, slugify
+        from src.export import render_pattern_as_skill_md, slugify, write_skill_file
         content = render_pattern_as_skill_md(pattern, tags)
         slug = slugify(pattern["name"])
         path = write_skill_file(output_dir, slug, content)
@@ -1493,7 +1646,28 @@ def handle_memory_sync_skills(args):
     return "\n".join(lines)
 
 
+def handle_memory_suggest_capture(args):
+    from src.capture import format_capture_suggestion, suggest_capture
+
+    task_description = args.get("task_description", "")
+    outcome = args.get("outcome", "")
+    errors_encountered = args.get("errors_encountered", "")
+    files_changed = args.get("files_changed") or []
+
+    if not task_description or not outcome:
+        return "Error: task_description and outcome are required."
+
+    suggestion = suggest_capture(
+        task_description=task_description,
+        outcome=outcome,
+        errors_encountered=errors_encountered,
+        files_changed=files_changed,
+    )
+    return format_capture_suggestion(suggestion)
+
+
 TOOL_HANDLERS = {
+    "memory_add": handle_memory_add,
     "memory_record_usage": handle_memory_record_usage,
     "memory_read_item": handle_memory_read_item,
     "memory_search": handle_memory_search,
@@ -1525,6 +1699,7 @@ TOOL_HANDLERS = {
     "memory_gc": handle_memory_gc,
     "memory_export_skill": handle_memory_export_skill,
     "memory_sync_skills": handle_memory_sync_skills,
+    "memory_suggest_capture": handle_memory_suggest_capture,
 }
 
 

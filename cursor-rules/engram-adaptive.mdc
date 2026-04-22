@@ -1,121 +1,39 @@
 ---
-description: Adaptive Engram memory — starts in LIGHT mode (one search, no retrospective) and automatically escalates to FULL mode when complexity signals are detected. Use this instead of engram.mdc for the recommended balanced experience.
+description: Adaptive Engram memory — lightweight by default, escalates automatically on complexity signals.
 globs:
   - "**/*"
 alwaysApply: true
 ---
 
-# Engram — Adaptive Memory Mode
+# Engram — Adaptive Memory
 
-This workspace is connected to the **Engram MCP server**. Memory engagement is **adaptive**: lightweight by default, escalating automatically when the task warrants it.
+Connected to the **Engram MCP server**. Default: **LIGHT** mode (one search, no ceremony). Auto-escalates to **FULL** mode when complexity is detected.
 
-## Engagement Levels
+## LIGHT Mode (default)
 
-| Level | Engram Activity | When Active |
-|-------|----------------|-------------|
-| **OFF** | No MCP calls | Trivial questions, user says `@engram off` |
-| **LIGHT** | One `memory_search` at start only | Default for most sessions |
-| **FULL** | Session init + search at decision points + retrospective | Complex tasks (see escalation triggers) |
+At session start: extract 2-4 keywords → run ONE `memory_search` → if relevant result found, mention it briefly. Then proceed. If nothing found, continue silently — don't mention Engram again.
 
----
+## Escalate to FULL Mode when any of these are true
 
-## Default Behavior: LIGHT Mode
+- 3+ failed attempts / user says "still broken" / "that didn't work"
+- Keywords: `debug`, `investigate`, `refactor`, `architecture`, `migrate`, `performance`, `bottleneck`, `security audit`, `architecture review`, `this keeps happening`, `not sure why`
+- Changes span 5+ files, or user says "project-wide" / "across the codebase"
+- User references a previous session or says "continue from where we left off"
+- User explicitly says: `check engram`, `use engram`, `@engram full`, `use committee`
 
-At the start of every session:
-1. Extract 2-4 keywords from the user's first message
-2. Run ONE `memory_search` with those keywords
-3. If a relevant skill or pattern is returned, mention it briefly before proceeding
-4. **Do not** run `memory_recent`, `memory_init_session`, or any other Engram calls unless escalation is triggered
+On escalation: announce once *"Activating full Engram memory."* then run `memory_search`. For multi-session work, also run `memory_init_session`.
 
-If no relevant result is found, proceed with the task silently — do not mention Engram again.
+## FULL Mode behavior
 
----
+- Run `memory_search` before each major decision point or new error
+- At session end: run `memory_suggest_capture` with the task summary and outcome — it will draft proposed entries automatically. Present the draft to the user for **explicit approval**, then call `memory_add` to save approved entries.
 
-## Escalation Triggers — Switch to FULL Mode
+## User overrides
 
-Automatically escalate if **any** of the following are true:
-
-### Signal 1: Error / Retry Pattern
-3 or more failed attempts, error messages, or the user saying "that's still broken", "try again", "that didn't work"
-
-### Signal 2: Complexity Keywords
-User message or task description contains any of:
-- `debug`, `investigate`, `why is`, `how does this work`, `trace`
-- `refactor`, `architecture`, `redesign`, `migrate`, `migration`
-- `performance`, `slow`, `bottleneck`, `optimize`
-- `security vulnerability`, `vulnerability`, `security audit`, `audit the codebase`, `architecture review`, `full review`
-- `this keeps happening`, `intermittent`, `not sure why`
-
-Note: bare `review`, `audit`, or `security` alone (e.g. "quick code review", "security headers") do **not** trigger escalation — context matters.
-
-### Signal 3: Scope Signal
-- Changes span 5 or more files
-- User mentions "across the codebase", "project-wide", "all modules", "everywhere"
-
-### Signal 4: Multi-session Work
-- Task is too large to complete in one session
-- User says "continue from where we left off" or references a previous session
-
-### Signal 5: Explicit Request
-- User says: `check engram`, `search memory`, `what did we learn`, `use engram`, `@engram full`, `use committee`
-
----
-
-## When Escalating to FULL Mode
-
-1. Announce once: *"This task looks complex — activating full Engram memory."*
-2. Run `memory_search` with the current task context
-3. If this looks like multi-session work, run `memory_init_session` with a descriptive session ID (`YYYY-MM-DD__TaskName`)
-4. From here, follow FULL mode behavior below
-
----
-
-## FULL Mode Behavior
-
-**During the session:**
-- Run `memory_search` before each major decision point or when hitting a new error
-- If a Committee workflow is appropriate (architecture, codebase review), use `memory_init_session` + `memory_add_transcript` per role
-
-**At session end** (only in FULL mode):
-1. Run `memory_session_review` — it returns a structured reflection checklist
-2. Draft proposed entries (mistakes, patterns, skills) in a markdown block
-3. Present them to the user for **explicit approval** before logging
-4. After approval, call the relevant `memory_add_*` tools
-
-**Context reset** (if session is getting long):
-- Save state via `memory_session_review` and `memory_add_decision`
-- Issue the context reset alert so the user can continue in a fresh window
-
----
-
-## User Override Commands
-
-| User says | Action |
-|-----------|--------|
-| `@engram off` / `no engram` / `quick question` | Disable all Engram calls for the rest of this session |
-| `@engram full` / `use engram` / `use committee` | Immediately escalate to FULL mode |
-| `@engram light` / `simple fix` | Return to LIGHT mode (cancel FULL escalation) |
-| `@engram status` | Report current mode (OFF / LIGHT / FULL) |
-| `check engram` / `check memory` / `search memory` / `what did we learn` | Run `memory_search` with current context and report findings |
-| `continue from last session` | FULL mode — start with `memory_search` for the previous session context |
-
----
-
-## Available MCP Tools (Reference)
-
-| Tool | Use in LIGHT | Use in FULL |
-|------|-------------|-------------|
-| `memory_search` | Once at start | At each decision point |
-| `memory_recent` | No | Optional at start |
-| `memory_read_item` | If search returns relevant hit | Yes |
-| `memory_record_usage` | If a skill was applied | Yes |
-| `memory_init_session` | No | For multi-session tasks |
-| `memory_add_transcript` | No | For committee subagent outputs |
-| `memory_add_decision` | No | For formal decisions |
-| `memory_session_review` | No | At session end (mandatory) |
-| `memory_add_mistake` | No | After user approval |
-| `memory_add_pattern` | No | After user approval |
-| `memory_add_skill` | No | After user approval |
-| `memory_add_conversation` | No | After user approval |
-| `memory_export_skill` | No | When a skill should become permanent Cursor skill |
-| `memory_sync_skills` | No | To sync Engram ↔ Cursor skills directory |
+| Say | Effect |
+|-----|--------|
+| `@engram off` / `no engram` | Disable for this session |
+| `@engram full` / `use engram` | Force FULL mode now |
+| `@engram light` / `simple fix` | Return to LIGHT mode |
+| `@engram status` | Report current mode |
+| `check engram` / `check memory` | Run `memory_search` and report |

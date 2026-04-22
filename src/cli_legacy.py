@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: This file is kept for reference only.
+The CLI has been refactored into the src/cli/ package.
+The active entry point is src/cli/main.py (via src/cli/__init__.py).
+
+Original module docstring preserved below.
+---
 Engram — persistent memory for AI-assisted development.
 
 Usage:
@@ -40,6 +46,7 @@ if __name__ == "__main__" and __package__ is None:
 
 from .backup import run_backup
 from .benchmark import run_benchmark
+from .browse import run_browser
 from .compression import compress_caveman
 from .database import (
     delete_item,
@@ -915,6 +922,29 @@ def cmd_consolidate(args):
     print(f"✓ Consolidated {len(ids)} skills into new Master Skill #{sid}.")
 
 
+def cmd_browse(args):
+    """Launch the interactive TUI memory browser."""
+    run_browser()
+
+
+def cmd_suggest_capture(args):
+    """Analyze a task and auto-draft memory entries for review."""
+    from .capture import format_capture_suggestion, suggest_capture
+
+    task = args.task
+    outcome = args.outcome
+    errors = args.errors or ""
+    files = [f.strip() for f in args.files.split(",")] if args.files else []
+
+    suggestion = suggest_capture(
+        task_description=task,
+        outcome=outcome,
+        errors_encountered=errors,
+        files_changed=files,
+    )
+    print(format_capture_suggestion(suggestion))
+
+
 def cmd_init(args):
     init_db()
     print(f"✓ Database initialized at {get_db_path()}")
@@ -1090,15 +1120,12 @@ def cmd_bootstrap(args):
         except Exception:
             setup_mcp = True
 
-    mcp_status = ""
     if setup_mcp:
         ok, msg = _setup_mcp_config(engram_root)
-        mcp_status = f"{'✓' if ok else '!'} MCP: {msg.lstrip('✓ !').strip()}"
         print(f"  {msg}")
     else:
-        mcp_status = "- MCP: skipped (run `engram bootstrap` again to configure)"
         print(fmt_dim("  Skipped MCP setup. Add the Engram server to ~/.cursor/mcp.json manually."))
-        print(fmt_dim("  See: https://github.com/anthropics/engram#cursor-mcp-setup"))
+        print(fmt_dim("  See: https://github.com/luismiguelcota/engram#agent-integration"))
 
     # 5. Ollama / semantic search status
     import urllib.request as _urllib_req
@@ -1141,7 +1168,7 @@ def cmd_bootstrap(args):
     print(f"  1. Run `{fmt_bold('engram index-project')}` to map this codebase")
     print(f"  2. Run `{fmt_bold('engram sync-skills')}` to sync any existing Cursor skills into memory")
     if mode != "adaptive":
-        print(fmt_dim(f"\n  Tip: Re-run `engram bootstrap --mode adaptive` to switch to adaptive mode."))
+        print(fmt_dim("\n  Tip: Re-run `engram bootstrap --mode adaptive` to switch to adaptive mode."))
 
 
 def cmd_seed(args):
@@ -1837,6 +1864,21 @@ def build_parser():
     p_link.add_argument("--date")
     p_link.add_argument("--notes")
     p_link.set_defaults(func=cmd_link_pattern)
+
+    # browse
+    p_browse = sub.add_parser("browse", help="Interactive TUI browser for memory entries")
+    p_browse.set_defaults(func=cmd_browse)
+
+    # suggest-capture
+    p_sc2 = sub.add_parser(
+        "suggest-capture",
+        help="Analyze a completed task and draft memory entries for review",
+    )
+    p_sc2.add_argument("--task", required=True, help="What the task was about")
+    p_sc2.add_argument("--outcome", required=True, help="What was accomplished")
+    p_sc2.add_argument("--errors", help="Errors or wrong turns encountered (optional)")
+    p_sc2.add_argument("--files", help="Comma-separated list of files changed (optional)")
+    p_sc2.set_defaults(func=cmd_suggest_capture)
 
     # stats
     p_stats = sub.add_parser("stats", help="Show database statistics")
