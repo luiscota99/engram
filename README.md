@@ -227,6 +227,12 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 | `engram retrieval-benchmark` | R@k, MRR, NDCG on a curated 20-query set (see [benchmarks/BENCHMARKS.md](benchmarks/BENCHMARKS.md)) |
 | `engram benchmark` | External LLM API latency/token probe (optional API keys) |
 
+- **Regression:** `engram retrieval-benchmark` on the seeded/curated suite (CI uses a short run).
+- **Stress (local):** `python benchmarks/inject_noise.py` — [benchmarks/BENCHMARKS.md](benchmarks/BENCHMARKS.md) for flags and how to read scores.
+- **Labeled real-DB eval (optional):** [evals/README.md](evals/README.md) (frozen DB + `real_queries.json`).
+
+Stress metrics depend on Ollama and the embedding model; compare runs on the same machine, not fixed headline numbers.
+
 ## Embedding Models
 
 Engram uses [Ollama](https://ollama.com) for local embedding generation. The default model is `nomic-embed-text`. You can switch models via the `ENGRAM_EMBED_MODEL` environment variable.

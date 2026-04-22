@@ -1,0 +1,24 @@
+{
+  "description": "Template for labeled queries against YOUR snapshot DB (not committed if private).",
+  "version": "1.0",
+  "queries": [
+    {
+      "id": "real-001",
+      "query": "how we fixed the auth redirect loop last month",
+      "expected_type": "mistake",
+      "expected_item_id": 42,
+      "expected_title_contains": "",
+      "category": "user_labeled",
+      "notes": "Replace 42 with the real memories.id for that mistake after SELECT in sqlite."
+    },
+    {
+      "id": "real-002",
+      "query": "deployment checklist we always use",
+      "expected_type": "skill",
+      "expected_item_id": 7,
+      "expected_title_contains": "",
+      "category": "user_labeled",
+      "notes": "Prefer expected_type + expected_item_id; title substring optional."
+    }
+  ]
+}

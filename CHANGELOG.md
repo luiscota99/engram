@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `SearchResults` list subclass in `src/search.py` to safely carry a `semantic_status` attribute on search result lists
 - `phases` and `phase_requirements` columns added to the `workflows` table (schema + migration v8)
 - Comprehensive test suite: `tests/test_capture.py` (23 tests), `tests/test_cli_commands.py` (12 tests), `tests/test_workflow.py` (16 tests)
+- **Retrieval benchmark hardening (v1.1.0):** `benchmarks/grading.py` with id-based ground truth (`expected_type` + `expected_item_id`) and title fallback; `benchmarks/test_queries.json` aligned to the seed; optional `--failure-detail` and `failed_query_ids` + `top_hits_detail` in JSON on `engram_retrieval_bench.py`
+- `evals/` — optional labeled real-DB evaluation (`evals/README.md`, `real_queries.json.example`); not run in CI by default
+- `benchmarks/inject_noise.py` — reproducible distractor stress test; interpretation notes in `benchmarks/BENCHMARKS.md`
 
 ### Fixed
 - MCP schema mismatch: `memory_add_skill` tool definition used `trigger_desc` instead of `trigger` — corrected to match the handler

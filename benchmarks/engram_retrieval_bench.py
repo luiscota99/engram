@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import sys
 import time
@@ -42,44 +41,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from benchmarks.grading import (  # noqa: E402
+    mrr_from_relevances,
+    ndcg_at_k_from_relevances,
+    recall_at_k_from_relevances,
+    relevances_from_results,
+    row_matches_expected,
+    use_id_grading,
+)
 
-# ── Metrics ──────────────────────────────────────────────────────────────────
-
-def _dcg(relevances: list[float], k: int) -> float:
-    score = 0.0
-    for i, rel in enumerate(relevances[:k]):
-        score += rel / math.log2(i + 2)
-    return score
-
-
-def ndcg_at_k(retrieved_titles: list[str], expected_contains: str, k: int) -> float:
-    """Compute NDCG@k where relevance=1 if expected_contains is in the title."""
-    relevances = [
-        1.0 if expected_contains.lower() in t.lower() else 0.0
-        for t in retrieved_titles[:k]
-    ]
-    ideal = sorted(relevances, reverse=True)
-    idcg = _dcg(ideal, k)
-    if idcg == 0:
-        return 0.0
-    return _dcg(relevances, k) / idcg
-
-
-def recall_at_k(retrieved_titles: list[str], expected_contains: str, k: int) -> float:
-    """Return 1.0 if expected_contains found in any top-k title, else 0.0."""
-    for title in retrieved_titles[:k]:
-        if expected_contains.lower() in title.lower():
-            return 1.0
-    return 0.0
-
-
-def mean_reciprocal_rank(retrieved_titles: list[str], expected_contains: str) -> float:
-    """MRR: 1/rank of first correct hit, or 0 if none in the (full) list."""
-    needle = expected_contains.lower()
-    for i, title in enumerate(retrieved_titles, start=1):
-        if needle in title.lower():
-            return 1.0 / i
-    return 0.0
+# ── Metrics (relevance vectors; see grading.py) ─────────────────────────────
 
 
 # ── Search Adapters ──────────────────────────────────────────────────────────
@@ -124,32 +95,46 @@ SEARCH_MODES = {
 
 # ── Benchmark Runner ─────────────────────────────────────────────────────────
 
+def _trim_hit(r: dict) -> dict:
+    return {
+        "item_type": r.get("item_type"),
+        "item_id": r.get("item_id"),
+        "title": (r.get("title") or "")[:200],
+        "utility_score": round(float(r.get("utility_score", 0.0)), 6),
+    }
+
+
 def run_benchmark(
     queries: list[dict],
     mode: str = "hybrid",
     k_values: list[int] | None = None,
     db_path: str | None = None,
     verbose: bool = False,
+    include_hit_detail: bool = False,
 ) -> dict:
     """Run all queries and compute aggregate metrics.
 
     Returns a results dict with per-query details and aggregate R@k / NDCG@k.
+    When *include_hit_detail* is True, each per-query row may include
+    *top_hits_detail* (for JSON tuning dumps).
     """
     k_values = k_values or [1, 3, 5, 10]
     search_fn = SEARCH_MODES[mode]
+    kmax = max(k_values)
 
-    per_query = []
+    per_query: list[dict] = []
     category_results: dict[str, list] = {}
     total_latency_ms = 0.0
 
     for q in queries:
         query_text = q["query"]
-        expected_contains = q["expected_title_contains"]
+        expected_contains = q.get("expected_title_contains") or ""
         category = q.get("category", "unknown")
+        grade_mode = "id" if use_id_grading(q) else "title"
 
         t0 = time.perf_counter()
         try:
-            results = search_fn(query_text, limit=max(k_values), db_path=db_path)
+            results = search_fn(query_text, limit=kmax, db_path=db_path)
         except Exception as exc:
             results = []
             if verbose:
@@ -157,32 +142,39 @@ def run_benchmark(
         elapsed_ms = (time.perf_counter() - t0) * 1000
         total_latency_ms += elapsed_ms
 
+        rel = relevances_from_results(results, q)
+        recall_scores = {k: recall_at_k_from_relevances(rel, k) for k in k_values}
+        ndcg_scores = {k: ndcg_at_k_from_relevances(rel, k) for k in k_values}
+        mrr = mrr_from_relevances(rel)
+
         retrieved_titles = [r.get("title", "") for r in results]
 
-        recall_scores = {k: recall_at_k(retrieved_titles, expected_contains, k) for k in k_values}
-        ndcg_scores = {k: ndcg_at_k(retrieved_titles, expected_contains, k) for k in k_values}
-        mrr = mean_reciprocal_rank(retrieved_titles, expected_contains)
-
-        row = {
+        row: dict = {
             "id": q["id"],
             "query": query_text,
             "expected_contains": expected_contains,
+            "grading": grade_mode,
+            "expected_type": q.get("expected_type"),
+            "expected_item_id": q.get("expected_item_id"),
             "category": category,
-            "retrieved_titles": retrieved_titles[:max(k_values)],
+            "retrieved_titles": retrieved_titles[:kmax],
             "recall": recall_scores,
             "ndcg": ndcg_scores,
             "mrr": mrr,
             "latency_ms": elapsed_ms,
             "hit_at_1": recall_scores.get(1, 0.0) == 1.0,
         }
+        if include_hit_detail:
+            row["top_hits_detail"] = [_trim_hit(r) for r in results[:kmax]]
         per_query.append(row)
         category_results.setdefault(category, []).append(row)
 
         if verbose:
             status = "✓" if recall_scores.get(5, 0) == 1.0 else "✗"
             print(f"  {status} [{q['id']}] {query_text[:60]}")
-            for i, t in enumerate(retrieved_titles[:5], 1):
-                marker = "→" if expected_contains.lower() in t.lower() else " "
+            for i, r in enumerate(results[:5], 1):
+                t = r.get("title", "")
+                marker = "→" if row_matches_expected(r, q) else " "
                 print(f"      {marker} {i}. {t}")
 
     n = len(per_query)
@@ -217,11 +209,14 @@ def run_benchmark(
             },
         }
 
+    failed_query_ids = [r["id"] for r in per_query if r["recall"].get(5, 0) == 0.0]
+
     return {
         "mode": mode,
         "aggregate": aggregate,
         "by_category": by_category,
         "per_query": per_query,
+        "failed_query_ids": failed_query_ids,
     }
 
 
@@ -260,7 +255,7 @@ def print_report(results: dict) -> None:
     print(f"\n{'─' * 60}\n")
 
 
-def print_failures(results: dict, k: int = 5) -> None:
+def print_failures(results: dict, k: int = 5, detail: bool = False) -> None:
     """Print queries that failed at R@k."""
     failures = [r for r in results["per_query"] if r["recall"].get(k, 0) == 0.0]
     if not failures:
@@ -269,12 +264,24 @@ def print_failures(results: dict, k: int = 5) -> None:
     print(f"\n  Failures at R@{k} ({len(failures)} queries):")
     for r in failures:
         print(f"    [{r['id']}] {r['query']}")
-        print(f"           expected: contains '{r['expected_contains']}'")
+        if r.get("grading") == "id" and r.get("expected_item_id") is not None:
+            print(
+                f"           expected: type={r.get('expected_type')} id={r['expected_item_id']}",
+            )
+        else:
+            print(f"           expected: title contains '{r['expected_contains']}'")
         titles = r["retrieved_titles"][:k]
         if titles:
             print(f"           got: {titles[0][:60]}...")
         else:
             print("           got: (no results)")
+        if detail and r.get("top_hits_detail"):
+            print("           top hits (item_type, item_id, utility_score):")
+            for h in r["top_hits_detail"][:k]:
+                print(
+                    f"             {h['item_type']}:{h['item_id']}  "
+                    f"score={h['utility_score']}  {h['title'][:50]}...",
+                )
 
 
 # ── Seed helper ───────────────────────────────────────────────────────────────
@@ -359,6 +366,11 @@ def main() -> None:
                         help="Show top-5 results per query")
     parser.add_argument("--failures", action="store_true",
                         help="Print queries that failed R@5")
+    parser.add_argument(
+        "--failure-detail",
+        action="store_true",
+        help="With --failures/--output: include top-k item_type, item_id, utility_score per query",
+    )
     parser.add_argument("--output", help="Write JSON results to this file")
     parser.add_argument("--no-seed", action="store_true",
                         help="Skip auto-seeding (use existing DB)")
@@ -378,12 +390,16 @@ def main() -> None:
         if args.verbose:
             print(f"\n  Running {args.mode} search...\n")
         results = run_benchmark(
-            queries, mode=args.mode, k_values=args.k,
-            db_path=db_path, verbose=args.verbose,
+            queries,
+            mode=args.mode,
+            k_values=args.k,
+            db_path=db_path,
+            verbose=args.verbose,
+            include_hit_detail=args.failure_detail,
         )
         print_report(results)
         if args.failures:
-            print_failures(results)
+            print_failures(results, detail=args.failure_detail)
         if args.output:
             with open(args.output, "w") as f:
                 json.dump(results, f, indent=2)

@@ -18,10 +18,38 @@ Measures search quality of Engram's hybrid retrieval (FTS5 + `sqlite-vec` semant
 | `type_inference` | Query uses type-hint keywords (`how to`, `debugging`, `mistake`) | Type-inference boost |
 
 Each query specifies:
-- `expected_type`: the item_type the correct result should have (informational; grading uses titles)
-- `expected_title_contains`: substring that must appear in the **FTS `title` field** of the correct row (for mistakes, that is the first ~80 characters of the mistake text — not a separate display title)
+- **`expected_type` + `expected_item_id`** (preferred): stable ground truth for the row in the seed (id from the underlying `mistakes` / `patterns` / `skills` table). The runner matches `item_type` + `item_id` from search results.
+- **`expected_title_contains`** (fallback): substring in the **FTS `title` field** when ids are unknown. For mistakes, the title is the first ~80 characters of the mistake text.
 - `category`: difficulty category
 - `notes`: rationale
+
+### Interpreting two different numbers
+
+| What you run | What R@5 means |
+|--------------|----------------|
+| **Seeded DB + `test_queries.json` (default)** | **Regression** — algorithm should keep this high; used in CI/smoke. |
+| **Your snapshot + hand-labeled queries** | **Realistic** — see [`evals/README.md`](../evals/README.md) and `evals/real_queries.json.example`. |
+| **Curated JSON on an arbitrary `memory.db` without the same rows** | **Not comparable** — low R@5 is often **missing ground truth**, not only “noise.” |
+
+### Controlled noise (distractors)
+
+To simulate a larger index **reproducibly** (synthetic distractor rows) without using private data:
+
+```bash
+python benchmarks/inject_noise.py --distractors 40
+```
+
+This seeds a temp DB, injects generic competing memories, and runs the benchmark. Compare R@1 / MRR before and after `src/ranking.py` changes.
+
+**Fair hybrid stress (lexical + semantic):** `index_in_fts` tries to embed every indexed row into `vec_memory` when Ollama is available. If Ollama is down during injection, distractors can land in `memory_fts` with `embedding_status` **pending** or **failed** and **no** `vec_memory` row—semantic KNN will not see them, so hybrid results look more “lexical-heavy” than a full noise field. For a true dirty haystack on **both** channels, ensure Ollama is running when you run `inject_noise.py`, or run `engram reembed` (or `reembed_stale` via the API) on that `ENGRAM_DB_PATH` until pending items are **ready** and counts match. Lexical-only stress still applies when vectors are missing.
+
+### Failure introspection
+
+```bash
+python benchmarks/engram_retrieval_bench.py --failures --failure-detail
+```
+
+`--failure-detail` prints `item_type`, `item_id`, and `utility_score` for the top-k hits on failed queries. Use with `--output file.json` to store `failed_query_ids` and per-query metrics; `top_hits_detail` is included when `--failure-detail` is set.
 
 ### Metrics
 
@@ -111,3 +139,8 @@ Example (hybrid, 20 queries, seeded DB, **local** run — semantic leg may vary 
 - [ ] Add LongMemEval-style "should return no result" (abstention) queries
 - [ ] Optional: PR comments with R@5 / MRR delta vs `main`
 - [ ] Add recall for `conversation` and `prompt` item types
+
+## Shared modules
+
+- [`grading.py`](grading.py) — title vs `(type, id)` hit detection for metrics
+- [`inject_noise.py`](inject_noise.py) — synthetic distractor stress test

@@ -5,6 +5,11 @@ __pycache__/
 data/*.db
 data/*.db-journal
 data/*.db-wal
+# Local stress-test / temp DBs (do not commit; reproduce via inject_noise.py)
+benchmarks/*.db
+benchmarks/*.db-journal
+benchmarks/*.db-wal
+stress_*.db
 .DS_Store
 *.egg-info/
 dist/
