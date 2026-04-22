@@ -585,6 +585,52 @@ TOOLS = [
             }
         }
     },
+    {
+        "name": "memory_export_skill",
+        "description": "Export an Engram skill (or pattern) as a Cursor-compatible SKILL.md file on disk. Use when a proven workflow should become a permanent Cursor skill that persists across sessions. CRITICAL: Always ask the user for confirmation on the output path before invoking.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "skill_id": {
+                    "type": "integer",
+                    "description": "ID of the Engram skill to export"
+                },
+                "pattern_id": {
+                    "type": "integer",
+                    "description": "ID of an Engram pattern to export as a skill (use instead of skill_id)"
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "Directory to export into (default: ~/.cursor/skills/). Can also be a project path like .cursor/skills/"
+                },
+                "project_skill": {
+                    "type": "boolean",
+                    "description": "If true, export to .cursor/skills/ in the current working directory instead of the personal skills dir"
+                }
+            }
+        }
+    },
+    {
+        "name": "memory_sync_skills",
+        "description": "Show a diff between Engram skills and a Cursor skills directory, then optionally sync them. Use to keep Engram and Cursor skills in alignment.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "skills_dir": {
+                    "type": "string",
+                    "description": "Cursor skills directory to sync with (default: ~/.cursor/skills/)"
+                },
+                "auto_sync": {
+                    "type": "boolean",
+                    "description": "If true, automatically export Engram-only skills and import Cursor-only skills"
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "If true, only show the diff without performing any writes (default: true)"
+                }
+            }
+        }
+    },
 ]
 
 
@@ -1288,6 +1334,122 @@ def handle_memory_gc(args):
     return "\n".join(lines)
 
 
+def handle_memory_export_skill(args):
+    from src.export import (
+        export_skills,
+        render_pattern_as_skill_md,
+        write_skill_file,
+        slugify,
+    )
+
+    skill_id = args.get("skill_id")
+    pattern_id = args.get("pattern_id")
+    project_skill = args.get("project_skill", False)
+    output_path = args.get("output_path")
+
+    if output_path:
+        output_dir = os.path.expanduser(output_path)
+    elif project_skill:
+        output_dir = os.path.join(os.getcwd(), ".cursor", "skills")
+    else:
+        output_dir = os.path.expanduser("~/.cursor/skills")
+
+    if skill_id:
+        results = export_skills(output_dir=output_dir, ids=[skill_id], dry_run=False)
+        if not results:
+            return f"Skill ID {skill_id} not found."
+        r = results[0]
+        if r["action"] == "created":
+            return f"Skill '{r['name']}' exported to:\n  {r['path']}\n\nThe Cursor agent will discover this skill automatically on the next session."
+        elif r["action"] == "skipped":
+            return f"Skill '{r['name']}' already exists at:\n  {r['path']}\n\nNo changes made."
+        return f"Export result: {r['action']} — {r['path']}"
+
+    elif pattern_id:
+        with get_connection() as conn:
+            pattern = conn.execute(
+                """SELECT p.id, p.name, p.symptoms, p.root_cause, p.standard_fix,
+                          COUNT(po.id) as occurrences
+                   FROM patterns p
+                   LEFT JOIN pattern_occurrences po ON po.pattern_id = p.id
+                   WHERE p.id = ?
+                   GROUP BY p.id""",
+                (pattern_id,)
+            ).fetchone()
+
+        if not pattern:
+            return f"Pattern ID {pattern_id} not found."
+
+        pattern = dict(pattern)
+        from src.database import get_tags_for_item
+        with get_connection() as conn:
+            tags = get_tags_for_item(conn, "pattern", pattern["id"])
+
+        from src.export import render_pattern_as_skill_md, write_skill_file, slugify
+        content = render_pattern_as_skill_md(pattern, tags)
+        slug = slugify(pattern["name"])
+        path = write_skill_file(output_dir, slug, content)
+        return f"Pattern '{pattern['name']}' exported as skill to:\n  {path}"
+
+    return "Error: provide either skill_id or pattern_id."
+
+
+def handle_memory_sync_skills(args):
+    from src.export import compute_sync_diff, export_skills, import_cursor_skills_dir
+
+    skills_dir = os.path.expanduser(args.get("skills_dir") or "~/.cursor/skills")
+    dry_run = args.get("dry_run", True)
+    auto_sync = args.get("auto_sync", False)
+
+    diff = compute_sync_diff(skills_dir)
+    only_engram = diff["only_in_engram"]
+    only_cursor = diff["only_in_cursor"]
+    in_both = diff["in_both"]
+
+    lines = [
+        f"Engram ↔ Cursor Skill Sync — {skills_dir}\n",
+        f"  In both:        {len(in_both)}",
+        f"  Only in Engram: {len(only_engram)}  (can export)",
+        f"  Only in Cursor: {len(only_cursor)}  (can import)",
+        "",
+    ]
+
+    if only_engram:
+        lines.append("Skills in Engram not yet in Cursor (→ export):")
+        for slug, skill in sorted(only_engram.items()):
+            lines.append(f"  [SKILL ID:{skill['id']}] {skill['name']} [{skill['domain']}] usage:{skill.get('usage_count', 0)}")
+        lines.append("")
+
+    if only_cursor:
+        lines.append("Skills in Cursor not yet in Engram (→ import):")
+        for slug, path in sorted(only_cursor.items()):
+            lines.append(f"  {slug}  ({path})")
+        lines.append("")
+
+    if auto_sync and not dry_run:
+        # Export Engram-only skills
+        if only_engram:
+            engram_ids = [s["id"] for s in only_engram.values()]
+            export_results = export_skills(output_dir=skills_dir, ids=engram_ids, dry_run=False)
+            created = [r for r in export_results if r["action"] == "created"]
+            lines.append(f"Exported {len(created)} skill(s) to Cursor:")
+            for r in created:
+                lines.append(f"  ✓ {r['name']} → {r['path']}")
+            lines.append("")
+
+        # Import Cursor-only skills
+        if only_cursor:
+            import_results = import_cursor_skills_dir(skills_dir, dry_run=False)
+            imported = [r for r in import_results if r.get("action") == "imported"]
+            lines.append(f"Imported {len(imported)} skill(s) into Engram:")
+            for r in imported:
+                lines.append(f"  ✓ {r['name']} (Skill #{r['id']})")
+    elif dry_run:
+        lines.append("Dry-run mode: no changes made. Set dry_run=false and auto_sync=true to sync.")
+
+    return "\n".join(lines)
+
+
 TOOL_HANDLERS = {
     "memory_record_usage": handle_memory_record_usage,
     "memory_read_item": handle_memory_read_item,
@@ -1318,6 +1480,8 @@ TOOL_HANDLERS = {
     "memory_health": handle_memory_health,
     "memory_suggest_consolidations": handle_memory_suggest_consolidations,
     "memory_gc": handle_memory_gc,
+    "memory_export_skill": handle_memory_export_skill,
+    "memory_sync_skills": handle_memory_sync_skills,
 }
 
 

@@ -1250,6 +1250,153 @@ def cmd_import_skills(args):
     print(f"✓ Imported {imported} skills, skipped {skipped} (already exist or no frontmatter).")
 
 
+def cmd_export_skills(args):
+    """Export Engram skills (and optionally patterns) as Cursor-compatible SKILL.md files."""
+    from .export import export_skills
+
+    output_dir = args.output
+    if args.project_skills:
+        output_dir = os.path.join(os.getcwd(), ".cursor", "skills")
+    output_dir = os.path.expanduser(output_dir)
+
+    ids = [int(i.strip()) for i in args.ids.split(",") if i.strip()] if args.ids else None
+    min_usage = args.min_usage or 0
+
+    results = export_skills(
+        output_dir=output_dir,
+        ids=ids,
+        domain=args.domain,
+        min_usage=min_usage,
+        from_patterns=args.from_patterns,
+        dry_run=args.dry_run,
+    )
+
+    if not results:
+        print(fmt_dim("No skills matched the given filters."))
+        return
+
+    created = [r for r in results if r.get("action") == "created"]
+    skipped = [r for r in results if r.get("action") == "skipped"]
+    dry_run = [r for r in results if r.get("action") == "dry-run"]
+
+    if args.dry_run:
+        print(fmt_header(f"Dry-run: {len(dry_run)} skill(s) would be exported to {output_dir}\n"))
+        for r in dry_run:
+            usage_info = f"  (usage: {r.get('usage_count', r.get('occurrences', 0))})"
+            source_badge = fmt_dim("[pattern]") + " " if r.get("source") == "pattern" else ""
+            print(f"  {source_badge}{fmt_bold(r['name'])}{fmt_dim(usage_info)}")
+            print(fmt_dim(f"    → {r['path']}"))
+    else:
+        print(fmt_header(f"Export complete → {output_dir}\n"))
+        for r in created:
+            usage_info = f"  (usage: {r.get('usage_count', r.get('occurrences', 0))})"
+            source_badge = fmt_dim("[pattern] ") if r.get("source") == "pattern" else ""
+            print(f"  ✓ {source_badge}{fmt_bold(r['name'])}{fmt_dim(usage_info)}")
+            print(fmt_dim(f"    {r['path']}"))
+        if skipped:
+            print(fmt_dim(f"\n  Skipped {len(skipped)} already-existing skill(s)."))
+        if not created:
+            print(fmt_dim("  Nothing new to export (all skills already exist on disk)."))
+
+
+def cmd_import_cursor_skills(args):
+    """Import skills from a Cursor skills directory into Engram."""
+    from .export import import_cursor_skills_dir
+
+    skills_dir = os.path.expanduser(args.path)
+    results = import_cursor_skills_dir(skills_dir, dry_run=args.dry_run)
+
+    if not results:
+        print(fmt_dim("No SKILL.md files found."))
+        return
+
+    if args.dry_run:
+        importable = [r for r in results if r.get("action") == "dry-run"]
+        already = [r for r in results if r.get("action") == "skipped"]
+        errors = [r for r in results if r.get("action") == "error"]
+        print(fmt_header(f"Dry-run: {len(importable)} skill(s) would be imported from {skills_dir}\n"))
+        for r in importable:
+            print(f"  + {fmt_bold(r.get('name', r.get('file', '?')))}")
+        if already:
+            print(fmt_dim(f"\n  {len(already)} already exist in Engram (would be skipped)."))
+        if errors:
+            print(fmt_dim(f"\n  {len(errors)} file(s) could not be parsed."))
+    else:
+        imported = [r for r in results if r.get("action") == "imported"]
+        skipped_r = [r for r in results if r.get("action") == "skipped"]
+        errors = [r for r in results if r.get("action") == "error"]
+
+        print(fmt_header(f"Import complete from {skills_dir}\n"))
+        for r in imported:
+            print(f"  ✓ {fmt_bold(r['name'])} (Skill #{r['id']})")
+        if skipped_r:
+            print(fmt_dim(f"\n  Skipped {len(skipped_r)} skill(s) already in Engram."))
+        if errors:
+            print(fmt_dim(f"\n  {len(errors)} file(s) failed to parse:"))
+            for e in errors:
+                print(fmt_dim(f"    {e.get('file', '?')} — {e.get('reason', 'unknown')}"))
+        if not imported:
+            print(fmt_dim("  Nothing new imported."))
+
+
+def cmd_sync_skills(args):
+    """Show diff between Engram skills and a Cursor skills directory, with optional auto-sync."""
+    from .export import compute_sync_diff, export_skills, import_cursor_skills_dir
+
+    skills_dir = args.path or os.path.expanduser("~/.cursor/skills")
+    diff = compute_sync_diff(skills_dir)
+
+    only_engram = diff["only_in_engram"]
+    only_cursor = diff["only_in_cursor"]
+    in_both = diff["in_both"]
+
+    print(fmt_header(f"Engram ↔ Cursor Skill Sync — {skills_dir}\n"))
+    print(f"  {fmt_bold('In both:')}        {len(in_both)}")
+    print(f"  {fmt_bold('Only in Engram:')} {len(only_engram)}  (can export)")
+    print(f"  {fmt_bold('Only in Cursor:')} {len(only_cursor)}  (can import)")
+    print()
+
+    if only_engram:
+        print(fmt_bold("Skills in Engram but NOT in Cursor (→ export):"))
+        for slug, skill in sorted(only_engram.items()):
+            usage = skill.get("usage_count", 0)
+            print(f"  {fmt_type('skill')} {fmt_bold(skill['name'])} [{skill['domain']}]  usage:{usage}")
+        print()
+
+    if only_cursor:
+        print(fmt_bold("Skills in Cursor but NOT in Engram (→ import):"))
+        for slug, path in sorted(only_cursor.items()):
+            print(f"  {fmt_type('skill')} {fmt_bold(slug)}  {fmt_dim(path)}")
+        print()
+
+    if args.dry_run or not (args.auto or args.export_missing or args.import_missing):
+        if not args.dry_run:
+            print(fmt_dim("Run with --auto, --export-missing, or --import-missing to sync."))
+        return
+
+    # Perform the requested sync operations
+    if args.auto or args.export_missing:
+        if only_engram:
+            engram_ids = [s["id"] for s in only_engram.values()]
+            export_results = export_skills(
+                output_dir=skills_dir,
+                ids=engram_ids,
+                dry_run=False,
+            )
+            created = [r for r in export_results if r["action"] == "created"]
+            print(fmt_header(f"Exported {len(created)} skill(s) to Cursor.\n"))
+            for r in created:
+                print(f"  ✓ {r['name']} → {r['path']}")
+
+    if args.auto or args.import_missing:
+        if only_cursor:
+            import_results = import_cursor_skills_dir(skills_dir, dry_run=False)
+            imported = [r for r in import_results if r.get("action") == "imported"]
+            print(fmt_header(f"Imported {len(imported)} skill(s) into Engram.\n"))
+            for r in imported:
+                print(f"  ✓ {r['name']} (Skill #{r['id']})")
+
+
 # ── Argument parser ─────────────────────────────────────────────────
 
 
@@ -1410,12 +1557,91 @@ def build_parser():
     p_role.add_argument("name", help="Name of the role")
     p_role.set_defaults(func=cmd_get_role)
 
-    # import-skills
+    # import-skills (legacy orchestrator format)
     p_import = sub.add_parser(
         "import-skills", help="Import skills from orchestrator SKILL.md files"
     )
     p_import.add_argument("path", help="Path to skills directory")
     p_import.set_defaults(func=cmd_import_skills)
+
+    # export-skills
+    p_export = sub.add_parser(
+        "export-skills", help="Export Engram skills as Cursor-compatible SKILL.md files"
+    )
+    p_export.add_argument(
+        "--output",
+        default="~/.cursor/skills",
+        help="Output directory (default: ~/.cursor/skills)",
+    )
+    p_export.add_argument(
+        "--project-skills",
+        action="store_true",
+        help="Output to .cursor/skills/ in the current project instead",
+    )
+    p_export.add_argument("--ids", help="Comma-separated skill IDs to export")
+    p_export.add_argument("--domain", help="Export all skills in this domain")
+    p_export.add_argument(
+        "--min-usage",
+        type=int,
+        default=0,
+        help="Only export skills with usage_count >= N (default: 0 = all)",
+    )
+    p_export.add_argument(
+        "--from-patterns",
+        action="store_true",
+        help="Also export high-occurrence patterns as skills",
+    )
+    p_export.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview what would be exported without writing files",
+    )
+    p_export.set_defaults(func=cmd_export_skills)
+
+    # import-cursor-skills
+    p_import_cursor = sub.add_parser(
+        "import-cursor-skills",
+        help="Import skills from a Cursor skills directory into Engram",
+    )
+    p_import_cursor.add_argument("path", help="Path to a Cursor skills directory (e.g. ~/.cursor/skills)")
+    p_import_cursor.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview what would be imported without writing to the database",
+    )
+    p_import_cursor.set_defaults(func=cmd_import_cursor_skills)
+
+    # sync-skills
+    p_sync = sub.add_parser(
+        "sync-skills",
+        help="Bidirectional diff and sync between Engram and a Cursor skills directory",
+    )
+    p_sync.add_argument(
+        "--path",
+        default="~/.cursor/skills",
+        help="Cursor skills directory (default: ~/.cursor/skills)",
+    )
+    p_sync.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the diff without performing any sync",
+    )
+    p_sync.add_argument(
+        "--auto",
+        action="store_true",
+        help="Automatically export missing skills to Cursor AND import new Cursor skills into Engram",
+    )
+    p_sync.add_argument(
+        "--export-missing",
+        action="store_true",
+        help="Only export Engram skills that are not yet in Cursor",
+    )
+    p_sync.add_argument(
+        "--import-missing",
+        action="store_true",
+        help="Only import Cursor skills that are not yet in Engram",
+    )
+    p_sync.set_defaults(func=cmd_sync_skills)
 
     # link-pattern
     p_link = sub.add_parser("link-pattern", help="Link pattern to a conversation")
