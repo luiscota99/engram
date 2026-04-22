@@ -15,7 +15,7 @@ Measures search quality of Engram's hybrid retrieval (FTS5 + `sqlite-vec` semant
 | `exact_error` | Query uses verbatim terms from the stored entry | FTS5 |
 | `semantic_similar` | Query paraphrases the entry (different vocabulary, same concept) | Semantic |
 | `tag_filter` | Query names a technology that appears in tags | Tag boost |
-| `type_inference` | Query uses type-hint keywords (`how to`, `debugging`, `mistake`) | Type-inference boost |
+| `type_inference` | Query uses type-hint keywords (`how to`, `mistake`, …). IDE cues (`.mdc`, `cursor rules`, `.cursorrules`, …) infer **prompt** before generic `how to` → **skill**. | Type-inference boost (`TYPE_MATCH_BOOST` in `src/ranking.py`) |
 
 Each query specifies:
 - **`expected_type` + `expected_item_id`** (preferred): stable ground truth for the row in the seed (id from the underlying `mistakes` / `patterns` / `skills` table). The runner matches `item_type` + `item_id` from search results.

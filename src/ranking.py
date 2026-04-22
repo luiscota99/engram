@@ -33,7 +33,7 @@ AFFINITY_BOOSTS = {
 }
 
 # Boost applied when the query explicitly targets this item type
-TYPE_MATCH_BOOST = 20.0
+TYPE_MATCH_BOOST = 15.0
 
 # Boost applied per matched auto-detected tag
 TAG_MATCH_BOOST = 15.0
@@ -257,20 +257,52 @@ def calculate_utility_score(
     return decayed_base + usage + affinity_boost + type_boost + tag_boost - stale_penalty
 
 
+def _query_implies_ide_or_rules_prompt(query_lower: str) -> bool:
+    """High-precision cues: Cursor/IDE rules files before generic 'how to' → skill."""
+    if any(
+        s in query_lower
+        for s in (
+            ".mdc",
+            ".cursorrules",
+            ".cursor/rules",
+            "/.cursor/",
+            "cursor rules",
+            "cursor rule",
+        )
+    ):
+        return True
+    if "cursorrules" in query_lower:
+        return True
+    # Standalone "mdc" as a token (not a substring of another word)
+    if re.search(r"(?<![a-z0-9])mdc(?![a-z0-9])", query_lower):
+        return True
+    return False
+
+
 def infer_type_from_query(query: str) -> str | None:
     """Heuristically detect if a query is asking for a specific memory type.
 
     Returns the item_type string if detected, else None.
+
+    IDE/rules-file cues (``.mdc``, cursor rules, etc.) map to **prompt** before
+    generic ``how to`` would map to **skill**, avoiding type-inference collisions.
     """
     query_lower = query.lower()
-    type_keywords = {
-        "mistake": ["mistake", "error", "bug", "wrong", "broke", "failed", "problem"],
-        "pattern": ["pattern", "recurring", "keep seeing", "always happens", "anti-pattern"],
-        "skill": ["skill", "workflow", "how to", "steps to", "process for", "procedure"],
-        "conversation": ["conversation", "session", "discussed", "talked about", "decided"],
-        "prompt": ["prompt", "system prompt", "instruction", "persona"],
-    }
-    for item_type, keywords in type_keywords.items():
+    if _query_implies_ide_or_rules_prompt(query_lower):
+        return "prompt"
+
+    # Order matters: mistake → pattern → skill → conversation → prompt
+    type_keywords: list[tuple[str, list[str]]] = [
+        ("mistake", ["mistake", "error", "bug", "wrong", "broke", "failed", "problem"]),
+        ("pattern", ["pattern", "recurring", "keep seeing", "always happens", "anti-pattern"]),
+        ("skill", ["skill", "workflow", "how to", "steps to", "process for", "procedure"]),
+        ("conversation", ["conversation", "session", "discussed", "talked about", "decided"]),
+        (
+            "prompt",
+            ["prompt", "system prompt", "instruction", "persona", "rules.mdc"],
+        ),
+    ]
+    for item_type, keywords in type_keywords:
         if any(kw in query_lower for kw in keywords):
             return item_type
     return None
