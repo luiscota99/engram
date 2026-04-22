@@ -27,11 +27,14 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
     """Search vec_memory using KNN vector search.
 
     Requires sqlite_vec extension and a running Ollama instance.
-    Returns [] gracefully if either is unavailable.
+    Returns (results, status) where status is one of:
+        "ok"          — semantic search ran and returned results (or a valid empty set)
+        "unavailable" — Ollama/embedding failed; caller should fall back to lexical-only
+        "degraded"    — vec extension unavailable or query error
     """
     embedding = embed_text(query)
     if not embedding:
-        return []
+        return [], "unavailable"
 
     with get_connection(db_path) as conn:
         try:
@@ -73,19 +76,27 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
                     "rowid": row["fts_rowid"],
                     "is_semantic": True,
                 })
-            return results[:limit]
+            return results[:limit], "ok"
         except Exception:
-            return []
+            return [], "degraded"
 
 
 def search(query, item_type=None, tags=None, limit=20, project_path=None, db_path=None):
-    """Hybrid Search: FTS5 lexical + KNN semantic, ranked by multi-factor utility score."""
+    """Hybrid Search: FTS5 lexical + KNN semantic, ranked by multi-factor utility score.
+
+    Returns a list of result dicts. Each result has a ``utility_score`` field after ranking.
+    The list itself carries a ``semantic_status`` attribute (``"ok"``, ``"unavailable"``, or
+    ``"degraded"``) so callers can surface degradation warnings without checking embeddings
+    separately.
+    """
     results = []
     seen = set()
+    semantic_status = "ok"
 
     # 1. Semantic Search
     if query and query.strip():
-        for r in semantic_search(query, item_type, tags, limit=limit, db_path=db_path):
+        sem_results, semantic_status = semantic_search(query, item_type, tags, limit=limit, db_path=db_path)
+        for r in sem_results:
             key = f"{r['item_type']}-{r['item_id']}"
             if key not in seen:
                 seen.add(key)
@@ -189,7 +200,11 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
         stale_rowids=stale_rowids,
     )
 
-    return results[:limit]
+    final = results[:limit]
+    # Attach semantic status so MCP / CLI callers can surface degradation without a
+    # separate health check.  We use a plain attribute on the list object.
+    final.semantic_status = semantic_status  # type: ignore[attr-defined]
+    return final
 
 
 def get_recent(limit=10, item_type=None, db_path=None):

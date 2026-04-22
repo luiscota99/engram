@@ -34,6 +34,7 @@ from src.database import (
     delete_item,
     find_similar,
     get_connection,
+    get_db_path,
     get_embedding_stats,
     get_item,
     get_or_create_project,
@@ -637,8 +638,14 @@ TOOLS = [
 # ── Tool Handlers ───────────────────────────────────────────────────
 
 
-def format_and_truncate_results(results):
+def format_and_truncate_results(results, semantic_status=None):
     if not results:
+        if semantic_status and semantic_status != "ok":
+            return (
+                f"No results found. "
+                f"[Note: semantic search {semantic_status} — results are lexical-only. "
+                f"Run `engram doctor` to check Ollama/embedding status.]"
+            )
         return "No results found."
 
     max_chars = int(os.environ.get("ENGRAM_MAX_CONTEXT_CHARS", 8000))
@@ -646,11 +653,19 @@ def format_and_truncate_results(results):
         "Found results. NOTE: These are truncated summaries to save context tokens.\n",
         "If an item looks relevant, you MUST use `memory_read_item(item_type, item_id)` to read the full context.\n\n",
     ]
-    total_length = len(lines[0]) + len(lines[1])
+    if semantic_status and semantic_status != "ok":
+        lines.append(
+            f"[Note: semantic search {semantic_status} — results are lexical-only. "
+            f"Run `engram doctor` to check Ollama/embedding status.]\n\n"
+        )
+    total_length = sum(len(l) for l in lines)
     truncated = False
 
     for r in results:
-        block = f"[{r['item_type'].upper()} ID: {r['item_id']}] {r['title']}\n"
+        score = r.get("utility_score")
+        search_type = "S" if r.get("is_semantic") else "K"
+        score_str = f" (score: {score:.1f}, {search_type})" if score is not None else f" ({search_type})"
+        block = f"[{r['item_type'].upper()} ID: {r['item_id']}]{score_str} {r['title']}\n"
         if r.get("snippet"):
             snippet = r["snippet"].replace("\n", " ")
             block += f"  Snippet: {snippet[:150]}...\n"
@@ -709,9 +724,16 @@ def handle_memory_search(args):
     limit = args.get("limit", 10)
     project_path = args.get("project_path")
     results = memory_search(query, item_type=item_type, tags=tags, limit=limit, project_path=project_path)
+    semantic_status = getattr(results, "semantic_status", None)
     if not results:
+        if semantic_status and semantic_status != "ok":
+            return (
+                f"No results found. "
+                f"[Note: semantic search {semantic_status} — results are lexical-only. "
+                f"Run `engram doctor` to check Ollama/embedding status.]"
+            )
         return "No results found."
-    return format_and_truncate_results(results)
+    return format_and_truncate_results(results, semantic_status=semantic_status)
 
 
 def handle_memory_recent(args):
@@ -1093,14 +1115,35 @@ def handle_memory_list(args):
 def handle_memory_stats(args):
     stats = get_stats()
     lines = [
-        "Antigravity Memory Stats:",
+        "Engram Memory Stats:",
         f"  Mistakes:      {stats['mistakes']}",
         f"  Patterns:      {stats['patterns']}",
         f"  Skills:        {stats['skills']}",
         f"  Conversations: {stats['conversations']}",
+        f"  Prompts:       {stats.get('prompts', 0)}",
         f"  Tags:          {stats['tags']}",
         f"  FTS indexed:   {stats['fts_indexed']}",
     ]
+    emb = stats.get("embeddings", {})
+    if emb:
+        total = emb.get("total", 0)
+        model = emb.get("model", "unknown")
+        lines.append(f"\n  Embedding Status (model: {model}):")
+        if total > 0:
+            def pct(n):
+                return f"{100 * n / total:.1f}%"
+            lines.append(f"    Ready:   {emb.get('ready', 0):4d} ({pct(emb.get('ready', 0))})")
+            if emb.get("stale"):
+                lines.append(f"    Stale:   {emb['stale']:4d} ({pct(emb['stale'])})  <- run `engram reembed`")
+            if emb.get("pending"):
+                lines.append(f"    Pending: {emb['pending']:4d} ({pct(emb['pending'])})")
+            if emb.get("failed"):
+                lines.append(f"    Failed:  {emb['failed']:4d} ({pct(emb['failed'])})")
+        else:
+            lines.append("    No embeddings tracked yet.")
+
+    lines.append(f"\n  DB path: {get_db_path()}")
+
     return "\n".join(lines)
 
 
@@ -1558,7 +1601,7 @@ def run_stdio_server():
     """Run the MCP server over stdio (stdin/stdout)."""
     # Initialize DB on startup
     init_db()
-    print(f"antigravity-memory MCP server started (pid={os.getpid()})", file=sys.stderr)
+    print(f"Engram MCP server started (pid={os.getpid()})", file=sys.stderr)
 
     # Read JSON-RPC messages from stdin, write responses to stdout
     for line in sys.stdin:

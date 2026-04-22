@@ -24,7 +24,9 @@ def find_gc_candidates(
 ) -> list[dict]:
     """Return items that have never been used OR were last used more than days_unused ago.
 
-    Candidates are: usage_count = 0 AND created_at < cutoff, OR last_used_at < cutoff.
+    Candidates are:
+      - Never used: usage_count = 0 AND (created_at < cutoff OR created_at IS NULL)
+      - Stale: last_used_at IS NOT NULL AND last_used_at < cutoff
     """
     cutoff = (datetime.now() - timedelta(days=days_unused)).isoformat()
     types = item_types or ["mistake", "pattern", "skill", "conversation", "prompt"]
@@ -46,8 +48,10 @@ def find_gc_candidates(
             rows = conn.execute(
                 f"""SELECT id, created_at, last_used_at, usage_count
                     FROM {table}
-                    WHERE usage_count = 0 AND (created_at < ? OR created_at IS NULL)""",
-                (cutoff,),
+                    WHERE
+                        (usage_count = 0 AND (created_at < ? OR created_at IS NULL))
+                        OR (last_used_at IS NOT NULL AND last_used_at < ?)""",
+                (cutoff, cutoff),
             ).fetchall()
             for row in rows:
                 candidates.append({
@@ -131,30 +135,49 @@ except ImportError:
     _SQLITE_VEC = False
 
 
+class _UnionFind:
+    """Simple Union-Find (disjoint set) for transitive cluster merging."""
+
+    def __init__(self):
+        self.parent: dict = {}
+
+    def find(self, x):
+        if x not in self.parent:
+            self.parent[x] = x
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+
+    def union(self, x, y):
+        px, py = self.find(x), self.find(y)
+        if px != py:
+            self.parent[px] = py
+
+
 def find_consolidation_candidates(
     threshold: float = 0.80,
     item_types: list[str] | None = None,
     db_path=None,
 ) -> list[dict]:
-    """Find clusters of similar memories that could be consolidated.
+    """Find transitive clusters of similar memories that could be consolidated.
 
-    Uses vector similarity from vec_memory.  Each returned cluster is a list of
-    (item_type, item_id, title) tuples that exceed the similarity threshold
-    between all pairs.
+    Uses vector similarity from vec_memory. Overlapping pairs are merged into
+    larger clusters via Union-Find — e.g. if A~B and B~C then {A, B, C} is
+    one cluster rather than two separate pairs.
 
-    Returns a list of cluster dicts: {item_type, items: [...], avg_similarity}.
+    Returns a list of cluster dicts:
+        {item_type, items: [...], avg_similarity, cluster_size}
+    sorted by cluster_size (desc) then avg_similarity (desc).
     """
     if not _SQLITE_VEC:
         return []
 
     import json as _json
     types = item_types or ["mistake", "pattern", "skill"]
-    clusters = []
-    seen_pairs: set[tuple] = set()
+    all_clusters = []
 
     with get_connection(db_path) as conn:
         for itype in types:
-            # Get all rowids and embeddings for this type
             rows = conn.execute(
                 """SELECT f.rowid, f.item_id, f.title
                    FROM memory_fts f
@@ -168,7 +191,6 @@ def find_consolidation_candidates(
             rowids = [r["rowid"] for r in rows]
             item_map = {r["rowid"]: r for r in rows}
 
-            # Fetch embeddings
             emb_rows = conn.execute(
                 f"SELECT rowid, embedding FROM vec_memory WHERE rowid IN "
                 f"({','.join('?' * len(rowids))})",
@@ -185,32 +207,61 @@ def find_consolidation_candidates(
             if len(embeddings) < 2:
                 continue
 
-            # Compute pairwise cosine similarity
+            # Phase 1: compute pairwise similarities and union matching pairs
+            uf = _UnionFind()
+            edge_sims: dict[tuple, float] = {}
             emb_rowids = list(embeddings.keys())
+
             for i in range(len(emb_rowids)):
                 for j in range(i + 1, len(emb_rowids)):
                     ri, rj = emb_rowids[i], emb_rowids[j]
-                    pair = (min(ri, rj), max(ri, rj))
-                    if pair in seen_pairs:
-                        continue
-                    seen_pairs.add(pair)
-
                     sim = _cosine_similarity(embeddings[ri], embeddings[rj])
                     if sim >= threshold:
-                        ia = item_map[ri]
-                        ib = item_map[rj]
-                        clusters.append({
-                            "item_type": itype,
-                            "items": [
-                                {"item_id": ia["item_id"], "title": ia["title"], "fts_rowid": ri},
-                                {"item_id": ib["item_id"], "title": ib["title"], "fts_rowid": rj},
-                            ],
-                            "similarity": round(sim, 4),
-                        })
+                        uf.union(ri, rj)
+                        edge_sims[(min(ri, rj), max(ri, rj))] = sim
 
-    # Sort by similarity descending
-    clusters.sort(key=lambda x: x["similarity"], reverse=True)
-    return clusters
+            # Phase 2: group rowids by their Union-Find root
+            root_to_members: dict = {}
+            for rid in emb_rowids:
+                root = uf.find(rid)
+                root_to_members.setdefault(root, []).append(rid)
+
+            # Phase 3: build cluster dicts for groups with 2+ members
+            for members in root_to_members.values():
+                if len(members) < 2:
+                    continue
+
+                # Collect all pairwise similarities within this cluster
+                pair_sims = []
+                for i in range(len(members)):
+                    for j in range(i + 1, len(members)):
+                        ri, rj = members[i], members[j]
+                        key = (min(ri, rj), max(ri, rj))
+                        if key in edge_sims:
+                            pair_sims.append(edge_sims[key])
+                        else:
+                            # Members may be transitively connected; compute if missing
+                            sim = _cosine_similarity(embeddings[ri], embeddings[rj])
+                            pair_sims.append(sim)
+
+                avg_sim = sum(pair_sims) / len(pair_sims) if pair_sims else 0.0
+                items = [
+                    {
+                        "item_id": item_map[rid]["item_id"],
+                        "title": item_map[rid]["title"],
+                        "fts_rowid": rid,
+                    }
+                    for rid in members
+                ]
+                all_clusters.append({
+                    "item_type": itype,
+                    "items": items,
+                    "avg_similarity": round(avg_sim, 4),
+                    "cluster_size": len(members),
+                })
+
+    all_clusters.sort(key=lambda x: (-x["cluster_size"], -x["avg_similarity"]))
+    return all_clusters
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:

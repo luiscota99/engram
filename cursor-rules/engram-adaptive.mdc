@@ -43,18 +43,21 @@ User message or task description contains any of:
 - `debug`, `investigate`, `why is`, `how does this work`, `trace`
 - `refactor`, `architecture`, `redesign`, `migrate`, `migration`
 - `performance`, `slow`, `bottleneck`, `optimize`
-- `security`, `vulnerability`, `review`, `audit`
+- `security vulnerability`, `vulnerability`, `security audit`, `audit the codebase`, `architecture review`, `full review`
 - `this keeps happening`, `intermittent`, `not sure why`
+
+Note: bare `review`, `audit`, or `security` alone (e.g. "quick code review", "security headers") do **not** trigger escalation — context matters.
 
 ### Signal 3: Scope Signal
 - Changes span 5 or more files
-- User mentions "codebase", "project-wide", "all modules", "everywhere"
+- User mentions "across the codebase", "project-wide", "all modules", "everywhere"
 
-### Signal 4: Explicit Request
-- User says: `check engram`, `search memory`, `what did we learn`, `use engram`, `@engram full`
+### Signal 4: Multi-session Work
+- Task is too large to complete in one session
+- User says "continue from where we left off" or references a previous session
 
-### Signal 5: Long Session
-- Conversation has exceeded 10 back-and-forth turns
+### Signal 5: Explicit Request
+- User says: `check engram`, `search memory`, `what did we learn`, `use engram`, `@engram full`, `use committee`
 
 ---
 
@@ -89,11 +92,12 @@ User message or task description contains any of:
 
 | User says | Action |
 |-----------|--------|
-| `@engram off` | Disable all Engram calls for the rest of this session |
-| `@engram full` | Immediately escalate to FULL mode |
-| `@engram light` | Return to LIGHT mode (cancel FULL escalation) |
+| `@engram off` / `no engram` / `quick question` | Disable all Engram calls for the rest of this session |
+| `@engram full` / `use engram` / `use committee` | Immediately escalate to FULL mode |
+| `@engram light` / `simple fix` | Return to LIGHT mode (cancel FULL escalation) |
 | `@engram status` | Report current mode (OFF / LIGHT / FULL) |
-| `check engram` | Run `memory_search` with current context and report findings |
+| `check engram` / `check memory` / `search memory` / `what did we learn` | Run `memory_search` with current context and report findings |
+| `continue from last session` | FULL mode — start with `memory_search` for the previous session context |
 
 ---
 

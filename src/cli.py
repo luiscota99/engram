@@ -503,7 +503,7 @@ def cmd_gc(args):
     candidates = result["candidates"]
     if not candidates:
         print(fmt_header("No GC candidates found."))
-        print(fmt_dim(f"  (threshold: unused for {args.days}+ days with zero usage_count)"))
+        print(fmt_dim(f"  (threshold: never used and older than {args.days} days, or last used more than {args.days} days ago)"))
         return
 
     print(fmt_header(f"GC Candidates ({len(candidates)}):\n"))
@@ -526,13 +526,21 @@ def cmd_suggest_consolidate(args):
         print(fmt_dim("No consolidation candidates found at this similarity threshold."))
         return
 
+    total = sum(c["cluster_size"] for c in clusters[:args.limit])
     print(fmt_header(f"Consolidation Candidates (similarity ≥ {args.threshold}):\n"))
     for i, cluster in enumerate(clusters[:args.limit], 1):
-        print(f"  Cluster {i} — {fmt_type(cluster['item_type'])} (similarity: {cluster['similarity']})")
+        size = cluster["cluster_size"]
+        avg_sim = cluster["avg_similarity"]
+        size_label = f"{size} items" if size > 2 else "pair"
+        print(f"  Cluster {i} — {fmt_type(cluster['item_type'])}  {size_label}  (avg similarity: {avg_sim})")
+        ids = []
         for item in cluster["items"]:
             print(f"    ID:{item['item_id']}  {item['title']}")
+            ids.append(str(item["item_id"]))
+        print(fmt_dim(f"    → engram consolidate --delete-ids {','.join(ids)} --name \"...\" --domain \"...\" --trigger \"...\" --workflow \"...\""))
         print()
-    print(fmt_dim("Tip: Use `engram consolidate --delete-ids ID1,ID2 ...` to merge manually."))
+    print(fmt_dim(f"Total: {len(clusters[:args.limit])} cluster(s) covering {total} items."))
+    print(fmt_dim("Use the consolidate command shown above each cluster to merge manually."))
 
 
 def cmd_health(args):
@@ -962,6 +970,42 @@ def _prompt_bootstrap_mode() -> str:
             return "adaptive"
 
 
+def _setup_mcp_config(engram_root: str) -> tuple[bool, str]:
+    """Write or merge the Engram MCP server entry into ~/.cursor/mcp.json.
+
+    Returns (success, message).
+    """
+    cursor_dir = os.path.expanduser("~/.cursor")
+    mcp_path = os.path.join(cursor_dir, "mcp.json")
+    server_script = os.path.join(engram_root, "src", "mcp_server.py")
+
+    new_entry = {
+        "command": "python3",
+        "args": [server_script],
+        "enabled": True,
+        "timeout": 30,
+    }
+
+    try:
+        os.makedirs(cursor_dir, exist_ok=True)
+        if os.path.exists(mcp_path):
+            with open(mcp_path, "r") as f:
+                config = json.load(f)
+        else:
+            config = {}
+
+        config.setdefault("mcpServers", {})
+        if "engram" in config["mcpServers"]:
+            return True, f"MCP config already has 'engram' entry in {mcp_path} (skipped)"
+
+        config["mcpServers"]["engram"] = new_entry
+        with open(mcp_path, "w") as f:
+            json.dump(config, f, indent=2)
+        return True, f"✓ Added Engram MCP server to {mcp_path}"
+    except Exception as e:
+        return False, f"Warning: Could not update MCP config: {e}"
+
+
 def cmd_bootstrap(args):
     """Bootstrap agent rules for the current project."""
     import shutil
@@ -1026,13 +1070,57 @@ def cmd_bootstrap(args):
             f.write("- `quick question` or `no engram` — keeps Engram disabled\n\n")
             f.write("CLI reference:\n")
             f.write("```bash\n")
-            f.write('python3 -m src.cli search "keywords" -n 5\n')
-            f.write("python3 -m src.cli recent -n 3\n")
+            f.write('engram search "keywords" -n 5\n')
+            f.write("engram recent -n 3\n")
             f.write("```\n")
 
     print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}  [{mode} mode]")
 
-    # 4. Summary and next steps
+    # 4. MCP configuration for Cursor
+    setup_mcp = getattr(args, "setup_mcp", None)
+    if setup_mcp is None:
+        # Auto-detect: offer MCP setup interactively, or auto-apply in non-interactive environments
+        try:
+            import sys as _sys
+            if _sys.stdin.isatty():
+                answer = input("\n  Configure Engram MCP server in ~/.cursor/mcp.json? [Y/n] ").strip().lower()
+                setup_mcp = answer in ("", "y", "yes")
+            else:
+                setup_mcp = True
+        except Exception:
+            setup_mcp = True
+
+    mcp_status = ""
+    if setup_mcp:
+        ok, msg = _setup_mcp_config(engram_root)
+        mcp_status = f"{'✓' if ok else '!'} MCP: {msg.lstrip('✓ !').strip()}"
+        print(f"  {msg}")
+    else:
+        mcp_status = "- MCP: skipped (run `engram bootstrap` again to configure)"
+        print(fmt_dim("  Skipped MCP setup. Add the Engram server to ~/.cursor/mcp.json manually."))
+        print(fmt_dim("  See: https://github.com/anthropics/engram#cursor-mcp-setup"))
+
+    # 5. Ollama / semantic search status
+    import urllib.request as _urllib_req
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    ollama_ok = False
+    try:
+        with _urllib_req.urlopen(
+            _urllib_req.Request(ollama_host, method="GET"), timeout=2
+        ) as resp:
+            ollama_ok = resp.status == 200
+    except Exception:
+        pass
+
+    if ollama_ok:
+        ollama_status = "✓ Ollama reachable — hybrid semantic+lexical search active"
+    else:
+        ollama_status = (
+            "! Ollama not reachable — search will use lexical-only mode\n"
+            "    Install Ollama (https://ollama.ai) and run: ollama pull nomic-embed-text"
+        )
+
+    # 6. Summary and next steps
     print(fmt_header(f"\nProject successfully bootstrapped! ({mode} mode)"))
     if mode == "adaptive":
         print("  Cursor and Antigravity will use LIGHT mode by default.")
@@ -1041,6 +1129,13 @@ def cmd_bootstrap(args):
         print("  Cursor and Antigravity will use the full Committee Workflow for every session.")
     else:
         print("  Memory is disabled by default. Say 'use engram' to activate it.")
+
+    print(f"\n{fmt_bold('Status:')}")
+    print(f"  ✓ DB:     {get_db_path()}")
+    print(f"  ✓ Rule:   .cursor/rules/engram.mdc  [{mode} mode]")
+    print(f"  ✓ Guide:  .antigravity/instructions.md  [{mode} mode]")
+    for line in ollama_status.splitlines():
+        print(f"  {line}")
 
     print(f"\n{fmt_bold('Next Steps:')}")
     print(f"  1. Run `{fmt_bold('engram index-project')}` to map this codebase")
@@ -1204,7 +1299,7 @@ def cmd_suggest(args):
     results = []
     is_semantic = False
     if len(query.split()) > 2:
-        sem_results = semantic_search(query, limit=args.limit)
+        sem_results, _ = semantic_search(query, limit=args.limit)
         # Filter for prompts or requested type
         item_type = getattr(args, "type", "prompt")
         results = [r for r in sem_results if r["item_type"] == item_type]
@@ -1749,8 +1844,13 @@ def build_parser():
 
     # doctor
     p_doctor = sub.add_parser("doctor", help="Run database diagnostics and repair")
-    p_doctor.add_argument(
+    fix_group = p_doctor.add_mutually_exclusive_group()
+    fix_group.add_argument(
         "--repair", action="store_true", help="Attempt to auto-repair found issues"
+    )
+    fix_group.add_argument(
+        "--fix", action="store_true", dest="repair",
+        help="Alias for --repair: attempt to auto-repair found issues"
     )
     p_doctor.set_defaults(func=cmd_doctor)
 
@@ -1840,6 +1940,20 @@ def build_parser():
             "full (always-on committee workflow), "
             "minimal (off by default, manual triggers only)"
         ),
+    )
+    mcp_group = p_bootstrap.add_mutually_exclusive_group()
+    mcp_group.add_argument(
+        "--setup-mcp",
+        dest="setup_mcp",
+        action="store_true",
+        default=None,
+        help="Configure the Engram MCP server in ~/.cursor/mcp.json (default: prompt interactively)",
+    )
+    mcp_group.add_argument(
+        "--no-mcp",
+        dest="setup_mcp",
+        action="store_false",
+        help="Skip MCP configuration",
     )
     p_bootstrap.set_defaults(func=cmd_bootstrap)
 

@@ -11,7 +11,9 @@ description: >
 
 Engram engagement is **adaptive**: minimal by default, escalating to the full Committee workflow only when the task warrants it. This prevents every trivial fix from becoming a multi-step committee session.
 
-> **Interface**: Antigravity uses the Engram **CLI** (`python3 -m src.cli ...`), not MCP tools.
+> **Interface**: Antigravity uses the Engram **CLI** (`engram ...`), not MCP tools.
+> The `engram` command is available after `pip install -e .` from the Engram repository.
+> Ensure `engram` is on your PATH (the same Python environment where Engram was installed).
 
 ---
 
@@ -30,7 +32,7 @@ Engram engagement is **adaptive**: minimal by default, escalating to the full Co
 For most tasks, at the start of the session:
 
 ```bash
-python3 -m src.cli search "keywords from task" -n 3
+engram search "keywords from task" -n 3
 ```
 
 1. Extract 2-4 keywords from the user's request
@@ -46,28 +48,29 @@ If no relevant result is found, proceed silently without mentioning Engram.
 
 Escalate if **any** of the following are true:
 
-### Signal 1: Complexity Keywords
+### Signal 1: Error / Retry Pattern
+3 or more failed attempts, or the user saying "that's still broken", "try again", "that didn't work", "it keeps failing"
+
+### Signal 2: Complexity Keywords
 Request contains any of:
 - `debug`, `investigate`, `why is`, `how does this work`, `trace`
 - `refactor`, `architecture`, `redesign`, `migrate`, `migration`
 - `performance`, `slow`, `bottleneck`, `optimize`
-- `security`, `vulnerability`, `audit`, `review`
+- `security vulnerability`, `vulnerability`, `security audit`, `audit the codebase`, `architecture review`, `full review`
 - `this keeps happening`, `intermittent`, `not sure why`
 
-### Signal 2: Scope Signal
-- Task spans multiple files, modules, or systems
-- User says "across the codebase", "project-wide", "all modules", "everywhere"
+Note: bare `review`, `audit`, or `security` alone do **not** trigger escalation — context matters.
 
-### Signal 3: Uncertainty / Repetition
-- User expresses uncertainty: "I'm not sure why", "it keeps failing", "something's off"
-- Same issue has appeared more than once in the conversation
+### Signal 3: Scope Signal
+- Task spans 5 or more files
+- User says "across the codebase", "project-wide", "all modules", "everywhere"
 
 ### Signal 4: Multi-session Work
 - Task is too large to complete in one session
 - User says "continue from where we left off"
 
 ### Signal 5: Explicit Request
-- User says: "use engram", "check memory", "full workflow", "use committee"
+- User says: "use engram", "check memory", "search memory", "full workflow", "use committee", "what did we learn"
 
 ---
 
@@ -80,8 +83,8 @@ Then follow these steps:
 ### Step 1: Search Memory
 
 ```bash
-python3 -m src.cli search "task keywords" -n 5
-python3 -m src.cli recent -n 3
+engram search "task keywords" -n 5
+engram recent -n 3
 ```
 
 Check for relevant past mistakes, patterns, or skills before starting.
@@ -89,7 +92,7 @@ Check for relevant past mistakes, patterns, or skills before starting.
 ### Step 2: Initialize Session
 
 ```bash
-python3 -m src.cli add session \
+engram add session \
   --id "YYYY-MM-DD__TaskName" \
   --title "Descriptive task title" \
   --date "YYYY-MM-DD" \
@@ -109,14 +112,14 @@ Assume the **Facilitator** persona. Delegate to virtual subagents in order:
 
 To get a role's full charter:
 ```bash
-python3 -m src.cli get-role Analyst
+engram get-role Analyst
 ```
 
 ### Step 4: Persist Transcripts
 
 As each subagent completes their reasoning:
 ```bash
-python3 -m src.cli add transcript \
+engram add transcript \
   --session-id "YYYY-MM-DD__TaskName" \
   --role "Analyst" \
   --content "Problem framing: ..."
@@ -126,7 +129,7 @@ python3 -m src.cli add transcript \
 
 When a critical technical decision is reached:
 ```bash
-python3 -m src.cli add decision \
+engram add decision \
   --session-id "YYYY-MM-DD__TaskName" \
   --decision "Decided to use X instead of Y because..."
 ```
@@ -146,7 +149,7 @@ After completing significant work, propose the following for user approval:
 
 ```bash
 # Log a mistake if one occurred
-python3 -m src.cli add mistake \
+engram add mistake \
   --date "YYYY-MM-DD" \
   --context "What we were doing" \
   --mistake "What went wrong" \
@@ -155,14 +158,14 @@ python3 -m src.cli add mistake \
   --prevention "How to avoid next time"
 
 # Log a pattern if a recurring issue was identified
-python3 -m src.cli add pattern \
+engram add pattern \
   --name "Pattern Name" \
   --symptoms "What it looks like" \
   --root-cause "Why it happens" \
   --fix "Standard resolution"
 
 # Log a skill if a repeatable workflow was used
-python3 -m src.cli add skill \
+engram add skill \
   --name "Skill Name" \
   --domain "engineering" \
   --trigger "When to use this" \
@@ -190,7 +193,7 @@ When the session context is getting long or a major milestone is complete:
 > 2. Resume with:
 > ```text
 > [Continuing from previous session] Resume work. Start by running:
-> python3 -m src.cli get-session --id '<session_id>'
+> engram get-session --id '<session_id>'
 > ```
 
 ---
@@ -200,14 +203,14 @@ When the session context is getting long or a major milestone is complete:
 | User says | Action |
 |-----------|--------|
 | "quick question" / "no engram" | OFF mode — skip all Engram calls |
-| "use engram" / "check memory" | FULL mode — run search + init session if needed |
+| "use engram" / "check memory" / "search memory" / "use committee" / "what did we learn" | FULL mode — run search + init session if needed |
 | "simple fix" | Stay in LIGHT mode |
-| "continue from last session" | FULL mode — start with `get-session` |
+| "continue from last session" | FULL mode — start with `engram get-session --id '<id>'` |
 
 ---
 
 ## Dependencies
 
-- Engram CLI: `python3 -m src.cli` (from the engram project root)
+- Engram CLI: `engram` (installed via `pip install -e /path/to/engram`)
 - Python 3.9+
 - `~/.engram/memory.db` must exist (run `engram init` if not)
