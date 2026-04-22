@@ -31,6 +31,18 @@ _SKILL_SIGNALS = [
     r"\b(reusable|repeatable|standard (approach|way|method))\b",
 ]
 
+# Shown at session end (memory_session_review + suggest-capture) for self-reported impact.
+SESSION_INFLUENCE_PROMPT = """### Engram influence (self-report)
+
+**Engram influence (0–3):** How much did retrieved Engram memories change this session's outcome?
+
+- **0** — None, or hits were ignored.
+- **1** — Context only; did not change what you did.
+- **2** — Changed a concrete decision (different file, approach, or avoided a listed mistake).
+- **3** — Large impact (avoided a dead end, followed a skill end-to-end, or saved substantial rework).
+
+**One sentence:** Briefly justify your score. (Self-report — pair with retrieval benchmarks for calibration; see `docs/MEASURING_FIT_AND_HELP.md`.)"""
+
 
 def _score_signals(text: str, patterns: list[str]) -> int:
     """Count how many signal patterns match in text (case-insensitive)."""
@@ -185,6 +197,7 @@ def suggest_capture(
         "confidence": confidence,
         "keywords": keywords,
         "domain": domain,
+        "influence_prompt": SESSION_INFLUENCE_PROMPT.strip(),
     }
 
 
@@ -195,6 +208,8 @@ def format_capture_suggestion(suggestion: dict) -> str:
 
     if not suggestion["suggested_types"]:
         lines.append("_No strong signals detected for memory capture._")
+        lines.append("")
+        lines.append(SESSION_INFLUENCE_PROMPT.rstrip())
         return "\n".join(lines)
 
     lines.append("Suggested entries (requires your approval before saving):\n")
@@ -234,5 +249,7 @@ def format_capture_suggestion(suggestion: dict) -> str:
             lines.append(f"- **Key files:** {d['key_files']}")
         lines.append(f"- **Tags:** {d['tags']}\n")
 
+    lines.append(SESSION_INFLUENCE_PROMPT.rstrip())
+    lines.append("")
     lines.append("_Reply 'save' to log approved entries, or edit fields above before approving._")
     return "\n".join(lines)

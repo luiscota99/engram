@@ -192,8 +192,14 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 | `engram add pattern` | Log a recurring problem pattern |
 | `engram add skill` | Log a proven, reusable workflow |
 | `engram list skills` | List all stored skills |
+| `engram suggest-capture --task "…" --outcome "…"` | Heuristic drafts for capture (see [docs/MEASURING_FIT_AND_HELP.md](docs/MEASURING_FIT_AND_HELP.md)) |
+| `engram session-help --score 0-3` | Append Session Help Score to `~/.engram/session-help.jsonl` (optional) |
 | `engram stats` | Memory database statistics |
 | `engram health` | Comprehensive health report |
+
+### Measuring fit and whether Engram helped
+
+See **[docs/MEASURING_FIT_AND_HELP.md](docs/MEASURING_FIT_AND_HELP.md)** — labeled retrieval (**R@5**), Session Help Score (**0–3**), optional `ENGRAM_AUDIT_LOG` / `ENGRAM_SESSION_HELP_LOG`, and **public vs private** disclosure for commits.
 
 ### Project & Codebase
 

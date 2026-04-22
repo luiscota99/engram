@@ -1,7 +1,10 @@
 """Memory commands: search, recent, add, list, suggest, consolidate."""
 from __future__ import annotations
 
+import json
+import os
 import sys
+from datetime import datetime, timezone
 
 from ...database import (
     delete_item,
@@ -19,7 +22,13 @@ from ..fmt import fmt_bold, fmt_dim, fmt_header, fmt_type
 def cmd_search(args):
     query = " ".join(args.query) if args.query else ""
     tag_list = [t.strip() for t in args.tags.split(",")] if args.tags else None
-    results = search(query, args.type, tag_list, args.limit)
+    results = search(
+        query,
+        args.type,
+        tag_list,
+        args.limit,
+        audit_source="cli",
+    )
     if not results:
         print("No results found.")
         return
@@ -389,8 +398,6 @@ def cmd_suggest_consolidate(args):
 
 
 def cmd_suggest_capture(args):
-    import json
-
     from ...capture import format_capture_suggestion, suggest_capture
 
     files = [f.strip() for f in args.files.split(",")] if args.files else []
@@ -409,3 +416,33 @@ def cmd_suggest_capture(args):
         print(json.dumps(suggestion, indent=2, default=_default))
     else:
         print(format_capture_suggestion(suggestion))
+
+
+def cmd_session_help(args):
+    """Append one JSON line with Session Help Score (0–3) for local rollup."""
+    score = args.score
+    if score < 0 or score > 3:
+        print("Error: --score must be between 0 and 3.", file=sys.stderr)
+        sys.exit(1)
+    log_path = os.path.expanduser(
+        os.environ.get("ENGRAM_SESSION_HELP_LOG", "~/.engram/session-help.jsonl")
+    )
+    parent = os.path.dirname(os.path.abspath(log_path))
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            pass
+    line = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "score": score,
+        "note": (args.note or "")[:2000],
+        "task": (args.task or "")[:500],
+    }
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"Error writing session-help log: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"✓ Logged Session Help Score {score} → {log_path}")

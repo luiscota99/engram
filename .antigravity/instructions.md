@@ -227,6 +227,14 @@ When the session context is getting long or a major milestone is complete:
 
 ---
 
+## Measuring impact & explicit disclosure
+
+- **`suggest-capture`** output ends with **Engram influence (0–3)** — have the model answer briefly after non-trivial work. In FULL / committee flows, the same idea applies when using session review patterns. See Engram repo **`docs/MEASURING_FIT_AND_HELP.md`**.
+- **Optional:** `python3 -m src.cli session-help --score 0-3 --note "..."` appends to `~/.engram/session-help.jsonl` (override with `ENGRAM_SESSION_HELP_LOG`).
+- **When acting on Engram memory**, one short line is enough (not every `search`). **Public repos:** use titles/slugs only in commits — **no numeric IDs**. **Private:** `Engram-Refs: skill:12` is OK. Set `ENGRAM_DISCLOSURE=public` when unsure.
+
+---
+
 ## Dependencies
 
 - Engram CLI: `python3 -m src.cli` (from the engram project root, or with `PYTHONPATH` including the project)

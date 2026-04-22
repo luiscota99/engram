@@ -11,6 +11,7 @@ from .database import get_connection, get_or_create_project, get_project_affinit
 from .embeddings import embed_text
 from .query_analyzer import detect_query_tags
 from .ranking import rank_results, rerank_with_bm25
+from .search_audit import append_search_audit
 
 
 class SearchResults(list):
@@ -100,7 +101,17 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
             return [], "degraded"
 
 
-def search(query, item_type=None, tags=None, limit=20, project_path=None, db_path=None):
+def search(
+    query,
+    item_type=None,
+    tags=None,
+    limit=20,
+    project_path=None,
+    db_path=None,
+    *,
+    skip_audit=False,
+    audit_source="search",
+):
     """Hybrid Search: FTS5 lexical + KNN semantic, ranked by multi-factor utility score.
 
     Returns a list of result dicts. Each result has a ``utility_score`` field after ranking.
@@ -114,6 +125,10 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
     filters** on semantic + FTS paths; auto tags are *not* AND'd into
     ``tags MATCH`` (that was overly strict and returned empty result sets when
     multiple weak signals fired).
+
+    **Audit:** If ``ENGRAM_AUDIT_LOG`` is set and ``skip_audit`` is False, appends one JSON
+    line per call (see ``src/search_audit.py``). Use ``skip_audit=True`` for internal
+    or bulk calls (e.g. benchmarks, duplicate checks).
     """
     results = []
     seen = set()
@@ -241,6 +256,17 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
 
     final = SearchResults(results[:limit])
     final.semantic_status = semantic_status
+    if not skip_audit:
+        append_search_audit(
+            query=query or "",
+            results=list(final),
+            semantic_status=semantic_status,
+            source=audit_source,
+            item_type=item_type,
+            tags=list(tags) if tags else None,
+            limit=limit,
+            project_path=project_path,
+        )
     return final
 
 

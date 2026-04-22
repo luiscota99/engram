@@ -4,6 +4,32 @@ from __future__ import annotations
 from src.capture import _infer_domain, format_capture_suggestion, suggest_capture
 
 
+class TestInfluencePrompt:
+    def test_suggest_capture_includes_influence_prompt(self):
+        result = suggest_capture(
+            task_description="Trivial",
+            outcome="Done.",
+            errors_encountered="",
+        )
+        assert "influence_prompt" in result
+        assert "Engram influence" in result["influence_prompt"]
+
+    def test_format_includes_influence_when_empty_suggestions(self):
+        text = format_capture_suggestion(
+            {
+                "suggested_types": [],
+                "draft_mistake": None,
+                "draft_pattern": None,
+                "draft_skill": None,
+                "confidence": {},
+                "keywords": [],
+                "domain": "engineering",
+                "influence_prompt": "",
+            }
+        )
+        assert "Engram influence" in text
+
+
 class TestInferDomain:
     def test_frontend_keywords(self):
         assert _infer_domain("fixing a React component with CSS issue") == "frontend"

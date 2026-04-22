@@ -1,0 +1,39 @@
+{
+  "queries": [
+    {
+      "id": "caveman_1",
+      "query": "How do I compress tokens using caveman?",
+      "expected_type": "prompt",
+      "expected_title_contains": "Caveman Protocol",
+      "category": "prompt_lookup"
+    },
+    {
+      "id": "bootstrap_1",
+      "query": "steps to bootstrap engram on a new repo",
+      "expected_type": "session",
+      "expected_title_contains": "Bootstrap",
+      "category": "workflow_retrieval"
+    },
+    {
+      "id": "n1_fix_1",
+      "query": "database performance n+1 fixes",
+      "expected_type": "session",
+      "expected_title_contains": "N+1",
+      "category": "performance_history"
+    },
+    {
+      "id": "rules_1",
+      "query": "how to make mdc rules for cursor",
+      "expected_type": "prompt",
+      "expected_title_contains": "Rules Maker",
+      "category": "tooling_setup"
+    },
+    {
+      "id": "mtg_1",
+      "query": "rules for magic the gathering",
+      "expected_type": "prompt",
+      "expected_title_contains": "MTG Judge",
+      "category": "misc"
+    }
+  ]
+}

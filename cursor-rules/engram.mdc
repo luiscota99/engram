@@ -39,3 +39,8 @@ After significant work, always:
 2. `memory_add_mistake` — for each error or retry that occurred
 3. `memory_add_pattern` — if a new recurring pattern was identified
 4. `memory_add_skill` — if a repeatable workflow was used
+
+## Measuring impact & explicit disclosure
+
+- **`memory_session_review`** / **`suggest-capture`** end with **Engram influence (0–3)** — answer briefly in retrospectives (see Engram `docs/MEASURING_FIT_AND_HELP.md`). Optional: `engram session-help --score N`.
+- **When acting on memory**, one disclosure line is enough (not every search). **Public repos:** titles only, no numeric IDs in commits/PRs (`ENGRAM_DISCLOSURE=public`). **Private:** `Engram-Refs: skill:12` OK.

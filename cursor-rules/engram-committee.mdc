@@ -44,7 +44,8 @@ For each user request:
 - Record formal decisions via `memory_add_decision`.
 
 **STEP 4) End of Session**
-- You MUST run `memory_session_review` to check for bugs fixed, patterns noticed, and new skills extracted, then commit them to Engram.
+- You MUST run `memory_session_review` to check for bugs fixed, patterns noticed, and new skills extracted, then commit them to Engram. The review includes **Engram influence (0–3)** — answer briefly; see `docs/MEASURING_FIT_AND_HELP.md`.
+- **Explicit disclosure:** If you followed a skill or avoided a logged mistake, one line in the summary is enough. On **public** GitHub, never put numeric memory IDs in commits/PRs — use titles only (`ENGRAM_DISCLOSURE=public`).
 
 ## CONTEXT RESET PROTOCOL (MANDATORY)
 To maintain token efficiency and fast reasoning, you MUST enforce stateless sessions. 

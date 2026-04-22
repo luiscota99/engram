@@ -180,6 +180,7 @@ class TestCmdSuggestCapture:
 
         output = _capture_output(cmd_suggest_capture, Args())
         assert "Engram Memory Capture Suggestion" in output
+        assert "Engram influence" in output
 
     def test_no_errors_still_suggests_skill(self, test_db):
         from src.cli.commands.memory import cmd_suggest_capture
@@ -211,3 +212,42 @@ class TestCmdSuggestCapture:
         assert "suggested_types" in data
         assert "confidence" in data
         assert "domain" in data
+        assert "influence_prompt" in data
+        assert "Engram influence" in data["influence_prompt"]
+
+
+# ── cmd_session_help ─────────────────────────────────────────────────
+
+class TestCmdSessionHelp:
+    def test_appends_jsonl_line(self, tmp_path, monkeypatch):
+        from src.cli.commands.memory import cmd_session_help
+
+        log = tmp_path / "help.jsonl"
+        monkeypatch.setenv("ENGRAM_SESSION_HELP_LOG", str(log))
+
+        class Args:
+            score = 2
+            note = "Applied checklist skill"
+            task = "deploy"
+
+        output = _capture_output(cmd_session_help, Args())
+        assert "Logged Session Help Score 2" in output
+        assert log.read_text().strip()
+        import json
+
+        line = json.loads(log.read_text().strip().splitlines()[-1])
+        assert line["score"] == 2
+        assert "checklist" in line["note"]
+
+    def test_rejects_invalid_score(self, test_db, tmp_path, monkeypatch):
+        from src.cli.commands.memory import cmd_session_help
+
+        monkeypatch.setenv("ENGRAM_SESSION_HELP_LOG", str(tmp_path / "h.jsonl"))
+
+        class Args:
+            score = 5
+            note = None
+            task = None
+
+        with pytest.raises(SystemExit):
+            cmd_session_help(Args())

@@ -26,6 +26,7 @@ from .commands.memory import (
     cmd_list,
     cmd_recent,
     cmd_search,
+    cmd_session_help,
     cmd_stats,
     cmd_suggest,
     cmd_suggest_capture,
@@ -185,6 +186,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print raw suggestion dict as JSON (for scripts and agents)",
     )
     p_sc2.set_defaults(func=cmd_suggest_capture)
+
+    p_sh = sub.add_parser(
+        "session-help",
+        help="Log Session Help Score (0–3) to a local JSONL file for measuring Engram impact",
+    )
+    p_sh.add_argument(
+        "--score",
+        type=int,
+        required=True,
+        help="0–3: how much Engram memories influenced this session (see docs/MEASURING_FIT_AND_HELP.md)",
+    )
+    p_sh.add_argument("--note", help="Optional one-sentence justification")
+    p_sh.add_argument("--task", help="Optional short task label")
+    p_sh.set_defaults(func=cmd_session_help)
 
     # ── Codebase ─────────────────────────────────────────────────────
     p_idx = sub.add_parser("index-project", help="Index project codebase knowledge")

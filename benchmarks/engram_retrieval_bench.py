@@ -57,7 +57,7 @@ from benchmarks.grading import (  # noqa: E402
 
 def _run_hybrid(query: str, limit: int, db_path: str | None) -> list[dict]:
     from src.search import search
-    results = search(query, limit=limit, db_path=db_path)
+    results = search(query, limit=limit, db_path=db_path, skip_audit=True)
     return list(results)
 
 

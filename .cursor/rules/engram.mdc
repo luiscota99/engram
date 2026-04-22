@@ -87,3 +87,13 @@ Two hooks run outside the agent turn and require no action from you:
 Install: copy both files to `~/.cursor/hooks/` and merge `cursor-hooks/hooks.json` into `~/.cursor/hooks.json`.
 
 The session-capture hook is **non-blocking and non-intrusive** — it only prints suggestions, never saves automatically. You must approve and call `memory_add` (or `engram add`) to persist anything.
+
+---
+
+## Measuring impact & explicit disclosure
+
+- **`memory_session_review`** and **`suggest-capture`** include an **Engram influence (0–3)** self-report prompt at the end — answer briefly when the user is doing a retrospective (see repo `docs/MEASURING_FIT_AND_HELP.md`).
+- **Optional:** `engram session-help --score N --note "…"` logs scores locally.
+- **When you act on a memory** (follow a skill, avoid a logged mistake), you may add **one line** — not for every search:
+  - Private repo: `Engram-Refs: skill:12` or `Engram: applied skill "Name" (skill id 12)` is OK.
+  - **Public repo or if unsure:** use **title/slug only** — **never** put numeric IDs in commit messages or public PR text (`ENGRAM_DISCLOSURE=public`).

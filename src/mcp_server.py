@@ -47,6 +47,7 @@ from src.database import (
 )
 from src.maintenance import find_consolidation_candidates, run_gc, run_health_check
 from src.merge import merge_available, merge_entries
+from src.capture import SESSION_INFLUENCE_PROMPT
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
 from src.workflow import (
@@ -795,7 +796,14 @@ def handle_memory_search(args):
     tags = args.get("tags", "").split(",") if args.get("tags") else None
     limit = args.get("limit", 10)
     project_path = args.get("project_path")
-    results = memory_search(query, item_type=item_type, tags=tags, limit=limit, project_path=project_path)
+    results = memory_search(
+        query,
+        item_type=item_type,
+        tags=tags,
+        limit=limit,
+        project_path=project_path,
+        audit_source="mcp",
+    )
     semantic_status = getattr(results, "semantic_status", None)
     if not results:
         if semantic_status and semantic_status != "ok":
@@ -1330,11 +1338,15 @@ def handle_memory_session_review(args):
 
     if search_terms:
         combined_query = " ".join(search_terms)[:200]
-        existing = memory_search(combined_query, limit=5, project_path=project_path)
+        existing = memory_search(
+            combined_query, limit=5, project_path=project_path, skip_audit=True
+        )
         if existing:
             similar_section = "\n\n## ⚠️ Similar Existing Entries (check for duplicates before logging):\n"
             for e in existing:
                 similar_section += f"  [{e['item_type'].upper()} ID:{e['item_id']}] {e['title']}\n"
+
+    influence_block = SESSION_INFLUENCE_PROMPT.rstrip()
 
     # Build reflection prompt
     prompt = f"""# Session Retrospective — {conversation_id[:12]}
@@ -1363,6 +1375,8 @@ def handle_memory_session_review(args):
 ### 4. Conversation Summary
 → Draft a `memory_add_conversation` call to log this session for cross-session continuity.
 {similar_section}
+
+{influence_block}
 
 ## Instructions
 1. Draft ALL entries above in a markdown block.
