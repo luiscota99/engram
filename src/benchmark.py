@@ -23,12 +23,17 @@ PROVIDERS = {
     "OpenRouter": {
         "env_var": "OPENROUTER_API_KEY",
         "base_url": "https://openrouter.ai/api/v1/chat/completions",
-        "model": "deepseek/deepseek-r1:free",
+        "model": "openrouter/free",
     },
     "NVIDIA NIM": {
         "env_var": "NVIDIA_API_KEY",
         "base_url": "https://integrate.api.nvidia.com/v1/chat/completions",
         "model": "meta/llama-3.3-70b-instruct",
+    },
+    "DeepSeek": {
+        "env_var": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com/v1/chat/completions",
+        "model": "deepseek-reasoner",
     }
 }
 

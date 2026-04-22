@@ -1,17 +1,35 @@
 """
-Search module — FTS5 full-text search with ranking and filtering.
+Search module — FTS5 full-text search + semantic vector search with
+multi-factor ranking via src/ranking.py.
 """
 
+from __future__ import annotations
+
+
 import json
+import os
 
 from .database import get_connection, get_or_create_project, get_project_affinities
 from .embeddings import embed_text
+from .ranking import infer_type_from_query, rank_results
+
+
+def _get_stale_rowids(conn) -> set:
+    """Return the set of fts_rowids whose embeddings are stale or failed."""
+    try:
+        rows = conn.execute(
+            "SELECT fts_rowid FROM embedding_status WHERE status IN ('stale', 'failed')"
+        ).fetchall()
+        return {r["fts_rowid"] for r in rows}
+    except Exception:
+        return set()
 
 
 def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
-    """
-    Search vec_memory using KNN vector search.
-    Requires sqlite-vec extension and a running Ollama instance.
+    """Search vec_memory using KNN vector search.
+
+    Requires sqlite_vec extension and a running Ollama instance.
+    Returns [] gracefully if either is unavailable.
     """
     embedding = embed_text(query)
     if not embedding:
@@ -29,9 +47,7 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
                     conditions.append("f.tags MATCH ?")
                     params.append(tag.strip())
 
-            where = ""
-            if conditions:
-                where = "WHERE " + " AND ".join(conditions)
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
             sql = f"""
                 WITH matches AS (
@@ -39,7 +55,8 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
                     FROM vec_memory
                     WHERE embedding MATCH ? AND k = ?
                 )
-                SELECT f.item_type, f.item_id, f.title, f.content as snippet, f.tags, m.distance
+                SELECT f.item_type, f.item_id, f.title, f.content as snippet,
+                       f.tags, m.rowid as fts_rowid, m.distance
                 FROM matches m
                 JOIN memory_fts f ON m.rowid = f.rowid
                 {where}
@@ -48,39 +65,35 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
             rows = conn.execute(sql, [json.dumps(embedding), limit * 2] + params).fetchall()
             results = []
             for row in rows:
-                results.append(
-                    {
-                        "item_type": row["item_type"],
-                        "item_id": row["item_id"],
-                        "title": row["title"],
-                        "snippet": row["snippet"] or "",
-                        "tags": row["tags"],
-                        "rank": row["distance"],
-                        "is_semantic": True,
-                    }
-                )
+                results.append({
+                    "item_type": row["item_type"],
+                    "item_id": row["item_id"],
+                    "title": row["title"],
+                    "snippet": row["snippet"] or "",
+                    "tags": row["tags"],
+                    "rank": row["distance"],
+                    "rowid": row["fts_rowid"],
+                    "is_semantic": True,
+                })
             return results[:limit]
         except Exception:
             return []
 
 
 def search(query, item_type=None, tags=None, limit=20, project_path=None, db_path=None):
-    """
-    Hybrid Search: Combines FTS5 lexical matching with KNN Semantic Vector matching.
-    """
+    """Hybrid Search: FTS5 lexical + KNN semantic, ranked by multi-factor utility score."""
     results = []
     seen = set()
 
-    # 1. Semantic Search (Only if query text exists)
+    # 1. Semantic Search
     if query and query.strip():
-        semantic_results = semantic_search(query, item_type, tags, limit=limit, db_path=db_path)
-        for r in semantic_results:
+        for r in semantic_search(query, item_type, tags, limit=limit, db_path=db_path):
             key = f"{r['item_type']}-{r['item_id']}"
             if key not in seen:
                 seen.add(key)
                 results.append(r)
 
-    # 2. Lexical Search
+    # 2. Lexical FTS5 Search
     with get_connection(db_path) as conn:
         conditions = []
         params = []
@@ -92,26 +105,24 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
                 conditions.append("tags MATCH ?")
                 params.append(tag.strip())
 
-        where = ""
-        if conditions:
-            where = "AND " + " AND ".join(conditions)
+        where_extra = ("AND " + " AND ".join(conditions)) if conditions else ""
 
         if query and query.strip():
+            fts_query = " OR ".join(f'"{term}"' for term in query.strip().split() if term)
             sql = f"""
-                SELECT item_type, item_id, title, content as snippet, tags, rank
+                SELECT item_type, item_id, title, content as snippet, tags, rank,
+                       rowid as fts_rowid
                 FROM memory_fts
-                WHERE memory_fts MATCH ? {where}
+                WHERE memory_fts MATCH ? {where_extra}
                 ORDER BY rank
                 LIMIT ?
             """
-            fts_query = " OR ".join(f'"{term}"' for term in query.strip().split() if term)
             rows = conn.execute(sql, [fts_query] + params + [limit]).fetchall()
         else:
-            filter_where = ""
-            if conditions:
-                filter_where = "WHERE " + " AND ".join(conditions)
+            filter_where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
             sql = f"""
-                SELECT item_type, item_id, title, content as snippet, tags, 0 as rank
+                SELECT item_type, item_id, title, content as snippet, tags, 0 as rank,
+                       rowid as fts_rowid
                 FROM memory_fts
                 {filter_where}
                 ORDER BY rowid DESC
@@ -123,19 +134,20 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
             key = f"{row['item_type']}-{row['item_id']}"
             if key not in seen:
                 seen.add(key)
-                results.append(
-                    {
-                        "item_type": row["item_type"],
-                        "item_id": row["item_id"],
-                        "title": row["title"],
-                        "snippet": row["snippet"] or "",
-                        "tags": row["tags"],
-                        "rank": row["rank"],
-                        "is_semantic": False,
-                    }
-                )
+                results.append({
+                    "item_type": row["item_type"],
+                    "item_id": row["item_id"],
+                    "title": row["title"],
+                    "snippet": row["snippet"] or "",
+                    "tags": row["tags"],
+                    "rank": row["rank"],
+                    "rowid": row["fts_rowid"],
+                    "is_semantic": False,
+                })
 
-    # 3. Utility Boost (Apply usage_count)
+        stale_rowids = _get_stale_rowids(conn)
+
+    # 3. Batch-fetch usage_count and last_used_at per type (avoids N+1 queries)
     table_map = {
         "mistake": "mistakes",
         "pattern": "patterns",
@@ -143,44 +155,42 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
         "conversation": "conversations",
         "prompt": "prompts",
     }
-
     usage_counts = {}
+    last_used_map = {}
+
     with get_connection(db_path) as conn:
-        # Group IDs by table to batch queries and avoid N+1 query slowdown
-        # Note: FTS5 stores item_id as text, core tables use integer — normalize to int
-        for item_type, table in table_map.items():
-            ids = [int(r["item_id"]) for r in results if r["item_type"] == item_type]
+        for itype, table in table_map.items():
+            ids = [int(r["item_id"]) for r in results if r["item_type"] == itype]
             if ids:
                 placeholders = ",".join("?" * len(ids))
                 rows = conn.execute(
-                    f"SELECT id, usage_count FROM {table} WHERE id IN ({placeholders})", ids
+                    f"SELECT id, usage_count, last_used_at FROM {table} WHERE id IN ({placeholders})",
+                    ids,
                 ).fetchall()
                 for row in rows:
-                    usage_counts[(item_type, row["id"])] = row["usage_count"] or 0
+                    key = (itype, row["id"])
+                    usage_counts[key] = row["usage_count"] or 0
+                    last_used_map[key] = row["last_used_at"]
 
-        for r in results:
-            usage_count = usage_counts.get((r["item_type"], int(r["item_id"])), 0)
-            # Base score: semantic matches get 100, FTS matches get 50.
-            # Boost: +15 points per successful usage.
-            base_score = 100.0 if r.get("is_semantic") else 50.0
-            r["utility_score"] = base_score + (usage_count * 15.0)
-
-    # 4. Project Affinity Boost
+    # 4. Project affinity
+    affinities = {}
     if project_path:
         try:
             project = get_or_create_project(project_path, db_path=db_path)
             affinities = get_project_affinities(results, project["id"], db_path=db_path)
-            affinity_boost = {"created": 40.0, "used": 25.0, "relevant": 10.0}
-            for r in results:
-                key = (r["item_type"], int(r["item_id"]))
-                if key in affinities:
-                    r["utility_score"] += affinity_boost.get(affinities[key], 10.0)
-                    r["project_affinity"] = affinities[key]
         except Exception:
-            pass  # Project context is a boost, not a requirement
+            pass
 
-    # Re-sort by utility score descending
-    results.sort(key=lambda x: x.get("utility_score", 0), reverse=True)
+    # 5. Rank using multi-factor scoring
+    results = rank_results(
+        results=results,
+        usage_counts=usage_counts,
+        last_used_map=last_used_map,
+        affinities=affinities,
+        query=query or "",
+        stale_rowids=stale_rowids,
+    )
+
     return results[:limit]
 
 
@@ -205,7 +215,9 @@ def get_recent(limit=10, item_type=None, db_path=None):
 
 
 def get_stats(db_path=None):
-    """Return counts of each item type and total tags."""
+    """Return counts of each item type, total tags, and embedding health."""
+    from .database import get_embedding_stats
+
     with get_connection(db_path) as conn:
         stats = {}
         for table, label in [
@@ -219,8 +231,8 @@ def get_stats(db_path=None):
             count = conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()["c"]
             stats[label] = count
 
-        # Total FTS entries
         fts_count = conn.execute("SELECT COUNT(*) as c FROM memory_fts").fetchone()["c"]
         stats["fts_indexed"] = fts_count
 
-        return stats
+    stats["embeddings"] = get_embedding_stats(db_path)
+    return stats

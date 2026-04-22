@@ -3,6 +3,9 @@ Database module — schema, connection, and migrations for Engram.
 Uses SQLite with FTS5 for full-text search. Zero external dependencies.
 """
 
+from __future__ import annotations
+
+
 import json
 import os
 from contextlib import contextmanager
@@ -18,13 +21,13 @@ except ImportError:
     sqlite_vec = None
 
 from .embeddings import embed_text
-from .migrations import run_migrations
+from .migrations import backup_before_migration, run_migrations
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
 DB_PATH = os.environ.get("ENGRAM_DB_PATH", DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -223,6 +226,48 @@ CREATE TABLE IF NOT EXISTS codebase_knowledge (
     UNIQUE(project_id, file_path)
 );
 
+-- Per-item embedding status for model migration visibility
+CREATE TABLE IF NOT EXISTS embedding_status (
+    fts_rowid INTEGER PRIMARY KEY,
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    embedding_model TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    error_message TEXT
+);
+
+-- Session state machine for workflow enforcement
+CREATE TABLE IF NOT EXISTS session_state (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+    current_phase TEXT NOT NULL DEFAULT 'analysis',
+    required_roles TEXT NOT NULL DEFAULT '[]',
+    completed_roles TEXT NOT NULL DEFAULT '[]',
+    can_proceed INTEGER NOT NULL DEFAULT 0
+);
+
+-- Archive table for soft-deleted memories (GC with --archive mode)
+CREATE TABLE IF NOT EXISTS archived_memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    original_table TEXT NOT NULL,
+    data TEXT NOT NULL,
+    archived_at TEXT DEFAULT (datetime('now')),
+    archive_reason TEXT
+);
+
+-- Cross-file relationship graph for codebase knowledge
+CREATE TABLE IF NOT EXISTS file_relationships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source_file TEXT NOT NULL,
+    target_file TEXT NOT NULL,
+    relationship_type TEXT NOT NULL,
+    UNIQUE(project_id, source_file, target_file, relationship_type)
+);
+
 -- Standard B-Tree Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_item_tags_tag_id ON item_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_mistakes_date ON mistakes(date);
@@ -233,6 +278,12 @@ CREATE INDEX IF NOT EXISTS idx_skills_domain ON skills(domain);
 CREATE INDEX IF NOT EXISTS idx_prompts_domain ON prompts(domain);
 CREATE INDEX IF NOT EXISTS idx_item_projects_project ON item_projects(project_id);
 CREATE INDEX IF NOT EXISTS idx_codebase_knowledge_project ON codebase_knowledge(project_id);
+CREATE INDEX IF NOT EXISTS idx_embedding_status_status ON embedding_status(status);
+CREATE INDEX IF NOT EXISTS idx_embedding_status_item ON embedding_status(item_type, item_id);
+CREATE INDEX IF NOT EXISTS idx_archived_memories_type ON archived_memories(item_type);
+CREATE INDEX IF NOT EXISTS idx_file_relationships_project ON file_relationships(project_id);
+CREATE INDEX IF NOT EXISTS idx_file_relationships_source ON file_relationships(project_id, source_file);
+CREATE INDEX IF NOT EXISTS idx_file_relationships_target ON file_relationships(project_id, target_file);
 """
 
 
@@ -276,6 +327,10 @@ def get_connection(db_path=None):
             if existing:
                 current_version = int(existing["value"])
                 if current_version < SCHEMA_VERSION:
+                    # Backup before any upgrade
+                    backup_path = backup_before_migration(path, current_version + 1)
+                    if backup_path:
+                        print(f"  ✓ Pre-migration backup saved to {backup_path}")
                     run_migrations(conn, current_version, SCHEMA_VERSION)
 
         yield conn
@@ -345,11 +400,21 @@ def get_tags_for_item(conn, item_type, item_id):
 
 def index_in_fts(conn, item_type, item_id, title, content, tags_list):
     """Insert or replace an item in the FTS index and generate its embedding."""
-    # Remove old entry if exists
-    conn.execute(
-        "DELETE FROM memory_fts WHERE item_type = ? AND item_id = ?",
+    import os as _os
+    embedding_model = _os.environ.get("ENGRAM_EMBEDDING_MODEL", "nomic-embed-text")
+
+    # Remove old FTS and embedding_status entries
+    old_row = conn.execute(
+        "SELECT rowid FROM memory_fts WHERE item_type = ? AND item_id = ?",
         (item_type, str(item_id)),
-    )
+    ).fetchone()
+    if old_row:
+        old_rowid = old_row["rowid"]
+        conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (old_rowid,))
+        conn.execute("DELETE FROM embedding_status WHERE fts_rowid = ?", (old_rowid,))
+        if sqlite_vec is not None:
+            conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (old_rowid,))
+
     tags_str = " ".join(tags_list) if tags_list else ""
     cursor = conn.execute(
         "INSERT INTO memory_fts (item_type, item_id, title, content, tags) VALUES (?, ?, ?, ?, ?)",
@@ -362,9 +427,29 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
     embedding = embed_text(full_text)
 
     if embedding and sqlite_vec is not None:
-        conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rowid,))
         conn.execute(
             "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)", (rowid, json.dumps(embedding))
+        )
+        conn.execute(
+            """INSERT INTO embedding_status (fts_rowid, item_type, item_id, embedding_model, status, updated_at)
+               VALUES (?, ?, ?, ?, 'ready', datetime('now'))
+               ON CONFLICT(fts_rowid) DO UPDATE SET
+                 embedding_model = excluded.embedding_model,
+                 status = 'ready',
+                 updated_at = datetime('now'),
+                 error_message = NULL""",
+            (rowid, item_type, int(item_id), embedding_model),
+        )
+    else:
+        # Mark as pending if Ollama is not available or sqlite_vec not loaded
+        status = "failed" if sqlite_vec is None else "pending"
+        conn.execute(
+            """INSERT INTO embedding_status (fts_rowid, item_type, item_id, embedding_model, status, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(fts_rowid) DO UPDATE SET
+                 status = excluded.status,
+                 updated_at = datetime('now')""",
+            (rowid, item_type, int(item_id), embedding_model, status),
         )
 
 
@@ -568,6 +653,170 @@ def get_project_affinities(results, project_id, db_path=None):
             if row:
                 affinities[(r["item_type"], int(r["item_id"]))] = row["affinity"]
     return affinities
+
+
+def find_similar(content: str, item_type: str | None = None, threshold: float = 0.85,
+                 limit: int = 5, db_path=None) -> list[dict]:
+    """Find memory items similar to the given content using vector search.
+
+    Returns a list of dicts with keys: item_type, item_id, title, snippet, distance.
+    Only works when sqlite_vec is available and Ollama is running.
+    Returns [] gracefully if either is unavailable.
+    """
+    from .embeddings import embed_text as _embed
+
+    embedding = _embed(content)
+    if not embedding or sqlite_vec is None:
+        return []
+
+    with get_connection(db_path) as conn:
+        try:
+            conditions = []
+            params = []
+            if item_type:
+                conditions.append("f.item_type = ?")
+                params.append(item_type)
+
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            sql = f"""
+                WITH matches AS (
+                    SELECT rowid, distance
+                    FROM vec_memory
+                    WHERE embedding MATCH ? AND k = ?
+                )
+                SELECT f.item_type, f.item_id, f.title, f.content AS snippet,
+                       m.distance,
+                       (1.0 - m.distance) AS similarity
+                FROM matches m
+                JOIN memory_fts f ON m.rowid = f.rowid
+                {where}
+                ORDER BY m.distance
+                LIMIT ?
+            """
+            rows = conn.execute(
+                sql, [json.dumps(embedding), limit * 3] + params + [limit]
+            ).fetchall()
+            results = []
+            for row in rows:
+                sim = row["similarity"]
+                if sim >= threshold:
+                    results.append({
+                        "item_type": row["item_type"],
+                        "item_id": row["item_id"],
+                        "title": row["title"],
+                        "snippet": (row["snippet"] or "")[:200],
+                        "distance": row["distance"],
+                        "similarity": round(sim, 4),
+                    })
+            return results
+        except Exception:
+            return []
+
+
+def get_embedding_stats(db_path=None) -> dict:
+    """Return counts of embedding_status values plus the current model."""
+    import os as _os
+    current_model = _os.environ.get("ENGRAM_EMBEDDING_MODEL", "nomic-embed-text")
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM embedding_status GROUP BY status"
+        ).fetchall()
+        counts = {r["status"]: r["cnt"] for r in rows}
+        total = sum(counts.values())
+        return {
+            "model": current_model,
+            "total": total,
+            "ready": counts.get("ready", 0),
+            "stale": counts.get("stale", 0),
+            "pending": counts.get("pending", 0),
+            "failed": counts.get("failed", 0),
+        }
+
+
+def mark_embeddings_stale(db_path=None) -> int:
+    """Mark all 'ready' embeddings as 'stale' (call when switching embedding models).
+
+    Returns the count of rows updated.
+    """
+    with get_connection(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE embedding_status SET status = 'stale', updated_at = datetime('now') "
+            "WHERE status = 'ready'"
+        )
+        return cursor.rowcount
+
+
+def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
+    """Re-generate embeddings for all stale/pending items.
+
+    Processes up to batch_size items per call.  Returns a progress dict:
+      {'processed': N, 'succeeded': N, 'failed': N, 'remaining': N}
+    """
+    import os as _os
+    from .embeddings import embed_text as _embed
+
+    if sqlite_vec is None:
+        return {"processed": 0, "succeeded": 0, "failed": 0, "remaining": 0, "error": "sqlite_vec not available"}
+
+    embedding_model = _os.environ.get("ENGRAM_EMBEDDING_MODEL", "nomic-embed-text")
+    succeeded = failed = 0
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT fts_rowid, item_type, item_id FROM embedding_status "
+            "WHERE status IN ('stale', 'pending') LIMIT ?",
+            (batch_size,)
+        ).fetchall()
+
+        for row in rows:
+            fts_row = conn.execute(
+                "SELECT title, content, tags FROM memory_fts WHERE rowid = ?",
+                (row["fts_rowid"],)
+            ).fetchone()
+            if not fts_row:
+                conn.execute(
+                    "UPDATE embedding_status SET status = 'failed', error_message = 'FTS row missing', "
+                    "updated_at = datetime('now') WHERE fts_rowid = ?",
+                    (row["fts_rowid"],)
+                )
+                failed += 1
+                continue
+
+            full_text = f"{fts_row['title']}\n{fts_row['content']}\n{fts_row['tags'] or ''}"
+            embedding = _embed(full_text, model=embedding_model)
+
+            if embedding:
+                conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (row["fts_rowid"],))
+                conn.execute(
+                    "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
+                    (row["fts_rowid"], json.dumps(embedding))
+                )
+                conn.execute(
+                    "UPDATE embedding_status SET status = 'ready', embedding_model = ?, "
+                    "updated_at = datetime('now'), error_message = NULL WHERE fts_rowid = ?",
+                    (embedding_model, row["fts_rowid"])
+                )
+                succeeded += 1
+            else:
+                conn.execute(
+                    "UPDATE embedding_status SET status = 'failed', "
+                    "error_message = 'Ollama unavailable or model not found', "
+                    "updated_at = datetime('now') WHERE fts_rowid = ?",
+                    (row["fts_rowid"],)
+                )
+                failed += 1
+
+        remaining = conn.execute(
+            "SELECT COUNT(*) as c FROM embedding_status WHERE status IN ('stale', 'pending')"
+        ).fetchone()["c"]
+
+    return {
+        "processed": len(rows),
+        "succeeded": succeeded,
+        "failed": failed,
+        "remaining": remaining,
+    }
 
 
 def delete_item(conn, item_type, item_id):

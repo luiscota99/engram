@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Engram MCP Server — Model Context Protocol interface for persistent memory.
 Exposes memory operations as tools over stdio JSON-RPC transport.
@@ -29,7 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.database import (
     delete_item,
+    find_similar,
     get_connection,
+    get_embedding_stats,
     get_item,
     get_or_create_project,
     get_session_details,
@@ -38,9 +42,20 @@ from src.database import (
     init_db,
     link_tags,
     record_usage,
+    reembed_stale,
 )
+from src.maintenance import find_consolidation_candidates, run_gc, run_health_check
+from src.merge import merge_available, merge_entries
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
+from src.workflow import (
+    WorkflowViolationError,
+    advance_phase,
+    check_decision_allowed,
+    get_session_state,
+    init_session_state,
+    record_role_contribution,
+)
 
 # ── MCP Protocol Constants ──────────────────────────────────────────
 
@@ -458,6 +473,118 @@ TOOLS = [
             "required": ["project_path"]
         }
     },
+    {
+        "name": "memory_check_workflow_state",
+        "description": "Check the current phase and role requirements for a committee session. Returns which roles are still needed before advancing to the next phase.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "The session ID to check"}
+            },
+            "required": ["session_id"]
+        }
+    },
+    {
+        "name": "memory_advance_phase",
+        "description": "Advance the session to the next workflow phase. Fails with an error if required roles have not yet contributed transcripts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "The session ID to advance"}
+            },
+            "required": ["session_id"]
+        }
+    },
+    {
+        "name": "memory_find_similar",
+        "description": "Check if a piece of content is similar to existing memories before inserting. Use this to detect near-duplicates and decide whether to merge, skip, or add.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "The content to check for similarity"},
+                "item_type": {
+                    "type": "string",
+                    "enum": ["mistake", "pattern", "skill", "conversation", "prompt"],
+                    "description": "Optional: restrict search to one type"
+                },
+                "threshold": {
+                    "type": "number",
+                    "description": "Similarity threshold 0-1 (default: 0.85)",
+                    "default": 0.85
+                }
+            },
+            "required": ["content"]
+        }
+    },
+    {
+        "name": "memory_merge_entries",
+        "description": "Use an LLM to synthesize two similar memory entries into one richer entry. Present the result to the user for approval before storing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "item_type_a": {"type": "string", "description": "Type of entry A"},
+                "item_id_a": {"type": "integer", "description": "ID of entry A"},
+                "item_type_b": {"type": "string", "description": "Type of entry B"},
+                "item_id_b": {"type": "integer", "description": "ID of entry B"}
+            },
+            "required": ["item_type_a", "item_id_a", "item_type_b", "item_id_b"]
+        }
+    },
+    {
+        "name": "memory_embedding_status",
+        "description": "Get the current status of embeddings (ready, stale, pending, failed) and the active embedding model. Use to monitor model migration progress.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "memory_health",
+        "description": "Get a comprehensive health report of the memory database including item stats, embedding health, index drift, GC candidates, and actionable recommendations.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "memory_suggest_consolidations",
+        "description": "Find clusters of near-duplicate memories that could be merged using memory_consolidate_skills or memory_merge_entries. Returns grouped candidates by similarity.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "threshold": {
+                    "type": "number",
+                    "description": "Similarity threshold 0-1 (default: 0.80)",
+                    "default": 0.80
+                },
+                "item_type": {
+                    "type": "string",
+                    "enum": ["mistake", "pattern", "skill"],
+                    "description": "Optional: restrict to one type"
+                }
+            }
+        }
+    },
+    {
+        "name": "memory_gc",
+        "description": "Identify (dry-run) or archive unused memories older than a threshold. Always dry-run first and present results to the user before archiving.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["dry-run", "archive"],
+                    "default": "dry-run",
+                    "description": "dry-run reports candidates; archive soft-deletes them"
+                },
+                "days_unused": {
+                    "type": "integer",
+                    "default": 180,
+                    "description": "Unused for this many days (default: 180)"
+                }
+            }
+        }
+    },
 ]
 
 
@@ -718,42 +845,65 @@ def handle_memory_get_session(args):
 
 
 def handle_memory_init_session(args):
+    session_id = args["session_id"]
+    workflow_used = args.get("workflow_used")
+
     with get_connection() as conn:
         cursor = conn.execute(
             """INSERT INTO sessions (session_id, title, date, domain, workflow_used)
                VALUES (?, ?, ?, ?, ?)""",
-            (
-                args["session_id"],
-                args["title"],
-                args["date"],
-                args["domain"],
-                args.get("workflow_used"),
-            ),
+            (session_id, args["title"], args["date"], args["domain"], workflow_used),
         )
         sid = cursor.lastrowid
-        content = f"{args['title']} | {args.get('workflow_used', '')}"
-        index_in_fts(conn, "session", sid, args["session_id"], content, [])
-    return f"Session '{args['session_id']}' initialized successfully."
+        content = f"{args['title']} | {workflow_used or ''}"
+        index_in_fts(conn, "session", sid, session_id, content, [])
+
+    # Initialize workflow state machine for this session
+    state = init_session_state(session_id, workflow_name=workflow_used)
+    phase_info = ""
+    if state and state.get("current_phase"):
+        required = ", ".join(state["required_roles"]) or "none"
+        phase_info = f" Starting phase: '{state['current_phase']}' (required roles: {required})."
+
+    return f"Session '{session_id}' initialized successfully.{phase_info}"
 
 
 def handle_memory_add_transcript(args):
+    session_id = args["session_id"]
+    role = args["role"]
     with get_connection() as conn:
         conn.execute(
             """INSERT INTO session_transcripts (session_id, role, content)
                VALUES (?, ?, ?)""",
-            (args["session_id"], args["role"], args["content"]),
+            (session_id, role, args["content"]),
         )
-    return f"Transcript entry for '{args['role']}' added to session '{args['session_id']}'."
+    # Update workflow state for this role's contribution
+    state = record_role_contribution(session_id, role)
+    status = ""
+    if state["current_phase"]:
+        if state["can_proceed"]:
+            status = f" All required roles have contributed. Ready to advance phase or add a decision."
+        else:
+            remaining = ", ".join(state["missing_roles"])
+            status = f" Still waiting for: {remaining}."
+    return f"Transcript entry for '{role}' added to session '{session_id}'.{status}"
 
 
 def handle_memory_add_decision(args):
+    session_id = args["session_id"]
+    # Enforce workflow gate: all required roles must have contributed
+    try:
+        check_decision_allowed(session_id)
+    except WorkflowViolationError as e:
+        return f"WorkflowViolation: {e}"
+
     with get_connection() as conn:
         conn.execute(
             """UPDATE sessions SET key_decisions = IFNULL(key_decisions, '') || char(10) || ?
                WHERE session_id = ?""",
-            (args["decision"], args["session_id"]),
+            (args["decision"], session_id),
         )
-    return f"Decision added to session '{args['session_id']}'."
+    return f"Decision added to session '{session_id}'."
 
 
 def handle_memory_get_role(args):
@@ -981,6 +1131,163 @@ def handle_memory_session_review(args):
     return prompt
 
 
+def handle_memory_check_workflow_state(args):
+    session_id = args.get("session_id")
+    if not session_id:
+        return "Error: session_id is required."
+    state = get_session_state(session_id)
+    if not state["current_phase"]:
+        return f"No workflow state found for session '{session_id}'. Call memory_init_session first."
+    lines = [
+        f"Session: {session_id}",
+        f"Current phase: {state['current_phase']}",
+        f"Required roles: {', '.join(state['required_roles']) or 'none'}",
+        f"Completed roles: {', '.join(state['completed_roles']) or 'none'}",
+        f"Can proceed: {'Yes' if state['can_proceed'] else 'No'}",
+    ]
+    if state["missing_roles"]:
+        lines.append(f"⚠ Missing roles: {', '.join(state['missing_roles'])}")
+    return "\n".join(lines)
+
+
+def handle_memory_advance_phase(args):
+    session_id = args.get("session_id")
+    if not session_id:
+        return "Error: session_id is required."
+    try:
+        state = advance_phase(session_id)
+        return (
+            f"Advanced to phase '{state['current_phase']}'.\n"
+            f"Required roles for this phase: {', '.join(state['required_roles']) or 'none'}"
+        )
+    except WorkflowViolationError as e:
+        return f"Workflow violation: {e}"
+
+
+def handle_memory_find_similar(args):
+    content = args.get("content", "")
+    item_type = args.get("item_type")
+    threshold = float(args.get("threshold", 0.85))
+    if not content:
+        return "Error: content is required."
+    results = find_similar(content, item_type=item_type, threshold=threshold)
+    if not results:
+        return "No similar entries found above the threshold. Safe to add as new entry."
+    lines = [f"Found {len(results)} similar entries (threshold: {threshold}):\n"]
+    for r in results:
+        lines.append(f"  [{r['item_type'].upper()} ID:{r['item_id']}] {r['title']} (similarity: {r['similarity']})")
+        if r.get("snippet"):
+            lines.append(f"    {r['snippet'][:120]}...")
+    lines.append("\nOptions: skip | add_anyway | replace (delete old + add new) | merge (call memory_merge_entries)")
+    return "\n".join(lines)
+
+
+def handle_memory_merge_entries(args):
+    item_type_a = args.get("item_type_a")
+    item_id_a = args.get("item_id_a")
+    item_type_b = args.get("item_type_b")
+    item_id_b = args.get("item_id_b")
+
+    if not all([item_type_a, item_id_a, item_type_b, item_id_b]):
+        return "Error: item_type_a, item_id_a, item_type_b, item_id_b are all required."
+
+    if not merge_available():
+        return "Error: Ollama is not available. Cannot perform LLM-assisted merge."
+
+    entry_a = get_item(item_type_a, item_id_a)
+    entry_b = get_item(item_type_b, item_id_b)
+
+    if not entry_a:
+        return f"Error: {item_type_a} ID {item_id_a} not found."
+    if not entry_b:
+        return f"Error: {item_type_b} ID {item_id_b} not found."
+
+    merged = merge_entries(entry_a, entry_b)
+    if not merged:
+        return "Merge failed: LLM did not return valid JSON. Try again or merge manually."
+
+    return (
+        f"Merged entry draft (present to user for approval before storing):\n\n"
+        f"```json\n{json.dumps(merged, indent=2)}\n```\n\n"
+        f"After approval:\n"
+        f"1. Use the appropriate memory_add_* tool to store the merged entry\n"
+        f"2. Delete old entries: memory_read_item was called — you can now delete IDs "
+        f"{item_id_a} and {item_id_b} from the core tables via consolidate tool"
+    )
+
+
+def handle_memory_embedding_status(args):
+    stats = get_embedding_stats()
+    total = stats.get("total", 0)
+    model = stats.get("model", "unknown")
+    lines = [f"Embedding Status (model: {model}):"]
+    if total > 0:
+        def pct(n): return f"{100*n/total:.1f}%"
+        lines.append(f"  Ready:   {stats['ready']:4d} ({pct(stats['ready'])})")
+        if stats["stale"]:
+            lines.append(f"  Stale:   {stats['stale']:4d} ({pct(stats['stale'])})  ← run engram reembed")
+        if stats["pending"]:
+            lines.append(f"  Pending: {stats['pending']:4d} ({pct(stats['pending'])})")
+        if stats["failed"]:
+            lines.append(f"  Failed:  {stats['failed']:4d} ({pct(stats['failed'])})")
+    else:
+        lines.append("  No embeddings tracked yet.")
+    return "\n".join(lines)
+
+
+def handle_memory_health(args):
+    report = run_health_check()
+    lines = ["Memory Health Report\n"]
+    for itype, stats in report.get("items", {}).items():
+        if stats["total"] > 0:
+            lines.append(f"  {itype}: {stats['total']} total, {stats['unused_180_plus_days']} GC candidates")
+    emb = report.get("embeddings", {})
+    if emb:
+        lines.append(f"\nEmbeddings ({emb.get('model','?')}): ready={emb.get('ready',0)}, stale={emb.get('stale',0)}, pending={emb.get('pending',0)}")
+    lines.append(f"\nFTS: {report.get('fts_total',0)}, Vec: {report.get('vec_total',0)}, Drift: {report.get('vec_drift',0)}")
+    lines.append(f"Orphaned tags: {report.get('orphaned_tags',0)}, GC candidates: {report.get('gc_candidates',0)}")
+    recs = report.get("recommendations", [])
+    if recs:
+        lines.append("\nRecommendations:")
+        for rec in recs:
+            lines.append(f"  • {rec}")
+    return "\n".join(lines)
+
+
+def handle_memory_suggest_consolidations(args):
+    threshold = float(args.get("threshold", 0.80))
+    item_type = args.get("item_type")
+    clusters = find_consolidation_candidates(
+        threshold=threshold,
+        item_types=[item_type] if item_type else None,
+    )
+    if not clusters:
+        return f"No consolidation candidates found at similarity threshold {threshold}."
+    lines = [f"Found {len(clusters)} consolidation candidate(s) (threshold: {threshold}):\n"]
+    for i, cluster in enumerate(clusters[:20], 1):
+        lines.append(f"Cluster {i} — {cluster['item_type']} (similarity: {cluster['similarity']})")
+        for item in cluster["items"]:
+            lines.append(f"  ID:{item['item_id']}  {item['title']}")
+    return "\n".join(lines)
+
+
+def handle_memory_gc(args):
+    mode = args.get("mode", "dry-run")
+    days = int(args.get("days_unused", 180))
+    result = run_gc(mode=mode, days_unused=days)
+    candidates = result["candidates"]
+    if not candidates:
+        return f"No GC candidates found (threshold: unused for {days}+ days)."
+    lines = [f"GC {mode} — {len(candidates)} candidate(s) unused for {days}+ days:\n"]
+    for c in candidates[:30]:
+        lines.append(f"  [{c['item_type'].upper()} ID:{c['item_id']}] created: {c['created_at'] or 'unknown'}")
+    if mode == "dry-run":
+        lines.append(f"\nCall with mode='archive' to soft-delete these items.")
+    else:
+        lines.append(f"\nArchived {result['processed']} items.")
+    return "\n".join(lines)
+
+
 TOOL_HANDLERS = {
     "memory_record_usage": handle_memory_record_usage,
     "memory_read_item": handle_memory_read_item,
@@ -1003,6 +1310,14 @@ TOOL_HANDLERS = {
     "memory_index_file": handle_memory_index_file,
     "memory_query_codebase": handle_memory_query_codebase,
     "memory_get_stale_files": handle_memory_get_stale_files,
+    "memory_check_workflow_state": handle_memory_check_workflow_state,
+    "memory_advance_phase": handle_memory_advance_phase,
+    "memory_find_similar": handle_memory_find_similar,
+    "memory_merge_entries": handle_memory_merge_entries,
+    "memory_embedding_status": handle_memory_embedding_status,
+    "memory_health": handle_memory_health,
+    "memory_suggest_consolidations": handle_memory_suggest_consolidations,
+    "memory_gc": handle_memory_gc,
 }
 
 

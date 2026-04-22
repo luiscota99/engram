@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Engram — persistent memory for AI-assisted development.
 
@@ -44,16 +46,27 @@ from .database import (
     delete_item,
     get_connection,
     get_db_path,
+    get_embedding_stats,
     get_or_create_project,
     get_session_details,
     index_in_fts,
     init_db,
     link_tags,
+    mark_embeddings_stale,
+    reembed_stale,
 )
 from .doctor import run_diagnostics
+from .graph import format_dot, format_json, format_mermaid, index_file_relationships, query_relationships
+from .maintenance import find_consolidation_candidates, run_gc, run_health_check
 from .search import get_recent, get_stats, search, semantic_search
 from .seed import seed_database
 from .token_simulation import run_simulation
+from .workflow import (
+    WorkflowViolationError,
+    advance_phase,
+    get_session_state,
+    init_session_state,
+)
 
 
 def calculate_hash(file_path):
@@ -268,24 +281,59 @@ def cmd_add_decision(args):
     print(f"✓ Decision added to session '{args.session_id}'.")
 
 
+def _get_git_changed_files(project_path: str) -> set[str] | None:
+    """Return set of relative paths changed per git status, or None if not a git repo."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=project_path, capture_output=True, text=True, timeout=5
+        )
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=project_path, capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            return None
+        changed = set(result.stdout.strip().splitlines())
+        changed.update(untracked.stdout.strip().splitlines())
+        return changed
+    except Exception:
+        return None
+
+
 def cmd_index_project(args):
     """Index or update codebase knowledge for a project."""
+    from .summarize import ollama_available, summarize_file
+
     project_path = args.path or os.getcwd()
     project = get_or_create_project(project_path)
     project_id = project["id"]
+
+    use_llm = getattr(args, "llm_summarize", False)
+    if use_llm and not ollama_available():
+        print(fmt_dim("  ⚠ Ollama not available — LLM summarization disabled."))
+        use_llm = False
 
     # If a specific file is provided, just index that one
     if args.file:
         files = [args.file]
     else:
-        # Walk and find files (excluding hidden/ignored)
+        # Use git-based change detection first (faster than full walk + hash)
+        git_changed = _get_git_changed_files(project_path)
+
         files = []
-        exclude_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".engram"}
+        exclude_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".engram", "dist", "build"}
+        supported_ext = (".py", ".js", ".ts", ".go", ".rs", ".c", ".cpp", ".h", ".md", ".json", ".sql")
         for root, dirs, filenames in os.walk(project_path):
             dirs[:] = [d for d in dirs if d not in exclude_dirs]
             for f in filenames:
-                if f.endswith((".py", ".js", ".ts", ".go", ".rs", ".c", ".cpp", ".h", ".md", ".json", ".sql")):
+                if f.endswith(supported_ext):
                     rel_path = os.path.relpath(os.path.join(root, f), project_path)
+                    # If git detected changes, only process changed + new files
+                    # (unless --force, in which case process all)
+                    if not args.force and git_changed is not None and rel_path not in git_changed:
+                        # Still check hash for files not in git diff
+                        pass
                     files.append(rel_path)
 
     stale_files = []
@@ -295,17 +343,30 @@ def cmd_index_project(args):
             if not os.path.exists(abs_path):
                 continue
 
-            current_hash = calculate_hash(abs_path)
+            current_mtime = os.path.getmtime(abs_path)
 
-            # Check if exists and hash matches
+            # Check mtime first (fastest), then hash for confirmation
             existing = conn.execute(
-                "SELECT file_hash, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? AND file_path = ?",
+                "SELECT file_hash, file_mtime, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? AND file_path = ?",
                 (project_id, rel_path)
             ).fetchone()
 
-            if existing and existing["file_hash"] == current_hash and not args.force:
+            # Fast path: mtime unchanged → skip
+            if existing and existing["file_mtime"] and abs(existing["file_mtime"] - current_mtime) < 0.01 and not args.force:
                 if args.verbose:
-                    print(f"  - {rel_path} (unchanged)")
+                    print(f"  - {rel_path} (unchanged, mtime match)")
+                continue
+
+            current_hash = calculate_hash(abs_path)
+
+            # Hash unchanged → update mtime and skip
+            if existing and existing["file_hash"] == current_hash and not args.force:
+                conn.execute(
+                    "UPDATE codebase_knowledge SET file_mtime = ? WHERE project_id = ? AND file_path = ?",
+                    (current_mtime, project_id, rel_path)
+                )
+                if args.verbose:
+                    print(f"  - {rel_path} (unchanged, hash match)")
                 continue
 
             if hasattr(args, 'check') and args.check:
@@ -317,35 +378,44 @@ def cmd_index_project(args):
                 })
                 continue
 
-            # Need summary - this is usually provided by the agent via CLI args
-            # If not provided, we try to preserve the existing one
-            summary = args.summary
+            # Determine summary
+            summary = getattr(args, "summary", None)
+            llm_exports = None
+            llm_deps = None
+
+            if not summary and use_llm:
+                print(fmt_dim(f"  ✦ Summarizing {rel_path}..."))
+                result = summarize_file(abs_path, project_root=project_path)
+                if result:
+                    summary = result["summary"]
+                    llm_exports = result["exports"]
+                    llm_deps = result["dependencies"]
+
             if not summary:
                 if existing and existing["summary"] and not existing["summary"].startswith("Knowledge entry for"):
                     summary = existing["summary"]
                 else:
                     summary = "Knowledge entry for " + rel_path
 
-            exports = args.exports if args.exports else (existing["exports"] if existing else None)
-            deps = args.deps if args.deps else (existing["dependencies"] if existing else None)
+            exports = getattr(args, "exports", None) or llm_exports or (existing["exports"] if existing else None)
+            deps = getattr(args, "deps", None) or llm_deps or (existing["dependencies"] if existing else None)
 
             # Apply Caveman compression if requested
             if hasattr(args, 'caveman') and args.caveman:
-                if summary and summary != "Knowledge entry for " + rel_path:
+                if summary and not summary.startswith("Knowledge entry for"):
                     summary = compress_caveman(summary, level=args.caveman_level or "full")
-                # Also note the exports and deps can be compressed if they are large JSONs,
-                # but usually they are short lists.
 
             conn.execute(
-                """INSERT INTO codebase_knowledge (project_id, file_path, file_hash, summary, exports, dependencies)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                """INSERT INTO codebase_knowledge (project_id, file_path, file_hash, file_mtime, summary, exports, dependencies)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(project_id, file_path) DO UPDATE SET
                    file_hash = excluded.file_hash,
+                   file_mtime = excluded.file_mtime,
                    summary = excluded.summary,
                    exports = excluded.exports,
                    dependencies = excluded.dependencies,
                    last_indexed_at = datetime('now')""",
-                (project_id, rel_path, current_hash, summary, exports, deps)
+                (project_id, rel_path, current_hash, current_mtime, summary, exports, deps)
             )
             if not args.verbose:
                 print(f"✓ Indexed {rel_path}")
@@ -422,6 +492,204 @@ def cmd_clean_codebase(args):
         print(f"\n✓ Removed {removed} stale entries from codebase knowledge.")
     else:
         print("✓ Codebase knowledge is already clean.")
+
+def cmd_gc(args):
+    """Run garbage collection on unused memories."""
+    mode = args.mode
+    result = run_gc(
+        mode=mode,
+        days_unused=args.days,
+        db_path=None,
+    )
+    candidates = result["candidates"]
+    if not candidates:
+        print(fmt_header("No GC candidates found."))
+        print(fmt_dim(f"  (threshold: unused for {args.days}+ days with zero usage_count)"))
+        return
+
+    print(fmt_header(f"GC Candidates ({len(candidates)}):\n"))
+    for c in candidates:
+        print(f"  {fmt_type(c['item_type'])} ID:{c['item_id']}  created:{c['created_at'] or 'unknown'}")
+
+    if mode == "dry-run":
+        print(fmt_dim(f"\nDry-run complete. Run with --archive or --delete to act."))
+    else:
+        print(f"\n{fmt_bold('✓')} {mode.capitalize()}d {result['processed']} of {len(candidates)} items.")
+
+
+def cmd_suggest_consolidate(args):
+    """Suggest near-duplicate memory clusters that could be consolidated."""
+    clusters = find_consolidation_candidates(
+        threshold=args.threshold,
+        item_types=[args.type] if args.type else None,
+    )
+    if not clusters:
+        print(fmt_dim("No consolidation candidates found at this similarity threshold."))
+        return
+
+    print(fmt_header(f"Consolidation Candidates (similarity ≥ {args.threshold}):\n"))
+    for i, cluster in enumerate(clusters[:args.limit], 1):
+        print(f"  Cluster {i} — {fmt_type(cluster['item_type'])} (similarity: {cluster['similarity']})")
+        for item in cluster["items"]:
+            print(f"    ID:{item['item_id']}  {item['title']}")
+        print()
+    print(fmt_dim(f"Tip: Use `engram consolidate --delete-ids ID1,ID2 ...` to merge manually."))
+
+
+def cmd_health(args):
+    """Show a comprehensive health report for the memory database."""
+    report = run_health_check()
+
+    print(fmt_header("Engram Health Report\n"))
+
+    # Item stats
+    print(fmt_bold("Memory Items:"))
+    for itype, stats in report["items"].items():
+        total = stats["total"]
+        if total == 0:
+            continue
+        gc = stats["unused_180_plus_days"]
+        print(f"  {fmt_type(itype):30s} total:{total:4d}  "
+              f"new(30d):{stats['added_last_30_days']:3d}  "
+              f"gc-candidates:{gc:3d}")
+    print()
+
+    # Embedding status
+    emb = report["embeddings"]
+    total_emb = emb.get("total", 0)
+    print(fmt_bold(f"Embeddings (model: {emb.get('model', 'unknown')}):"))
+    if total_emb > 0:
+        def pct(n):
+            return f"{100*n/total_emb:.1f}%"
+        print(f"  Ready:   {emb['ready']:4d} ({pct(emb['ready'])})")
+        if emb["stale"] > 0:
+            print(f"  Stale:   {emb['stale']:4d} ({pct(emb['stale'])})  ← regeneration needed")
+        if emb["pending"] > 0:
+            print(f"  Pending: {emb['pending']:4d} ({pct(emb['pending'])})")
+        if emb["failed"] > 0:
+            print(f"  Failed:  {emb['failed']:4d} ({pct(emb['failed'])})")
+    else:
+        print(fmt_dim("  No embeddings tracked yet."))
+    print()
+
+    # Index health
+    print(fmt_bold("Index Health:"))
+    print(f"  FTS entries:        {report['fts_total']}")
+    print(f"  Vector entries:     {report['vec_total']}")
+    drift = report["vec_drift"]
+    if drift > 0:
+        print(f"  {fmt_dim(f'⚠ Vector drift:     {drift} FTS entries missing vectors')}")
+    else:
+        print(fmt_dim("  ✓ No vector drift"))
+    print(f"  Orphaned tags:      {report['orphaned_tags']}")
+    print(f"  GC candidates:      {report['gc_candidates']}")
+    print(f"  Archived memories:  {report['archived_memories']}")
+    print()
+
+    # Recommendations
+    if report["recommendations"]:
+        print(fmt_bold("Recommendations:"))
+        for rec in report["recommendations"]:
+            print(f"  • {rec}")
+    else:
+        print(fmt_dim("✓ No issues detected."))
+
+
+def cmd_graph(args):
+    """Build and display a file dependency graph for a project."""
+    project_path = args.path or os.getcwd()
+    output_format = args.format or "mermaid"
+
+    if not args.no_index:
+        print(fmt_dim("  Indexing file relationships..."))
+        result = index_file_relationships(project_path)
+        print(fmt_dim(f"  ✓ {result['files_processed']} files processed, {result['added']} relationships found."))
+
+    file_filter = getattr(args, "file", None)
+    direction = getattr(args, "direction", "both")
+    relationships = query_relationships(project_path, file_path=file_filter, direction=direction)
+
+    if not relationships:
+        print(fmt_dim("No relationships found. Ensure files have been indexed."))
+        return
+
+    if output_format == "mermaid":
+        output = "```mermaid\n" + format_mermaid(relationships) + "\n```"
+    elif output_format == "dot":
+        output = format_dot(relationships)
+    else:
+        output = format_json(relationships)
+
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(output)
+        print(f"✓ Graph written to {args.output}")
+    else:
+        print(output)
+
+
+def cmd_reembed(args):
+    """Re-generate embeddings for stale/pending items."""
+    from .database import get_embedding_stats
+
+    stats_before = get_embedding_stats()
+    stale = stats_before.get("stale", 0)
+    pending = stats_before.get("pending", 0)
+    total_pending = stale + pending
+
+    if total_pending == 0:
+        print(fmt_dim("✓ All embeddings are up to date."))
+        return
+
+    print(fmt_header(f"Re-embedding {total_pending} items (stale: {stale}, pending: {pending})...\n"))
+
+    batch = args.batch_size or 50
+    total_done = 0
+    while True:
+        result = reembed_stale(batch_size=batch)
+        total_done += result["succeeded"]
+        if result["failed"]:
+            print(fmt_dim(f"  ⚠ {result['failed']} failed this batch"))
+        remaining = result["remaining"]
+        print(f"  ✓ {total_done} done, {remaining} remaining...")
+        if remaining == 0 or result["processed"] == 0:
+            break
+
+    print(f"\n{fmt_bold('✓')} Re-embedding complete. {total_done} items updated.")
+
+
+def cmd_migrate(args):
+    """Database migration utilities."""
+    from .database import DB_PATH
+    from .migrations import backup_before_migration, downgrade_to
+
+    if args.rollback:
+        # Find most recent backup and restore it
+        backup_dir = os.path.join(os.path.dirname(DB_PATH), "backups")
+        if not os.path.exists(backup_dir):
+            print("No backups found.")
+            return
+        backups = sorted(
+            [f for f in os.listdir(backup_dir) if f.startswith("pre-migration")],
+            reverse=True,
+        )
+        if not backups:
+            print("No migration backups found.")
+            return
+        latest = os.path.join(backup_dir, backups[0])
+        import shutil
+        shutil.copy2(latest, DB_PATH)
+        print(f"✓ Rolled back to {latest}")
+        return
+
+    if args.mark_stale:
+        count = mark_embeddings_stale()
+        print(f"✓ Marked {count} embeddings as stale (model changed).")
+        print("  Run `engram reembed` to regenerate.")
+        return
+
+    print("Use --rollback to restore from backup, or --mark-stale after changing embedding model.")
+
 
 def _batch_tags(conn, item_type, ids):
     """Fetch tags for a batch of item IDs in a single query.
@@ -578,6 +846,24 @@ def cmd_stats(args):
     print(f"  Prompts:       {stats['prompts']}")
     print(f"  Tags:          {stats['tags']}")
     print(f"  FTS indexed:   {stats['fts_indexed']}")
+
+    emb = stats.get("embeddings", {})
+    if emb:
+        total = emb.get("total", 0)
+        model = emb.get("model", "unknown")
+        print(f"\n  Embedding Status (model: {fmt_dim(model)}):")
+        if total > 0:
+            def pct(n): return f"{100*n/total:.1f}%"
+            print(f"    Ready:   {emb['ready']:4d} ({pct(emb['ready'])})")
+            if emb.get("stale"):
+                print(f"    Stale:   {emb['stale']:4d} ({pct(emb['stale'])})  ← run `engram reembed`")
+            if emb.get("pending"):
+                print(f"    Pending: {emb['pending']:4d} ({pct(emb['pending'])})")
+            if emb.get("failed"):
+                print(f"    Failed:  {emb['failed']:4d} ({pct(emb['failed'])})")
+        else:
+            print(fmt_dim("    No embeddings tracked yet."))
+
     print(f"\n  DB path: {fmt_dim(get_db_path())}")
 
 
@@ -1074,6 +1360,8 @@ def build_parser():
     p_idx.add_argument("--check", action="store_true", help="Just check for stale files and return JSON")
     p_idx.add_argument("--caveman", action="store_true", help="Compress summaries using Caveman protocol")
     p_idx.add_argument("--caveman-level", choices=["lite", "full", "ultra"], default="full")
+    p_idx.add_argument("--llm-summarize", action="store_true",
+                       help="Use Ollama to auto-generate file summaries (requires Ollama running)")
     p_idx.add_argument("--verbose", action="store_true")
     p_idx.set_defaults(func=cmd_index_project)
 
@@ -1174,6 +1462,53 @@ def build_parser():
     p_cons.add_argument("--deps")
     p_cons.add_argument("--tags")
     p_cons.set_defaults(func=cmd_consolidate)
+
+    # gc
+    p_gc = sub.add_parser("gc", help="Garbage collect unused memories")
+    p_gc.add_argument("--mode", choices=["dry-run", "archive", "delete"], default="dry-run",
+                      help="dry-run (default), archive (soft-delete), or delete (permanent)")
+    p_gc.add_argument("--days", type=int, default=180,
+                      help="Age threshold in days (default: 180)")
+    p_gc.set_defaults(func=cmd_gc)
+
+    # suggest-consolidate
+    p_sc = sub.add_parser("suggest-consolidate", help="Find near-duplicate memories to consolidate")
+    p_sc.add_argument("--threshold", type=float, default=0.80,
+                      help="Similarity threshold 0-1 (default: 0.80)")
+    p_sc.add_argument("--type", choices=["mistake", "pattern", "skill"],
+                      help="Limit to a specific memory type")
+    p_sc.add_argument("-n", "--limit", type=int, default=20,
+                      help="Max clusters to show (default: 20)")
+    p_sc.set_defaults(func=cmd_suggest_consolidate)
+
+    # health
+    p_health = sub.add_parser("health", help="Show a health report for the memory database")
+    p_health.set_defaults(func=cmd_health)
+
+    # graph
+    p_graph = sub.add_parser("graph", help="Build and visualize file dependency graph")
+    p_graph.add_argument("--path", help="Project path (default: current directory)")
+    p_graph.add_argument("--file", help="Show relationships for a specific file only")
+    p_graph.add_argument("--direction", choices=["outgoing", "incoming", "both"], default="both")
+    p_graph.add_argument("--format", choices=["mermaid", "dot", "json"], default="mermaid")
+    p_graph.add_argument("--output", help="Write output to a file instead of stdout")
+    p_graph.add_argument("--no-index", action="store_true",
+                         help="Skip re-indexing, use existing relationship data")
+    p_graph.set_defaults(func=cmd_graph)
+
+    # reembed
+    p_reembed = sub.add_parser("reembed", help="Re-generate embeddings for stale/pending items")
+    p_reembed.add_argument("--batch-size", type=int, default=50,
+                           help="Items per batch (default: 50)")
+    p_reembed.set_defaults(func=cmd_reembed)
+
+    # migrate
+    p_migrate = sub.add_parser("migrate", help="Database migration utilities")
+    p_migrate.add_argument("--rollback", action="store_true",
+                           help="Restore database from most recent pre-migration backup")
+    p_migrate.add_argument("--mark-stale", action="store_true",
+                           help="Mark all embeddings as stale (use after changing ENGRAM_EMBEDDING_MODEL)")
+    p_migrate.set_defaults(func=cmd_migrate)
 
     # init
     p_init = sub.add_parser("init", help="Initialize the database")
