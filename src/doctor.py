@@ -108,10 +108,12 @@ def run_diagnostics(repair=False):
 
         # 4. Semantic Engine Health (Ollama)
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        ollama_available = False
         try:
             req = urllib.request.Request(ollama_host, method="GET")
             with urllib.request.urlopen(req, timeout=2) as response:
                 if response.status == 200:
+                    ollama_available = True
                     print("✓ Semantic Engine: Ollama is reachable.")
                 else:
                     issues_found += 1
@@ -131,7 +133,45 @@ def run_diagnostics(repair=False):
             issues_found += 1
             print(fmt_error(f"Semantic Engine Offline: {str(e)}"))
 
-        # 5. Dynamic Index Suggestions (Anti-Bloat/Performance)
+        # 5. Failed Embeddings Recovery
+        failed_count = conn.execute(
+            "SELECT COUNT(*) FROM embedding_status WHERE status = 'failed'"
+        ).fetchone()[0]
+        if failed_count > 0:
+            issues_found += 1
+            print(fmt_error(f"Found {failed_count} failed embeddings that can be retried."))
+            if repair and ollama_available:
+                conn.execute(
+                    "UPDATE embedding_status SET status = 'pending', error_message = NULL, "
+                    "updated_at = datetime('now') WHERE status = 'failed'"
+                )
+                issues_fixed += 1
+                print(f"  ✓ Repair: Reset {failed_count} failed embeddings to pending.")
+                print(fmt_dim("    Run `engram reembed` to regenerate them."))
+            elif repair:
+                print(fmt_dim("  Skipping reset: Ollama is not available. Start Ollama first, then re-run doctor --repair."))
+        else:
+            print("✓ Embeddings: No failed embeddings found.")
+
+        # 6. Orphaned embedding_status entries
+        orphan_status = conn.execute(
+            "SELECT COUNT(*) FROM embedding_status es "
+            "LEFT JOIN memory_fts mf ON mf.rowid = es.fts_rowid "
+            "WHERE mf.rowid IS NULL"
+        ).fetchone()[0]
+        if orphan_status > 0:
+            issues_found += 1
+            print(fmt_error(f"Found {orphan_status} orphaned embedding_status entries."))
+            if repair:
+                conn.execute(
+                    "DELETE FROM embedding_status WHERE fts_rowid NOT IN (SELECT rowid FROM memory_fts)"
+                )
+                issues_fixed += 1
+                print(f"  ✓ Repair: Removed {orphan_status} orphaned embedding_status entries.")
+        else:
+            print("✓ Embedding Status: No orphaned entries found.")
+
+        # 7. Dynamic Index Suggestions (Anti-Bloat/Performance)
         for table in ["mistakes", "patterns", "skills", "conversations", "prompts", "sessions"]:
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             if count > 10000:

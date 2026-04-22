@@ -851,3 +851,4 @@ def delete_item(conn, item_type, item_id):
         conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rowid,))
         if sqlite_vec is not None:
             conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rowid,))
+        conn.execute("DELETE FROM embedding_status WHERE fts_rowid = ?", (rowid,))
