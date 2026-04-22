@@ -8,7 +8,6 @@ import pytest
 
 from src.database import get_connection, index_in_fts, link_tags
 
-
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _seed_skill(db_path: str, name: str = "Test Skill", domain: str = "engineering") -> int:
