@@ -1,6 +1,6 @@
 # 🧠 Engram
 
-![Engram Hero Banner](engram_hero_banner_1776720650127.png)
+![Engram Hero Banner](engram_hero_banner.png)
 
 **Persistent engineering memory for AI-assisted development.**  
 Stop repeating mistakes. Reuse proven workflows. Recognize familiar problems instantly.
