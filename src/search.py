@@ -12,6 +12,11 @@ from .embeddings import embed_text
 from .ranking import rank_results
 
 
+class SearchResults(list):
+    """A list subclass that carries a ``semantic_status`` attribute."""
+    semantic_status: str = "ok"
+
+
 def _get_stale_rowids(conn) -> set:
     """Return the set of fts_rowids whose embeddings are stale or failed."""
     try:
@@ -200,10 +205,8 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
         stale_rowids=stale_rowids,
     )
 
-    final = results[:limit]
-    # Attach semantic status so MCP / CLI callers can surface degradation without a
-    # separate health check.  We use a plain attribute on the list object.
-    final.semantic_status = semantic_status  # type: ignore[attr-defined]
+    final = SearchResults(results[:limit])
+    final.semantic_status = semantic_status
     return final
 
 

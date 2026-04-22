@@ -81,7 +81,7 @@ def init_session_state(
                ON CONFLICT(session_id) DO NOTHING""",
             (session_id, first_phase, json.dumps(required)),
         )
-        return get_session_state(session_id, db_path=db_path)
+    return get_session_state(session_id, db_path=db_path)
 
 
 def get_session_state(session_id: str, db_path=None) -> dict:

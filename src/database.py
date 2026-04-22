@@ -138,6 +138,8 @@ CREATE TABLE IF NOT EXISTS workflows (
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL,
     steps TEXT NOT NULL,
+    phases TEXT,
+    phase_requirements TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
