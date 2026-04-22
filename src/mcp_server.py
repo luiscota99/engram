@@ -30,6 +30,7 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     __package__ = "src"
 
+from src.capture import SESSION_INFLUENCE_PROMPT
 from src.database import (
     delete_item,
     find_similar,
@@ -47,7 +48,6 @@ from src.database import (
 )
 from src.maintenance import find_consolidation_candidates, run_gc, run_health_check
 from src.merge import merge_available, merge_entries
-from src.capture import SESSION_INFLUENCE_PROMPT
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
 from src.workflow import (
