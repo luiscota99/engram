@@ -38,7 +38,13 @@ from .commands.sync import (
     cmd_import_skills,
     cmd_sync_skills,
 )
-from .commands.tools import cmd_benchmark, cmd_browse, cmd_run, cmd_simulate
+from .commands.tools import (
+    cmd_benchmark,
+    cmd_browse,
+    cmd_retrieval_benchmark,
+    cmd_run,
+    cmd_simulate,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -299,6 +305,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_benchmark = sub.add_parser("benchmark", help="Run LLM benchmark suite")
     p_benchmark.set_defaults(func=cmd_benchmark)
+
+    p_rebench = sub.add_parser(
+        "retrieval-benchmark",
+        help="Run R@k / MRR / NDCG retrieval quality benchmark (see benchmarks/BENCHMARKS.md)",
+    )
+    p_rebench.add_argument(
+        "bench_args",
+        nargs=argparse.REMAINDER,
+        help="Pass-through args (e.g. -- --mode compare). Prefix with -- if needed.",
+    )
+    p_rebench.set_defaults(func=cmd_retrieval_benchmark)
 
     p_simulate = sub.add_parser("simulate", help="Simulate token usage of Engram vs Traditional")
     p_simulate.add_argument("--mock", action="store_true")

@@ -8,6 +8,7 @@ a curated query set with known correct answers.
 
 Metrics:
   - R@k (Recall at k): fraction of queries where the correct entry is in top-k
+  - MRR: mean reciprocal rank of the first correct hit (in full ranked list)
   - NDCG@k: normalized discounted cumulative gain
   - Per-category breakdown (exact_error, semantic_similar, tag_filter, type_inference)
 
@@ -27,7 +28,7 @@ Usage:
     python benchmarks/engram_retrieval_bench.py --limit 10
 
     # Verbose output (show top-5 results per query):
-    python benchrams/engram_retrieval_bench.py --verbose
+    python benchmarks/engram_retrieval_bench.py --verbose
 """
 from __future__ import annotations
 
@@ -69,6 +70,15 @@ def recall_at_k(retrieved_titles: list[str], expected_contains: str, k: int) -> 
     for title in retrieved_titles[:k]:
         if expected_contains.lower() in title.lower():
             return 1.0
+    return 0.0
+
+
+def mean_reciprocal_rank(retrieved_titles: list[str], expected_contains: str) -> float:
+    """MRR: 1/rank of first correct hit, or 0 if none in the (full) list."""
+    needle = expected_contains.lower()
+    for i, title in enumerate(retrieved_titles, start=1):
+        if needle in title.lower():
+            return 1.0 / i
     return 0.0
 
 
@@ -151,6 +161,7 @@ def run_benchmark(
 
         recall_scores = {k: recall_at_k(retrieved_titles, expected_contains, k) for k in k_values}
         ndcg_scores = {k: ndcg_at_k(retrieved_titles, expected_contains, k) for k in k_values}
+        mrr = mean_reciprocal_rank(retrieved_titles, expected_contains)
 
         row = {
             "id": q["id"],
@@ -160,6 +171,7 @@ def run_benchmark(
             "retrieved_titles": retrieved_titles[:max(k_values)],
             "recall": recall_scores,
             "ndcg": ndcg_scores,
+            "mrr": mrr,
             "latency_ms": elapsed_ms,
             "hit_at_1": recall_scores.get(1, 0.0) == 1.0,
         }
@@ -176,9 +188,12 @@ def run_benchmark(
     n = len(per_query)
     avg_latency_ms = total_latency_ms / n if n > 0 else 0.0
 
+    mrr_sum = sum(r.get("mrr", 0.0) for r in per_query)
+
     aggregate = {
         "n_queries": n,
         "avg_latency_ms": round(avg_latency_ms, 1),
+        "MRR": round(mrr_sum / n if n > 0 else 0.0, 4),
     }
     for k in k_values:
         aggregate[f"R@{k}"] = round(
@@ -225,13 +240,16 @@ def print_report(results: dict) -> None:
     print(f"\n{'─' * 60}")
     print(f"  Engram Retrieval Benchmark — mode: {mode}")
     print(f"{'─' * 60}")
-    print(f"  Queries: {agg['n_queries']}    Avg latency: {agg['avg_latency_ms']}ms")
+    print(f"  Queries: {agg['n_queries']}    Avg latency: {agg['avg_latency_ms']}ms    MRR: {agg.get('MRR', 0):.3f}")
     print()
     print("  Aggregate:")
-    for metric in ["R@1", "R@3", "R@5", "R@10", "NDCG@5", "NDCG@10"]:
+    for metric in ["R@1", "R@3", "R@5", "R@10", "MRR", "NDCG@5", "NDCG@10"]:
         if metric in agg:
             val = agg[metric]
-            print(f"    {metric:<10} {val:.1%}  {_bar(val)}")
+            if metric == "MRR":
+                print(f"    {metric:<10} {val:.3f}")
+            else:
+                print(f"    {metric:<10} {val:.1%}  {_bar(val)}")
 
     print()
     print("  By category:")
@@ -302,12 +320,15 @@ def compare_modes(queries: list[dict], k_values: list[int], db_path: str | None,
     print(header)
     print(f"  {'─' * 65}")
 
-    for metric in ["R@1", "R@3", "R@5", "R@10", "NDCG@5", "NDCG@10"]:
+    for metric in ["R@1", "R@3", "R@5", "R@10", "MRR", "NDCG@5", "NDCG@10"]:
         row = f"  {metric:<10}"
         for mode in SEARCH_MODES:
             agg = all_results[mode]["aggregate"]
             val = agg.get(metric, 0.0)
-            row += f"  {val:.1%} {_bar(val, 10):<12}"
+            if metric == "MRR":
+                row += f"  {val:.3f}            "
+            else:
+                row += f"  {val:.1%} {_bar(val, 10):<12}"
         print(row)
 
     print(f"\n  {'Latency':<10}", end="")

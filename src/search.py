@@ -18,6 +18,19 @@ class SearchResults(list):
     semantic_status: str = "ok"
 
 
+def _fts5_tag_phrase(tag: str) -> str:
+    """Format *tag* for use in ``... MATCH ?`` on an FTS5 column.
+
+    Hyphenated tags like ``ai-assistant`` or ``n-plus-one`` must be passed as
+    a **phrase**; otherwise ``-`` is parsed as the NOT operator and SQLite
+    reports errors such as ``no such column: assistant``."""
+    t = tag.strip()
+    if not t:
+        return t
+    escaped = t.replace('"', '""')
+    return f'"{escaped}"'
+
+
 def _get_stale_rowids(conn) -> set:
     """Return the set of fts_rowids whose embeddings are stale or failed."""
     try:
@@ -52,7 +65,7 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
             if tags:
                 for tag in tags:
                     conditions.append("f.tags MATCH ?")
-                    params.append(tag.strip())
+                    params.append(_fts5_tag_phrase(tag))
 
             where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -95,27 +108,28 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
     ``"degraded"``) so callers can surface degradation warnings without checking embeddings
     separately.
 
-    Auto-detected tags from the query are merged with any caller-supplied tags so
-    that entries matching recognized technology names get a relevance boost even
-    when ``--tags`` is not passed explicitly.
+    **Tag handling:** auto-detected tags (from the query string) are used only in
+    ranking to **boost** matches (see ``src/ranking.py``). Only tags passed
+    explicitly by the caller (e.g. CLI ``--tags``) are applied as **SQL
+    filters** on semantic + FTS paths; auto tags are *not* AND'd into
+    ``tags MATCH`` (that was overly strict and returned empty result sets when
+    multiple weak signals fired).
     """
     results = []
     seen = set()
     semantic_status = "ok"
 
-    # 0. Auto-detect tags from the query and merge with explicit tags
+    # 0. Auto-detect tags for score boosting only; optional caller tags filter results
     detected_tags: list[str] = []
     if query and query.strip():
-        auto_tags = detect_query_tags(query, db_path=db_path)
-        if auto_tags:
-            detected_tags = auto_tags
-            existing = set(tags or [])
-            merged = existing | set(auto_tags)
-            tags = list(merged)
+        detected_tags = detect_query_tags(query, db_path=db_path)
+    filter_tags = list(tags) if tags else []
 
     # 1. Semantic Search
     if query and query.strip():
-        sem_results, semantic_status = semantic_search(query, item_type, tags, limit=limit, db_path=db_path)
+        sem_results, semantic_status = semantic_search(
+            query, item_type, filter_tags, limit=limit, db_path=db_path
+        )
         for r in sem_results:
             key = f"{r['item_type']}-{r['item_id']}"
             if key not in seen:
@@ -129,10 +143,10 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
         if item_type:
             conditions.append("item_type = ?")
             params.append(item_type)
-        if tags:
-            for tag in tags:
+        if filter_tags:
+            for tag in filter_tags:
                 conditions.append("tags MATCH ?")
-                params.append(tag.strip())
+                params.append(_fts5_tag_phrase(tag))
 
         where_extra = ("AND " + " AND ".join(conditions)) if conditions else ""
 

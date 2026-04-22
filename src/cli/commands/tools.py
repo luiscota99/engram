@@ -25,6 +25,31 @@ def cmd_browse(args):
     run_browser()
 
 
+def cmd_retrieval_benchmark(args):
+    """Delegate to ``benchmarks/engram_retrieval_bench.py`` (sets ``sys.argv``)."""
+    import importlib.util
+    from pathlib import Path
+
+    engram_root = Path(__file__).resolve().parent.parent.parent.parent
+    script = engram_root / "benchmarks" / "engram_retrieval_bench.py"
+    if not script.is_file():
+        print(f"Error: {script} not found.")
+        sys.exit(1)
+    old_argv = sys.argv
+    try:
+        rest = list(args.bench_args or [])
+        sys.argv = [str(script)] + rest
+        spec = importlib.util.spec_from_file_location("engram_retrieval_bench", script)
+        if spec is None or spec.loader is None:
+            print("Error: could not load retrieval benchmark module.")
+            sys.exit(1)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.main()
+    finally:
+        sys.argv = old_argv
+
+
 def cmd_run(args):
     prompt_text = " ".join(args.prompt)
     claw_path = args.claw_path or os.environ.get("CLAW_PATH")

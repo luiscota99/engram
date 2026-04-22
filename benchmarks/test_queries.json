@@ -45,17 +45,17 @@
       "id": "q005",
       "query": "AI agent overwrote my file",
       "expected_type": "mistake",
-      "expected_title_contains": "overwriting",
+      "expected_title_contains": "entire file",
       "category": "semantic_similar",
-      "notes": "File overwrite mistake — paraphrased"
+      "notes": "Indexed mistake title = first 80 chars of text; 'overwriting' may be past the cut — use 'entire file'."
     },
     {
       "id": "q006",
       "query": "full-file replace instead of targeted edit",
       "expected_type": "mistake",
-      "expected_title_contains": "overwriting",
+      "expected_title_contains": "entire file",
       "category": "exact_error",
-      "notes": "Exact description of the mistake"
+      "notes": "Same; ground truth substring matches the mistake title field."
     },
     {
       "id": "q007",

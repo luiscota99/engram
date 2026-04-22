@@ -220,6 +220,13 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 | `engram gc` | Garbage collect unused memories |
 | `engram backup` | Export database to JSON |
 
+### Benchmarks
+
+| Command | Description |
+|---------|-------------|
+| `engram retrieval-benchmark` | R@k, MRR, NDCG on a curated 20-query set (see [benchmarks/BENCHMARKS.md](benchmarks/BENCHMARKS.md)) |
+| `engram benchmark` | External LLM API latency/token probe (optional API keys) |
+
 ## Embedding Models
 
 Engram uses [Ollama](https://ollama.com) for local embedding generation. The default model is `nomic-embed-text`. You can switch models via the `ENGRAM_EMBED_MODEL` environment variable.

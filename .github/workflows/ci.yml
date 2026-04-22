@@ -34,3 +34,9 @@ jobs:
     - name: Test with pytest
       run: |
         pytest tests/ -v
+
+    - name: Retrieval benchmark smoke (seeded DB)
+      env:
+        ENGRAM_DB_PATH: ${{ runner.temp }}/engram_bench_ci.db
+      run: |
+        python benchmarks/engram_retrieval_bench.py --limit 5
