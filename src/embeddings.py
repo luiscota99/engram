@@ -2,7 +2,6 @@ import json
 import os
 import urllib.request
 
-
 _MAX_EMBED_CHARS = 8000  # ~2000 tokens; keeps well within nomic-embed-text's 8192-token limit
 _EMBED_TIMEOUT = 30  # seconds; longer texts can take a few seconds on CPU
 
