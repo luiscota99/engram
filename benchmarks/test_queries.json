@@ -1,0 +1,173 @@
+{
+  "description": "Engram retrieval benchmark — ground-truth query set for measuring R@k and NDCG.",
+  "version": "1.0",
+  "categories": {
+    "exact_error": "Query contains exact or near-exact error text; FTS5 should dominate.",
+    "semantic_similar": "Query is semantically related but uses different vocabulary; semantic search should dominate.",
+    "tag_filter": "Query names a technology; tag matching should boost relevant results.",
+    "type_inference": "Query implies a memory type via keywords (mistake/pattern/skill).",
+    "multi_hop": "Correct result requires combining context from the query and entry metadata."
+  },
+  "queries": [
+    {
+      "id": "q001",
+      "query": "fetching roles in a loop database slow",
+      "expected_type": "mistake",
+      "expected_title_contains": "loop",
+      "category": "semantic_similar",
+      "notes": "N+1 query — different words, same concept"
+    },
+    {
+      "id": "q002",
+      "query": "N+1 query ORM lazy loading",
+      "expected_type": "mistake",
+      "expected_title_contains": "loop",
+      "category": "exact_error",
+      "notes": "Key terms appear verbatim in seed mistake"
+    },
+    {
+      "id": "q003",
+      "query": "useEffect missing dependency array infinite loop",
+      "expected_type": "mistake",
+      "expected_title_contains": "useEffect",
+      "category": "exact_error",
+      "notes": "React hook mistake — exact terms"
+    },
+    {
+      "id": "q004",
+      "query": "React component re-renders forever",
+      "expected_type": "mistake",
+      "expected_title_contains": "useEffect",
+      "category": "semantic_similar",
+      "notes": "Same mistake, user says 're-renders' not 'infinite loop'"
+    },
+    {
+      "id": "q005",
+      "query": "AI agent overwrote my file",
+      "expected_type": "mistake",
+      "expected_title_contains": "overwriting",
+      "category": "semantic_similar",
+      "notes": "File overwrite mistake — paraphrased"
+    },
+    {
+      "id": "q006",
+      "query": "full-file replace instead of targeted edit",
+      "expected_type": "mistake",
+      "expected_title_contains": "overwriting",
+      "category": "exact_error",
+      "notes": "Exact description of the mistake"
+    },
+    {
+      "id": "q007",
+      "query": "race condition async requests frontend",
+      "expected_type": "pattern",
+      "expected_title_contains": "Race",
+      "category": "tag_filter",
+      "notes": "Race condition pattern — tags include async, frontend"
+    },
+    {
+      "id": "q008",
+      "query": "UI shows wrong data clicking rapidly",
+      "expected_type": "pattern",
+      "expected_title_contains": "Race",
+      "category": "semantic_similar",
+      "notes": "Symptom description — should match race condition pattern"
+    },
+    {
+      "id": "q009",
+      "query": "frontend blank screen no error API field null",
+      "expected_type": "pattern",
+      "expected_title_contains": "Schema Drift",
+      "category": "semantic_similar",
+      "notes": "Silent failure pattern — described by symptom"
+    },
+    {
+      "id": "q010",
+      "query": "schema validation API contract drift",
+      "expected_type": "pattern",
+      "expected_title_contains": "Schema Drift",
+      "category": "tag_filter",
+      "notes": "Pattern has tags: api, schema, validation"
+    },
+    {
+      "id": "q011",
+      "query": "how to run a database migration safely",
+      "expected_type": "skill",
+      "expected_title_contains": "Migration",
+      "category": "type_inference",
+      "notes": "'how to' → type_inference should detect skill"
+    },
+    {
+      "id": "q012",
+      "query": "deploy schema change production without downtime",
+      "expected_type": "skill",
+      "expected_title_contains": "Migration",
+      "category": "semantic_similar",
+      "notes": "Same skill, different vocabulary"
+    },
+    {
+      "id": "q013",
+      "query": "debugging steps for a bug stack trace",
+      "expected_type": "skill",
+      "expected_title_contains": "Debugging",
+      "category": "type_inference",
+      "notes": "'debugging' → type_inference + skill keyword match"
+    },
+    {
+      "id": "q014",
+      "query": "investigate error without immediately guessing the fix",
+      "expected_type": "skill",
+      "expected_title_contains": "Debugging",
+      "category": "semantic_similar",
+      "notes": "Same skill, described from the workflow perspective"
+    },
+    {
+      "id": "q015",
+      "query": "AbortController fetch cancel in-flight requests",
+      "expected_type": "pattern",
+      "expected_title_contains": "Race",
+      "category": "exact_error",
+      "notes": "Standard fix term appears verbatim in pattern"
+    },
+    {
+      "id": "q016",
+      "query": "commit message terse short format",
+      "expected_type": "skill",
+      "expected_title_contains": "Commit",
+      "category": "tag_filter",
+      "notes": "Git commit skill"
+    },
+    {
+      "id": "q017",
+      "query": "code review pull request findings",
+      "expected_type": "skill",
+      "expected_title_contains": "Review",
+      "category": "type_inference",
+      "notes": "'review' keyword"
+    },
+    {
+      "id": "q018",
+      "query": "Zod Pydantic validate API response",
+      "expected_type": "pattern",
+      "expected_title_contains": "Schema Drift",
+      "category": "exact_error",
+      "notes": "Standard fix tools named in pattern"
+    },
+    {
+      "id": "q019",
+      "query": "architecture decision multiple stakeholders workflow",
+      "expected_type": "skill",
+      "expected_title_contains": "Committee",
+      "category": "semantic_similar",
+      "notes": "Committee workflow skill"
+    },
+    {
+      "id": "q020",
+      "query": "token efficient terse response system prompt",
+      "expected_type": "skill",
+      "expected_title_contains": "Caveman",
+      "category": "semantic_similar",
+      "notes": "Caveman skill — paraphrased"
+    }
+  ]
+}

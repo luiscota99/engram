@@ -9,7 +9,8 @@ import json
 
 from .database import get_connection, get_or_create_project, get_project_affinities
 from .embeddings import embed_text
-from .ranking import rank_results
+from .query_analyzer import detect_query_tags
+from .ranking import rank_results, rerank_with_bm25
 
 
 class SearchResults(list):
@@ -93,10 +94,24 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
     The list itself carries a ``semantic_status`` attribute (``"ok"``, ``"unavailable"``, or
     ``"degraded"``) so callers can surface degradation warnings without checking embeddings
     separately.
+
+    Auto-detected tags from the query are merged with any caller-supplied tags so
+    that entries matching recognized technology names get a relevance boost even
+    when ``--tags`` is not passed explicitly.
     """
     results = []
     seen = set()
     semantic_status = "ok"
+
+    # 0. Auto-detect tags from the query and merge with explicit tags
+    detected_tags: list[str] = []
+    if query and query.strip():
+        auto_tags = detect_query_tags(query, db_path=db_path)
+        if auto_tags:
+            detected_tags = auto_tags
+            existing = set(tags or [])
+            merged = existing | set(auto_tags)
+            tags = list(merged)
 
     # 1. Semantic Search
     if query and query.strip():
@@ -203,7 +218,12 @@ def search(query, item_type=None, tags=None, limit=20, project_path=None, db_pat
         affinities=affinities,
         query=query or "",
         stale_rowids=stale_rowids,
+        detected_tags=detected_tags,
     )
+
+    # 6. BM25 reranking — adjusts utility scores using keyword overlap signal
+    if query and query.strip():
+        results = rerank_with_bm25(results, query)
 
     final = SearchResults(results[:limit])
     final.semantic_status = semantic_status

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://unpkg.com/cursor-hooks@latest/schema/hooks.schema.json",
+  "version": 1,
+  "description": "Engram Cursor hooks — auto-suggest memory capture and surface relevant skills.",
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node ./cursor-hooks/engram-auto-suggest.js",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
+    "stop": [
+      {
+        "command": "node ./cursor-hooks/session-capture.js",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "node ./cursor-hooks/session-capture.js",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ]
+  }
+}

@@ -72,3 +72,18 @@ Only activate when the user **explicitly** requests it. Never auto-trigger.
 | `@engram committee` / `use committee` | Activate COMMITTEE mode (structured phases + roles) |
 | `@engram status` | Report current mode |
 | `check engram` / `check memory` | Run `memory_search` and report |
+
+---
+
+## Cursor Hooks (background automation)
+
+Two hooks run outside the agent turn and require no action from you:
+
+| Hook | File | Trigger | What it does |
+|------|------|---------|--------------|
+| **Auto-suggest** | `cursor-hooks/engram-auto-suggest.js` | `sessionStart` | Surfaces the most relevant skill for the current task |
+| **Session capture** | `cursor-hooks/session-capture.js` | `stop` / `sessionEnd` | Calls `suggest-capture` with the session summary; prints draft entries if signals detected |
+
+Install: copy both files to `~/.cursor/hooks/` and merge `cursor-hooks/hooks.json` into `~/.cursor/hooks.json`.
+
+The session-capture hook is **non-blocking and non-intrusive** — it only prints suggestions, never saves automatically. You must approve and call `memory_add` (or `engram add`) to persist anything.

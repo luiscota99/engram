@@ -211,6 +211,34 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 | `engram gc` | Garbage collect unused memories |
 | `engram backup` | Export database to JSON |
 
+## Embedding Models
+
+Engram uses [Ollama](https://ollama.com) for local embedding generation. The default model is `nomic-embed-text`. You can switch models via the `ENGRAM_EMBED_MODEL` environment variable.
+
+```bash
+# Use the default (recommended)
+engram search "database migration"
+
+# Use a higher-quality model (requires `ollama pull mxbai-embed-large`)
+ENGRAM_EMBED_MODEL=mxbai-embed-large engram search "database migration"
+
+# Set permanently in your shell profile
+export ENGRAM_EMBED_MODEL=mxbai-embed-large
+```
+
+### Model Comparison
+
+| Model | Dimensions | Context | Size | Notes |
+|-------|-----------|---------|------|-------|
+| `nomic-embed-text` *(default)* | 768 | 8192 tokens | 274 MB | Best context window — handles long entries well |
+| `mxbai-embed-large` | 1024 | 512 tokens | 670 MB | Highest MTEB score; short context |
+| `bge-large-en-v1.5` | 1024 | 512 tokens | 670 MB | Strong English retrieval; short context |
+| `snowflake-arctic-embed` | 1024 | 512 tokens | 669 MB | Fast inference; competitive quality |
+
+**Recommendation:** Stick with `nomic-embed-text` unless you need higher semantic precision and are willing to trade the larger context window. Engram's hybrid FTS5 + semantic search reduces the impact of imperfect semantic quality.
+
+> **Note:** Changing models invalidates all existing embeddings. Run `engram doctor --repair` after switching to regenerate them.
+
 ## Troubleshooting
 
 If things aren't working as expected, run the built-in diagnostic tool:

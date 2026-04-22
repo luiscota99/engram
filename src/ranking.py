@@ -3,12 +3,15 @@ Ranking module — multi-factor utility scoring for search results.
 
 Replaces the simple linear scoring (base + usage*15) with a system that
 accounts for recency decay, logarithmic usage boost, project affinity,
-item-type relevance, and embedding staleness.
+item-type relevance, embedding staleness, auto-detected tag matches,
+and BM25 reranking of semantic candidates.
 """
 
 from __future__ import annotations
 
 import math
+import re
+from collections import Counter
 from datetime import datetime, timezone
 
 # Half-life in days for recency decay.
@@ -32,6 +35,131 @@ AFFINITY_BOOSTS = {
 # Boost applied when the query explicitly targets this item type
 TYPE_MATCH_BOOST = 20.0
 
+# Boost applied per matched auto-detected tag
+TAG_MATCH_BOOST = 15.0
+
+# BM25 parameters
+BM25_K1 = 1.5   # term frequency saturation
+BM25_B = 0.75   # document length normalization
+BM25_WEIGHT = 0.3  # how much BM25 adjusts the final score: score *= (1 + BM25_WEIGHT * bm25)
+
+
+# ── BM25 ─────────────────────────────────────────────────────────────────────
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase, split on non-alphanumeric boundaries."""
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def bm25_score(query: str, document: str, avg_doc_len: float, doc_count: int,
+               df: dict[str, int]) -> float:
+    """Compute BM25 score for a single (query, document) pair.
+
+    Parameters
+    ----------
+    query:
+        The search query string.
+    document:
+        The full text of the document (title + snippet + tags concatenated).
+    avg_doc_len:
+        Average document length across the corpus (in tokens).
+    doc_count:
+        Total number of documents in the corpus.
+    df:
+        Document frequency dict: term → number of docs containing that term.
+        If empty, IDF falls back to 1.0 for all terms.
+    """
+    query_terms = _tokenize(query)
+    if not query_terms:
+        return 0.0
+
+    doc_tokens = _tokenize(document)
+    doc_len = len(doc_tokens)
+    tf_map = Counter(doc_tokens)
+
+    score = 0.0
+    for term in query_terms:
+        tf = tf_map.get(term, 0)
+        if tf == 0:
+            continue
+
+        # IDF with smoothing
+        n_docs_with_term = df.get(term, 0)
+        idf = math.log((doc_count - n_docs_with_term + 0.5) / (n_docs_with_term + 0.5) + 1)
+
+        # Normalised TF
+        norm_tf = (tf * (BM25_K1 + 1)) / (
+            tf + BM25_K1 * (1 - BM25_B + BM25_B * doc_len / max(avg_doc_len, 1))
+        )
+        score += idf * norm_tf
+
+    return score
+
+
+def bm25_scores(query: str, results: list[dict]) -> dict[str, float]:
+    """Compute BM25 scores for a list of search result dicts.
+
+    Each result must have at least a ``title`` key; ``snippet`` and ``tags``
+    are used when present.
+
+    Returns a dict mapping ``"{item_type}-{item_id}"`` → normalised BM25 score
+    (0.0–1.0).  Scores are normalised so the best result gets 1.0.
+    """
+    if not results or not query.strip():
+        return {}
+
+    # Build the corpus for IDF computation
+    documents: list[tuple[str, str]] = []
+    for r in results:
+        text = " ".join(filter(None, [r.get("title", ""), r.get("snippet", ""), r.get("tags", "")]))
+        key = f"{r['item_type']}-{r['item_id']}"
+        documents.append((key, text))
+
+    doc_count = len(documents)
+    avg_doc_len = sum(len(_tokenize(text)) for _, text in documents) / max(doc_count, 1)
+
+    # Document frequency
+    df: dict[str, int] = Counter()
+    for _, text in documents:
+        for term in set(_tokenize(text)):
+            df[term] += 1
+
+    raw_scores: dict[str, float] = {}
+    for key, text in documents:
+        raw_scores[key] = bm25_score(query, text, avg_doc_len, doc_count, df)
+
+    # Normalise to [0, 1]
+    max_score = max(raw_scores.values()) if raw_scores else 0.0
+    if max_score <= 0:
+        return {k: 0.0 for k in raw_scores}
+    return {k: v / max_score for k, v in raw_scores.items()}
+
+
+def rerank_with_bm25(results: list[dict], query: str) -> list[dict]:
+    """Adjust ``utility_score`` of each result using BM25 as a reranking signal.
+
+    Formula: ``final_score = utility_score * (1 + BM25_WEIGHT * normalised_bm25)``
+
+    This means:
+    - A result with the highest BM25 score gets a BM25_WEIGHT (30%) boost.
+    - A result with zero BM25 overlap is unaffected (multiplied by 1.0).
+    - Utility score remains the dominant factor; BM25 only reorders ties.
+    """
+    if not results or not query.strip():
+        return results
+
+    scores = bm25_scores(query, results)
+    for r in results:
+        key = f"{r['item_type']}-{r['item_id']}"
+        b25 = scores.get(key, 0.0)
+        r["bm25_score"] = round(b25, 4)
+        r["utility_score"] = r.get("utility_score", 0.0) * (1 + BM25_WEIGHT * b25)
+
+    results.sort(key=lambda x: x.get("utility_score", 0.0), reverse=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _recency_factor(last_used_at: str | None) -> float:
     """Return a 0.0–1.0 decay multiplier based on last_used_at.
@@ -65,6 +193,15 @@ def _usage_boost(usage_count: int) -> float:
     return 10.0 * math.log1p(max(0, usage_count))
 
 
+def _tag_boost(result_tags_str: str | None, detected_tags: list[str]) -> float:
+    """Return additive boost for every detected tag that appears in the result's tags."""
+    if not detected_tags or not result_tags_str:
+        return 0.0
+    result_tags_lower = result_tags_str.lower()
+    matches = sum(1 for t in detected_tags if t.lower() in result_tags_lower)
+    return TAG_MATCH_BOOST * matches
+
+
 def calculate_utility_score(
     result: dict,
     usage_count: int = 0,
@@ -72,6 +209,7 @@ def calculate_utility_score(
     affinity: str | None = None,
     inferred_type: str | None = None,
     embedding_is_stale: bool = False,
+    detected_tags: list[str] | None = None,
 ) -> float:
     """Compute a composite utility score for a single search result.
 
@@ -90,6 +228,9 @@ def calculate_utility_score(
         result['item_type'] the result gets a small boost.
     embedding_is_stale:
         True when the stored embedding was generated with an older model.
+    detected_tags:
+        Auto-detected technology tags from the query.  Each tag that matches
+        the result's stored tags adds TAG_MATCH_BOOST to the score.
     """
     base = BASE_SCORE_SEMANTIC if result.get("is_semantic") else BASE_SCORE_LEXICAL
 
@@ -107,10 +248,13 @@ def calculate_utility_score(
         inferred_type and inferred_type == result.get("item_type")
     ) else 0.0
 
+    # Auto-detected tag match boost
+    tag_boost = _tag_boost(result.get("tags"), detected_tags or [])
+
     # Stale embedding penalty
     stale_penalty = STALE_EMBEDDING_PENALTY if embedding_is_stale else 0.0
 
-    return decayed_base + usage + affinity_boost + type_boost - stale_penalty
+    return decayed_base + usage + affinity_boost + type_boost + tag_boost - stale_penalty
 
 
 def infer_type_from_query(query: str) -> str | None:
@@ -139,6 +283,7 @@ def rank_results(
     affinities: dict,
     query: str = "",
     stale_rowids: set | None = None,
+    detected_tags: list[str] | None = None,
 ) -> list[dict]:
     """Apply utility scoring to a list of results and sort descending.
 
@@ -156,6 +301,8 @@ def rank_results(
         Original search query string (used for type inference).
     stale_rowids:
         Set of FTS rowids whose embeddings are stale.
+    detected_tags:
+        Auto-detected technology tags from the query (from query_analyzer).
     """
     inferred_type = infer_type_from_query(query)
     stale_rowids = stale_rowids or set()
@@ -169,6 +316,7 @@ def rank_results(
             affinity=affinities.get(key),
             inferred_type=inferred_type,
             embedding_is_stale=r.get("rowid") in stale_rowids,
+            detected_tags=detected_tags,
         )
         r["utility_score"] = score
 
