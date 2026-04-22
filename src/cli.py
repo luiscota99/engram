@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 Engram — persistent memory for AI-assisted development.
 
@@ -25,6 +23,7 @@ Usage:
     engram query-codebase "query"     Search project-specific file summaries
     engram clean-codebase             Remove stale entries from the codebase index
 """
+from __future__ import annotations
 
 import argparse
 import hashlib
@@ -34,7 +33,7 @@ import shutil
 import subprocess
 import sys
 
-# Allow running as `python -m src.cli` or directly
+# Allow running as `python3 src/cli.py` in addition to `python3 -m src.cli`
 if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     __package__ = "src"
@@ -56,17 +55,17 @@ from .database import (
     reembed_stale,
 )
 from .doctor import run_diagnostics
-from .graph import format_dot, format_json, format_mermaid, index_file_relationships, query_relationships
+from .graph import (
+    format_dot,
+    format_json,
+    format_mermaid,
+    index_file_relationships,
+    query_relationships,
+)
 from .maintenance import find_consolidation_candidates, run_gc, run_health_check
 from .search import get_recent, get_stats, search, semantic_search
 from .seed import seed_database
 from .token_simulation import run_simulation
-from .workflow import (
-    WorkflowViolationError,
-    advance_phase,
-    get_session_state,
-    init_session_state,
-)
 
 
 def calculate_hash(file_path):
@@ -512,7 +511,7 @@ def cmd_gc(args):
         print(f"  {fmt_type(c['item_type'])} ID:{c['item_id']}  created:{c['created_at'] or 'unknown'}")
 
     if mode == "dry-run":
-        print(fmt_dim(f"\nDry-run complete. Run with --archive or --delete to act."))
+        print(fmt_dim("\nDry-run complete. Run with --archive or --delete to act."))
     else:
         print(f"\n{fmt_bold('✓')} {mode.capitalize()}d {result['processed']} of {len(candidates)} items.")
 
@@ -533,7 +532,7 @@ def cmd_suggest_consolidate(args):
         for item in cluster["items"]:
             print(f"    ID:{item['item_id']}  {item['title']}")
         print()
-    print(fmt_dim(f"Tip: Use `engram consolidate --delete-ids ID1,ID2 ...` to merge manually."))
+    print(fmt_dim("Tip: Use `engram consolidate --delete-ids ID1,ID2 ...` to merge manually."))
 
 
 def cmd_health(args):
@@ -630,7 +629,6 @@ def cmd_graph(args):
 
 def cmd_reembed(args):
     """Re-generate embeddings for stale/pending items."""
-    from .database import get_embedding_stats
 
     stats_before = get_embedding_stats()
     stale = stats_before.get("stale", 0)
@@ -661,7 +659,6 @@ def cmd_reembed(args):
 def cmd_migrate(args):
     """Database migration utilities."""
     from .database import DB_PATH
-    from .migrations import backup_before_migration, downgrade_to
 
     if args.rollback:
         # Find most recent backup and restore it

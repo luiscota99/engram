@@ -7,12 +7,10 @@ including purpose, key exports, dependencies, and complexity notes.
 
 from __future__ import annotations
 
-
 import json
 import os
 import time
 import urllib.request
-
 
 SUMMARIZE_PROMPT = """Analyze this source file and return a JSON object with these exact keys:
 - "summary": 1-2 sentence description of what this file does and its role in the project

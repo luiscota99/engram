@@ -12,10 +12,8 @@ Safe migration guarantees:
 
 from __future__ import annotations
 
-
 import os
 import shutil
-
 
 MIGRATIONS = {
     2: ["CREATE TABLE IF NOT EXISTS _test_migration_v2 (id INTEGER PRIMARY KEY);"],

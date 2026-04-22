@@ -8,10 +8,8 @@ item-type relevance, and embedding staleness.
 
 from __future__ import annotations
 
-
 import math
 from datetime import datetime, timezone
-
 
 # Half-life in days for recency decay.
 # After 90 days of no use, a memory's recency factor is 0.5.

@@ -5,13 +5,11 @@ multi-factor ranking via src/ranking.py.
 
 from __future__ import annotations
 
-
 import json
-import os
 
 from .database import get_connection, get_or_create_project, get_project_affinities
 from .embeddings import embed_text
-from .ranking import infer_type_from_query, rank_results
+from .ranking import rank_results
 
 
 def _get_stale_rowids(conn) -> set:

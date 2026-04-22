@@ -9,12 +9,10 @@ Commands:
 
 from __future__ import annotations
 
-
 import json
 from datetime import datetime, timedelta
 
 from .database import get_connection, get_embedding_stats
-
 
 # ── Garbage Collection ───────────────────────────────────────────────
 
@@ -127,7 +125,7 @@ def run_gc(
 # ── Consolidation Suggestions ────────────────────────────────────────
 
 try:
-    import sqlite_vec as _svec
+    import sqlite_vec  # noqa: F401
     _SQLITE_VEC = True
 except ImportError:
     _SQLITE_VEC = False
@@ -241,9 +239,7 @@ def run_health_check(db_path=None) -> dict:
             "mistakes": "mistake", "patterns": "pattern", "skills": "skill",
             "conversations": "conversation", "prompts": "prompt",
         }
-        now_iso = datetime.now().isoformat()
         cutoff_30 = (datetime.now() - timedelta(days=30)).isoformat()
-        cutoff_90 = (datetime.now() - timedelta(days=90)).isoformat()
         cutoff_180 = (datetime.now() - timedelta(days=180)).isoformat()
 
         for table, itype in table_map.items():

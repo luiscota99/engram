@@ -8,11 +8,9 @@ preserves insights from both originals.
 
 from __future__ import annotations
 
-
 import json
 import os
 import urllib.request
-
 
 MERGE_PROMPT_TEMPLATE = """You are an expert knowledge curator. You have two similar memory entries that were found to be near-duplicates. Your task is to synthesize them into a single, more robust entry.
 

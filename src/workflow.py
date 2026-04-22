@@ -11,11 +11,9 @@ having contributed raises a WorkflowViolationError.
 
 from __future__ import annotations
 
-
 import json
 
 from .database import get_connection
-
 
 # Default workflow: ordered phases and the roles required in each.
 DEFAULT_PHASES = ["analysis", "research", "critique", "decision", "archive"]

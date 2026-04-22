@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 Engram MCP Server — Model Context Protocol interface for persistent memory.
 Exposes memory operations as tools over stdio JSON-RPC transport.
@@ -20,14 +18,17 @@ Usage in Cursor MCP config (~/.cursor/mcp.json):
   }
 }
 """
+from __future__ import annotations
 
 import json
 import os
 import sys
 import traceback
 
-# Ensure our package is importable
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Allow running as `python3 src/mcp_server.py` in addition to `python3 -m src.mcp_server`
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    __package__ = "src"
 
 from src.database import (
     delete_item,
@@ -42,7 +43,6 @@ from src.database import (
     init_db,
     link_tags,
     record_usage,
-    reembed_stale,
 )
 from src.maintenance import find_consolidation_candidates, run_gc, run_health_check
 from src.merge import merge_available, merge_entries
@@ -882,7 +882,7 @@ def handle_memory_add_transcript(args):
     status = ""
     if state["current_phase"]:
         if state["can_proceed"]:
-            status = f" All required roles have contributed. Ready to advance phase or add a decision."
+            status = " All required roles have contributed. Ready to advance phase or add a decision."
         else:
             remaining = ", ".join(state["missing_roles"])
             status = f" Still waiting for: {remaining}."
@@ -1282,7 +1282,7 @@ def handle_memory_gc(args):
     for c in candidates[:30]:
         lines.append(f"  [{c['item_type'].upper()} ID:{c['item_id']}] created: {c['created_at'] or 'unknown'}")
     if mode == "dry-run":
-        lines.append(f"\nCall with mode='archive' to soft-delete these items.")
+        lines.append("\nCall with mode='archive' to soft-delete these items.")
     else:
         lines.append(f"\nArchived {result['processed']} items.")
     return "\n".join(lines)

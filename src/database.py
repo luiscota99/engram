@@ -5,7 +5,6 @@ Uses SQLite with FTS5 for full-text search. Zero external dependencies.
 
 from __future__ import annotations
 
-
 import json
 import os
 from contextlib import contextmanager
@@ -754,6 +753,7 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
       {'processed': N, 'succeeded': N, 'failed': N, 'remaining': N}
     """
     import os as _os
+
     from .embeddings import embed_text as _embed
 
     if sqlite_vec is None:

@@ -7,13 +7,11 @@ the file_relationships table.  Supports output in Mermaid, DOT, and JSON formats
 
 from __future__ import annotations
 
-
 import ast
 import os
 import re
 
 from .database import get_connection, get_or_create_project
-
 
 # ── Relationship Extraction ──────────────────────────────────────────
 

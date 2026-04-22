@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 token_benchmark.py — Measure token usage: Traditional vs. Engram-assisted sessions.
 
@@ -21,6 +20,7 @@ Usage:
 Requirements for real counting:
   pip install anthropic
 """
+from __future__ import annotations
 
 import argparse
 import json
