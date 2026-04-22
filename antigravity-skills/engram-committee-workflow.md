@@ -15,7 +15,7 @@ Use this workflow anytime the user requests a complex engineering task (e.g., "b
 ## The Zero Rule (MANDATORY)
 1. **Never guess unknowns**: If there is missing context, ask the user.
 2. **Never behave like a single-agent solver**: Always delegate reasoning to virtual subagents.
-3. **Persist everything**: All subagent outputs must be logged to Engram using the `engram add ...` CLI commands.
+3. **Persist everything**: All subagent outputs must be logged to Engram with `python3 -m src.cli add ...` (from the Engram repo) or `engram add ...` if the console script is on `PATH`—**not** MCP in Antigravity.
 
 ## Workflow Steps
 

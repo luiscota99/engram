@@ -11,9 +11,7 @@ description: >
 
 Engram engagement is **adaptive**: minimal by default, escalating to the full Committee workflow only when the task warrants it. This prevents every trivial fix from becoming a multi-step committee session.
 
-> **Interface**: Antigravity uses the Engram **CLI** (`engram ...`), not MCP tools.
-> The `engram` command is available after `pip install -e .` from the Engram repository.
-> Ensure `engram` is on your PATH (the same Python environment where Engram was installed).
+> **Interface**: Antigravity uses the Engram **CLI**, not MCP tools. **Bootstrapped** projects use `python3 -m src.cli …` from the Engram project root (see `.antigravity/instructions.md`). Elsewhere, `engram` is shorthand for the same when installed with `pip install -e .` and on your `PATH`.
 
 ---
 

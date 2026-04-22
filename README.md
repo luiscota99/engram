@@ -26,27 +26,23 @@ Engram uses a hybrid search engine combining **SQLite FTS5** (lexical) and **sql
 
 ```mermaid
 graph TD
-    %% Actors/Interfaces
-    U[User] -->|Terminal| CLI[CLI Handler]
-    IDE[Cursor / Claude] -->|MCP Protocol| MCP[MCP Server]
-    
-    %% Core Logic
-    subgraph Engram Core
-        CLI --> SE[Search Engine]
-        MCP --> SE[Search Engine]
-        SE --> DB_Int[Database Interface]
+    User[User] -->|manual_terminal| CLI[CLI_handler]
+    Cursor[Cursor_or_Claude_Code] -->|MCP_protocol| MCP[MCP_server]
+    Antigravity[Antigravity] -->|shell_CLI_not_MCP| CLI
+    subgraph engram_core [Engram_Core]
+        CLI --> SE[Search_engine]
+        MCP --> SE
+        SE --> DB_Int[Database_interface]
     end
-    
-    %% AI Model
-    SE -- "Embeddings" --> Ollama[(Local Ollama<br/>nomic-embed-text)]
-    
-    %% Storage Layer
-    subgraph Storage Layer
-        DB_Int --> SQLite[(memory.db SQLite)]
-        SQLite --- FTS[FTS5 Index<br/>Lexical]
-        SQLite --- VEC[sqlite-vec<br/>Semantic]
+    SE -- Embeddings --> Ollama[(Local_Ollama)]
+    subgraph storage [Storage]
+        DB_Int --> SQLite[(memory.db_SQLite)]
+        SQLite --- FTS[FTS5_lexical]
+        SQLite --- VEC[sqlite-vec_semantic]
     end
 ```
+
+**How clients connect:** **Cursor** (and other MCP-capable IDEs) call Engram through the **MCP server** (`memory_search`, `memory_add_*`, etc.). **Antigravity** has no Engram MCP in the default flow—the agent runs the same operations via **`python3 -m src.cli`** (see bootstrapped `.antigravity/instructions.md`). Both paths hit the same search engine and database.
 
 ## Quick Start
 
@@ -67,6 +63,17 @@ This script will:
 ## Agent Integration
 
 Engram turns AI assistants into senior partners who remember your project's history.
+
+### Cursor vs Antigravity at a glance
+
+| | **Cursor** | **Antigravity** |
+|---|------------|-----------------|
+| **How Engram is wired** | `.cursor/rules/engram.mdc` + optional [Cursor hooks](cursor-hooks/session-capture.js) | `.antigravity/instructions.md` (from `engram bootstrap`) |
+| **Primary interface** | **MCP tools** (`memory_search`, `memory_suggest_capture`, `memory_add`, …) | **CLI** (`python3 -m src.cli …` from the Engram repo root or `PATH`) |
+| **Session capture** | Hooks can call `suggest-capture` on stop / session end | Agent runs `suggest-capture` per instructions (heuristic, same engine) |
+| **Skill import/export** | Yes (`engram import-cursor-skills`, `export-skills`) | Use CLI / memory search; no separate Antigravity skill sync |
+
+**Same behavior, different channel:** search, add, and suggest-capture map 1:1 between MCP and CLI; pick one client per project or use both for different tasks—avoid writing the same memory twice by agreeing which tool runs capture.
 
 ### 1. Bootstrap your Project
 Run this in any repository you want your AI agent to remember:
@@ -142,6 +149,8 @@ sequenceDiagram
     E-->>A: [Reflection Checklist]
     A->>E: memory_add_mistake() / memory_add_skill()
 ```
+
+*Antigravity / CLI:* use the same flow with `python3 -m src.cli search`, `add session`, `add transcript`, `add decision`, and `suggest-capture` before persisting; see `.antigravity/instructions.md` for exact commands.
 
 ### 4. Skill Sync (Cursor ↔ Engram)
 
