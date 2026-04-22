@@ -912,6 +912,56 @@ def cmd_init(args):
     print(f"✓ Database initialized at {get_db_path()}")
 
 
+_BOOTSTRAP_MODE_DESCRIPTIONS = {
+    "adaptive": "LIGHT by default, escalates automatically when complexity is detected (recommended)",
+    "full":     "Always-on — session init, memory search, and retrospective for every session",
+    "minimal":  "Off by default — only activates when you explicitly say 'use engram' or 'check memory'",
+}
+
+_CURSOR_RULE_SOURCES = {
+    "adaptive": "engram-adaptive.mdc",
+    "full":     "engram-committee.mdc",
+    "minimal":  "engram.mdc",
+}
+
+_AG_SKILL_SOURCES = {
+    "adaptive": "engram-adaptive-workflow.md",
+    "full":     "engram-committee-workflow.md",
+    "minimal":  None,  # minimal mode: write a short instructions stub only
+}
+
+
+def _prompt_bootstrap_mode() -> str:
+    """Interactively prompt the user to choose an engagement mode."""
+    print(fmt_header("\nChoose Engram engagement mode:\n"))
+    options = [
+        ("adaptive", "Adaptive (recommended)"),
+        ("full",     "Full — always-on"),
+        ("minimal",  "Minimal — manual triggers only"),
+    ]
+    for i, (key, label) in enumerate(options, 1):
+        desc = _BOOTSTRAP_MODE_DESCRIPTIONS[key]
+        print(f"  {fmt_bold(str(i))}. {fmt_bold(label)}")
+        print(fmt_dim(f"     {desc}"))
+        print()
+
+    while True:
+        try:
+            raw = input("Enter choice [1/2/3] (default: 1): ").strip()
+            if raw == "" or raw == "1":
+                return "adaptive"
+            elif raw == "2":
+                return "full"
+            elif raw == "3":
+                return "minimal"
+            else:
+                print(fmt_dim("  Please enter 1, 2, or 3."))
+        except (EOFError, KeyboardInterrupt):
+            # Non-interactive environment — default to adaptive
+            print(fmt_dim("\n  Non-interactive environment detected. Defaulting to adaptive mode."))
+            return "adaptive"
+
+
 def cmd_bootstrap(args):
     """Bootstrap agent rules for the current project."""
     import shutil
@@ -925,36 +975,78 @@ def cmd_bootstrap(args):
         init_db()
         print(f"✓ Created database at {db_path}")
 
-    # 1. Cursor
+    # 1. Determine engagement mode
+    mode = getattr(args, "mode", None)
+    if not mode:
+        mode = _prompt_bootstrap_mode()
+    if mode not in _CURSOR_RULE_SOURCES:
+        print(f"Unknown mode '{mode}'. Choose from: adaptive, full, minimal")
+        sys.exit(1)
+
+    print(fmt_header(f"\nBootstrapping in {fmt_bold(mode.upper())} mode"))
+    print(fmt_dim(f"  {_BOOTSTRAP_MODE_DESCRIPTIONS[mode]}\n"))
+
+    # 2. Cursor rule
     cursor_rules_dir = os.path.join(project_root, ".cursor", "rules")
     os.makedirs(cursor_rules_dir, exist_ok=True)
-    source_cursor = os.path.join(engram_root, "cursor-rules", "engram-committee.mdc")
-    if os.path.exists(source_cursor):
-        shutil.copy2(source_cursor, os.path.join(cursor_rules_dir, "engram.mdc"))
-        print(f"✓ Created {os.path.join('.cursor', 'rules', 'engram.mdc')}")
-    else:
-        print(fmt_dim(f"Warning: Source rule {source_cursor} not found."))
+    rule_filename = _CURSOR_RULE_SOURCES[mode]
+    source_cursor = os.path.join(engram_root, "cursor-rules", rule_filename)
+    dest_cursor = os.path.join(cursor_rules_dir, "engram.mdc")
 
-    # 2. Antigravity
+    if os.path.exists(source_cursor):
+        shutil.copy2(source_cursor, dest_cursor)
+        print(f"✓ Created {os.path.join('.cursor', 'rules', 'engram.mdc')}  [{mode} mode]")
+    else:
+        print(fmt_dim(f"Warning: Source rule not found: {source_cursor}"))
+
+    # 3. Antigravity instructions
     antigravity_dir = os.path.join(project_root, ".antigravity")
     os.makedirs(antigravity_dir, exist_ok=True)
     ag_instructions = os.path.join(antigravity_dir, "instructions.md")
-    source_ag = os.path.join(engram_root, "antigravity-skills", "engram-committee-workflow.md")
+    ag_skill_file = _AG_SKILL_SOURCES[mode]
 
     with open(ag_instructions, "w") as f:
-        f.write("# 🧠 Engram Project Instructions\n\n")
-        f.write("You are operating in a project backed by the **Engram Persistent Memory System**.\n")
-        f.write("You MUST follow the Engram Committee-Driven Workflow for all complex tasks, architectural analysis, and codebase reviews.\n\n")
-        if os.path.exists(source_ag):
-            with open(source_ag, "r") as src:
-                f.write("## Engram Committee-Driven Workflow\n")
-                f.write(src.read())
-        print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}")
+        f.write("# Engram Project Instructions\n\n")
+        f.write(f"Engagement mode: **{mode.upper()}** — {_BOOTSTRAP_MODE_DESCRIPTIONS[mode]}\n\n")
+        f.write("You are operating in a project backed by the **Engram Persistent Memory System**.\n\n")
 
-    # 3. Codebase Knowledge Indexing Suggestion
-    print(fmt_header("\nProject successfully bootstrapped for AI Agents!"))
-    print("Cursor and Antigravity will now default to the Committee Workflow.")
-    print(f"\n{fmt_bold('Next Step:')} Run `{fmt_bold('engram index-project')}` to create a persistent map of this codebase.")
+        if ag_skill_file:
+            source_ag = os.path.join(engram_root, "antigravity-skills", ag_skill_file)
+            if os.path.exists(source_ag):
+                with open(source_ag, "r") as src:
+                    f.write(src.read())
+            else:
+                print(fmt_dim(f"Warning: Antigravity skill file not found: {source_ag}"))
+        else:
+            # Minimal mode: write a short stub
+            f.write("## Engram Usage\n\n")
+            f.write("Engram is available but **off by default** for this project.\n\n")
+            f.write("Activate by saying:\n")
+            f.write("- `use engram` or `check memory` — enables full memory search and logging\n")
+            f.write("- `quick question` or `no engram` — keeps Engram disabled\n\n")
+            f.write("CLI reference:\n")
+            f.write("```bash\n")
+            f.write('python3 -m src.cli search "keywords" -n 5\n')
+            f.write("python3 -m src.cli recent -n 3\n")
+            f.write("```\n")
+
+    print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}  [{mode} mode]")
+
+    # 4. Summary and next steps
+    print(fmt_header(f"\nProject successfully bootstrapped! ({mode} mode)"))
+    if mode == "adaptive":
+        print("  Cursor and Antigravity will use LIGHT mode by default.")
+        print("  Memory activates automatically for complex tasks.")
+    elif mode == "full":
+        print("  Cursor and Antigravity will use the full Committee Workflow for every session.")
+    else:
+        print("  Memory is disabled by default. Say 'use engram' to activate it.")
+
+    print(f"\n{fmt_bold('Next Steps:')}")
+    print(f"  1. Run `{fmt_bold('engram index-project')}` to map this codebase")
+    print(f"  2. Run `{fmt_bold('engram sync-skills')}` to sync any existing Cursor skills into memory")
+    if mode != "adaptive":
+        print(fmt_dim(f"\n  Tip: Re-run `engram bootstrap --mode adaptive` to switch to adaptive mode."))
 
 
 def cmd_seed(args):
@@ -1739,6 +1831,16 @@ def build_parser():
 
     # bootstrap
     p_bootstrap = sub.add_parser("bootstrap", help="Bootstrap agent rules for the current project")
+    p_bootstrap.add_argument(
+        "--mode",
+        choices=["adaptive", "full", "minimal"],
+        default=None,
+        help=(
+            "Engagement mode: adaptive (recommended, default if omitted), "
+            "full (always-on committee workflow), "
+            "minimal (off by default, manual triggers only)"
+        ),
+    )
     p_bootstrap.set_defaults(func=cmd_bootstrap)
 
     # seed

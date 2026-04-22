@@ -1,9 +1,3 @@
-# Engram Project Instructions
-
-Engagement mode: **ADAPTIVE** — LIGHT by default, escalates automatically when complexity is detected (recommended)
-
-You are operating in a project backed by the **Engram Persistent Memory System**.
-
 ---
 name: Engram Adaptive Workflow
 description: >

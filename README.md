@@ -73,10 +73,59 @@ Run this in any repository you want your AI agent to remember:
 ```bash
 engram bootstrap
 ```
-This creates `.cursor/rules/engram.mdc` for Cursor and `.antigravity/instructions.md` for Antigravity, enforcing the **Committee-Driven Workflow**.
+This creates `.cursor/rules/engram.mdc` for Cursor and `.antigravity/instructions.md` for Antigravity. You will be prompted to choose an **engagement mode**.
 
-### 2. Committee-Driven Workflow
-Engram encourages a structured SDLC where agents act as a "committee" (Analyst, Researcher, Skeptic, Archivist) to prevent shallow decisions.
+### 2. Engagement Modes
+
+Engram supports three engagement modes — choose based on your project's complexity and how much ceremony you want.
+
+| Mode | Default Behavior | Best For |
+|------|-----------------|----------|
+| **Adaptive** *(recommended)* | LIGHT by default; escalates automatically on complexity signals | Most projects — balances speed with memory |
+| **Full** | Always-on: session init, memory search, retrospective every session | Long-running complex projects, architecture work |
+| **Minimal** | Off by default; only activates on explicit user request | Quick scripts, prototypes, low-stakes work |
+
+```bash
+# Interactive prompt (recommended)
+engram bootstrap
+
+# Or set mode directly
+engram bootstrap --mode adaptive
+engram bootstrap --mode full
+engram bootstrap --mode minimal
+```
+
+#### Adaptive Mode — How It Works
+
+Adaptive mode starts every session in **LIGHT** mode (one quick memory search, no ceremony) and escalates automatically to **FULL** mode when complexity is detected.
+
+**Escalation triggers** (Cursor + Antigravity):
+- 3+ failed attempts or error messages
+- Keywords: `debug`, `refactor`, `architecture`, `investigate`, `performance`, `security`
+- Changes span 5+ files or mention "project-wide"
+- Session exceeds 10 turns
+- You say: `check engram`, `use engram`, or `@engram full`
+
+**User overrides** (Cursor):
+
+| Say | Effect |
+|-----|--------|
+| `@engram full` | Force full mode immediately |
+| `@engram off` | Disable for this session |
+| `@engram light` | Return to light mode |
+| `@engram status` | Report current mode |
+
+**User overrides** (Antigravity):
+
+| Say | Effect |
+|-----|--------|
+| `use engram` / `check memory` | Activate full mode |
+| `quick question` / `no engram` | Keep Engram disabled |
+| `simple fix` | Stay in light mode |
+
+### 3. Committee-Driven Workflow (Full Mode)
+
+When in Full mode, Engram uses a structured SDLC where agents act as a "committee" (Analyst, Researcher, Skeptic, Archivist) to prevent shallow decisions.
 
 ```mermaid
 sequenceDiagram
@@ -94,6 +143,24 @@ sequenceDiagram
     A->>E: memory_add_mistake() / memory_add_skill()
 ```
 
+### 4. Skill Sync (Cursor ↔ Engram)
+
+Proven Engram skills can be exported as permanent Cursor skills — and Cursor skills can be imported into Engram for semantic search.
+
+```bash
+# See what's out of sync
+engram sync-skills --dry-run
+
+# Export proven skills to Cursor (usage >= 2)
+engram export-skills --min-usage 2
+
+# Import all Cursor skills into Engram
+engram import-cursor-skills ~/.cursor/skills
+
+# Bidirectional auto-sync
+engram sync-skills --auto
+```
+
 ## Claw-Code Integration (Optional)
 
 Engram integrates directly with **Claw-Code** for high-performance execution. Use Claw as your agent's execution engine to get ultra-fast results while logging everything to Engram:
@@ -106,14 +173,43 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 
 ## CLI Reference
 
+### Memory
+
 | Command | Description |
 |---------|-------------|
 | `engram search "query"` | Search all memory (lexical + semantic) |
 | `engram recent` | Show the 10 most recent memory entries |
 | `engram add mistake` | Log a new mistake with root cause |
+| `engram add pattern` | Log a recurring problem pattern |
+| `engram add skill` | Log a proven, reusable workflow |
+| `engram list skills` | List all stored skills |
+| `engram stats` | Memory database statistics |
+| `engram health` | Comprehensive health report |
+
+### Project & Codebase
+
+| Command | Description |
+|---------|-------------|
 | `engram index-project` | Create a persistent map of the current codebase |
 | `engram query-codebase` | Search project-specific file summaries |
+| `engram graph` | Visualize file dependency graph |
+
+### Skill Sync
+
+| Command | Description |
+|---------|-------------|
+| `engram export-skills` | Export Engram skills as Cursor SKILL.md files |
+| `engram import-cursor-skills <path>` | Import Cursor skills into Engram |
+| `engram sync-skills` | Diff and sync Engram ↔ Cursor skills directory |
+
+### Bootstrap & Maintenance
+
+| Command | Description |
+|---------|-------------|
+| `engram bootstrap [--mode adaptive\|full\|minimal]` | Set up agent rules for a project |
 | `engram doctor` | Run diagnostics and fix database issues |
+| `engram gc` | Garbage collect unused memories |
+| `engram backup` | Export database to JSON |
 
 ## Troubleshooting
 
