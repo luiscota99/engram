@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 
 from ..database import init_db
-from .commands.bootstrap import cmd_bootstrap, cmd_init, cmd_seed
+from .commands.bootstrap import cmd_antigravity_global, cmd_bootstrap, cmd_init, cmd_seed
 from .commands.codebase import (
     cmd_clean_codebase,
     cmd_graph,
@@ -32,7 +32,12 @@ from .commands.memory import (
     cmd_suggest_capture,
     cmd_suggest_consolidate,
 )
-from .commands.session import cmd_get_role, cmd_get_session
+from .commands.session import (
+    cmd_get_role,
+    cmd_get_session,
+    cmd_import_session_summary,
+    cmd_session_review,
+)
 from .commands.sync import (
     cmd_export_skills,
     cmd_import_cursor_skills,
@@ -62,6 +67,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("-t", "--type", choices=["mistake", "pattern", "skill", "conversation", "prompt"])
     p_search.add_argument("--tags", help="Comma-separated tags")
     p_search.add_argument("-n", "--limit", type=int, default=20)
+    p_search.add_argument(
+        "--project",
+        metavar="DIR",
+        default=None,
+        help="Project directory for affinity ranking (default: current working directory)",
+    )
+    p_search.add_argument(
+        "--no-project",
+        action="store_true",
+        help="Disable project-scoped affinity (search global memory only)",
+    )
     p_search.set_defaults(func=cmd_search)
 
     p_recent = sub.add_parser("recent", help="Show recent entries")
@@ -270,7 +286,19 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_group = p_bootstrap.add_mutually_exclusive_group()
     mcp_group.add_argument("--setup-mcp", dest="setup_mcp", action="store_true", default=None)
     mcp_group.add_argument("--no-mcp", dest="setup_mcp", action="store_false")
+    p_bootstrap.add_argument(
+        "--global-antigravity",
+        action="store_true",
+        dest="global_antigravity",
+        help="Also write/update the Engram snippet in ~/.gemini/AGENTS.md (applies in every Antigravity workspace)",
+    )
     p_bootstrap.set_defaults(func=cmd_bootstrap)
+
+    p_ag = sub.add_parser(
+        "antigravity-global",
+        help="Install or refresh the global Engram block in ~/.gemini/AGENTS.md (all Antigravity workspaces)",
+    )
+    p_ag.set_defaults(func=cmd_antigravity_global)
 
     p_seed = sub.add_parser("seed", help="Seed with historical data")
     p_seed.set_defaults(func=cmd_seed)
@@ -313,6 +341,43 @@ def build_parser() -> argparse.ArgumentParser:
     p_role = sub.add_parser("get-role", help="Get a subagent role profile")
     p_role.add_argument("name")
     p_role.set_defaults(func=cmd_get_role)
+
+    p_srev = sub.add_parser(
+        "session-review",
+        help="Print the session retrospective checklist (same output as MCP memory_session_review)",
+    )
+    p_srev.add_argument("--conversation-id", default="cli", help="Label for this retrospective")
+    p_srev.add_argument(
+        "--project",
+        metavar="DIR",
+        default=None,
+        help="Project directory for duplicate search + affinity (default: current working directory)",
+    )
+    p_srev.add_argument("--no-project", action="store_true", help="Do not pass a project path")
+    p_srev.add_argument("--tasks", default="", help="Tasks completed this session")
+    p_srev.add_argument("--bugs-fixed", default="", dest="bugs_fixed")
+    p_srev.add_argument("--new-patterns", default="", dest="new_patterns")
+    p_srev.add_argument("--workflows-used", default="", dest="workflows_used")
+    p_srev.set_defaults(func=cmd_session_review)
+
+    p_iss = sub.add_parser(
+        "import-session-summary",
+        help="Ingest session_summary.md (or given file) into global memory as a conversation entry",
+    )
+    p_iss.add_argument(
+        "--file",
+        "-f",
+        default="session_summary.md",
+        help="Markdown file to import (default: ./session_summary.md)",
+    )
+    p_iss.add_argument(
+        "--project",
+        metavar="DIR",
+        default=None,
+        help="Associate with this project path (default: current working directory)",
+    )
+    p_iss.add_argument("--force", action="store_true", help="Insert even if the same content was imported before")
+    p_iss.set_defaults(func=cmd_import_session_summary)
 
     # ── Tools ────────────────────────────────────────────────────────
     p_browse = sub.add_parser("browse", help="Interactive TUI browser for memory entries")

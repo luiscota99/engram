@@ -11,7 +11,7 @@ description: >
 
 Engram engagement is **adaptive**: minimal by default, escalating to the full Committee workflow only when the task warrants it. This prevents every trivial fix from becoming a multi-step committee session.
 
-> **Interface**: Antigravity uses the Engram **CLI**, not MCP tools. **Bootstrapped** projects use `python3 -m src.cli …` from the Engram project root (see `.antigravity/instructions.md`). Elsewhere, `engram` is shorthand for the same when installed with `pip install -e .` and on your `PATH`.
+> **Interface**: Antigravity uses the Engram **CLI** (`engram` on your `PATH`), not MCP tools. All commands work from the **current project directory**; global memory is `~/.engram/memory.db`. Install with `pipx` / `uv tool install` / `pip install -e .` (see Engram README). **Developers** without a global install can run from the Engram **repo root** only: `python3 -m src.cli …` (not from arbitrary project trees).
 
 ---
 

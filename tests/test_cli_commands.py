@@ -77,6 +77,8 @@ class TestCmdSearch:
             type = None
             tags = None
             limit = 10
+            project = None
+            no_project = True  # test DB: avoid get_or_create_project on real cwd
 
         output = _capture_output(cmd_search, Args())
         assert "No results found" in output
@@ -91,9 +93,38 @@ class TestCmdSearch:
             type = None
             tags = None
             limit = 10
+            project = None
+            no_project = True
 
         output = _capture_output(cmd_search, Args())
         assert "Docker Deploy Workflow" in output
+
+
+# ── import-session-summary ───────────────────────────────────────────
+
+class TestImportSessionSummary:
+    def test_imports_file_and_skips_duplicate(self, test_db, tmp_path, monkeypatch):
+        import src.database as _db
+        from src.cli.commands.session import cmd_import_session_summary
+
+        monkeypatch.setattr(_db, "DB_PATH", test_db["path"])
+
+        f = tmp_path / "session_summary.md"
+        f.write_text(
+            "---\ntitle: Lab Session\ndomain: engineering\ntags: rust,gba\n---\n\nDid migration work.",
+            encoding="utf-8",
+        )
+
+        class Args:
+            file = str(f)
+            project = str(tmp_path)
+            force = False
+
+        out1 = _capture_output(cmd_import_session_summary, Args())
+        assert "Imported" in out1 or "✓" in out1
+
+        out2 = _capture_output(cmd_import_session_summary, Args())
+        assert "Skip" in out2
 
 
 # ── cmd_recent ───────────────────────────────────────────────────────

@@ -22,11 +22,18 @@ from ..fmt import fmt_bold, fmt_dim, fmt_header, fmt_type
 def cmd_search(args):
     query = " ".join(args.query) if args.query else ""
     tag_list = [t.strip() for t in args.tags.split(",")] if args.tags else None
+    if args.no_project:
+        project_path = None
+    elif args.project is not None:
+        project_path = os.path.abspath(os.path.expanduser(args.project))
+    else:
+        project_path = os.getcwd()
     results = search(
         query,
         args.type,
         tag_list,
         args.limit,
+        project_path=project_path,
         audit_source="cli",
     )
     if not results:

@@ -30,7 +30,6 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     __package__ = "src"
 
-from src.capture import SESSION_INFLUENCE_PROMPT
 from src.database import (
     delete_item,
     find_similar,
@@ -50,6 +49,7 @@ from src.maintenance import find_consolidation_candidates, run_gc, run_health_ch
 from src.merge import merge_available, merge_entries
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
+from src.session_review import build_session_review_prompt
 from src.workflow import (
     WorkflowViolationError,
     advance_phase,
@@ -1310,81 +1310,14 @@ def handle_memory_stats(args):
 
 def handle_memory_session_review(args):
     """Return a structured reflection prompt for end-of-session learning."""
-    conversation_id = args.get("conversation_id", "unknown")
-    project_path = args.get("project_path")
-    tasks_completed = args.get("tasks_completed", "")
-    bugs_fixed = args.get("bugs_fixed", "")
-    new_patterns = args.get("new_patterns_noticed", "")
-    workflows_used = args.get("workflows_used", "")
-
-    # Register project if provided
-    project_info = ""
-    if project_path:
-        try:
-            project = get_or_create_project(project_path)
-            project_info = f"\nProject: {project['name']} ({project['path']})"
-        except Exception:
-            pass
-
-    # Search for similar existing entries to prevent duplicates
-    similar_section = ""
-    search_terms = []
-    if bugs_fixed:
-        search_terms.append(bugs_fixed)
-    if new_patterns:
-        search_terms.append(new_patterns)
-    if workflows_used:
-        search_terms.append(workflows_used)
-
-    if search_terms:
-        combined_query = " ".join(search_terms)[:200]
-        existing = memory_search(
-            combined_query, limit=5, project_path=project_path, skip_audit=True
-        )
-        if existing:
-            similar_section = "\n\n## ⚠️ Similar Existing Entries (check for duplicates before logging):\n"
-            for e in existing:
-                similar_section += f"  [{e['item_type'].upper()} ID:{e['item_id']}] {e['title']}\n"
-
-    influence_block = SESSION_INFLUENCE_PROMPT.rstrip()
-
-    # Build reflection prompt
-    prompt = f"""# Session Retrospective — {conversation_id[:12]}
-{project_info}
-
-## Tasks Completed
-{tasks_completed}
-
-## Reflection Checklist
-
-### 1. Mistakes to Log
-{f'Bugs fixed this session: {bugs_fixed}' if bugs_fixed else 'No bugs reported.'}
-→ For each bug fixed, draft a `memory_add_mistake` call with: date, context, mistake, root_cause, fix, prevention, tags
-→ Present the draft to the user for approval before logging.
-
-### 2. Patterns to Log
-{f'Patterns noticed: {new_patterns}' if new_patterns else 'No new patterns reported.'}
-→ For each recurring issue, draft a `memory_add_pattern` call with: name, symptoms, root_cause, standard_fix, tags
-→ Search existing patterns first to avoid duplicates.
-
-### 3. Skills to Log
-{f'Workflows used: {workflows_used}' if workflows_used else 'No workflows reported.'}
-→ For each multi-step workflow that succeeded, draft a `memory_add_skill` call with: name, domain, trigger, workflow, pitfalls, tags
-→ If the workflow had >3 steps and could be reused, it's a strong skill candidate.
-
-### 4. Conversation Summary
-→ Draft a `memory_add_conversation` call to log this session for cross-session continuity.
-{similar_section}
-
-{influence_block}
-
-## Instructions
-1. Draft ALL entries above in a markdown block.
-2. Present them to the user for explicit approval.
-3. Only after approval, call the respective memory_add_* tools.
-4. Do NOT log anything without user confirmation."""
-
-    return prompt
+    return build_session_review_prompt(
+        conversation_id=args.get("conversation_id", "unknown"),
+        project_path=args.get("project_path"),
+        tasks_completed=args.get("tasks_completed", ""),
+        bugs_fixed=args.get("bugs_fixed", ""),
+        new_patterns_noticed=args.get("new_patterns_noticed", ""),
+        workflows_used=args.get("workflows_used", ""),
+    )
 
 
 def handle_memory_check_workflow_state(args):

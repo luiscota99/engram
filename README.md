@@ -42,7 +42,19 @@ graph TD
     end
 ```
 
-**How clients connect:** **Cursor** (and other MCP-capable IDEs) call Engram through the **MCP server** (`memory_search`, `memory_add_*`, etc.). **Antigravity** has no Engram MCP in the default flow—the agent runs the same operations via **`python3 -m src.cli`** (see bootstrapped `.antigravity/instructions.md`). Both paths hit the same search engine and database.
+**How clients connect:** **Cursor** (and other MCP-capable IDEs) call Engram through the **MCP server** (`memory_search`, `memory_add_*`, etc.). **Antigravity** has no Engram MCP in the default flow—the agent runs the same operations via the **`engram` CLI** on your `PATH` (see bootstrapped `.antigravity/instructions.md`). Both paths hit the same search engine and database at `~/.engram/memory.db` by default.
+
+## Global CLI (PATH)
+
+Use the **same** memory database from every project directory:
+
+- **Recommended:** `pipx install` / `uv tool install` from a built wheel, or from a git checkout: `pip install -e .` (installs the `engram` console script).
+- **Default DB:** `~/.engram/memory.db`. For one global store, **do not** set a different `ENGRAM_DB_PATH` per project unless you intend split corpora.
+- **Search** uses the **current working directory** for project-affinity ranking by default (`engram search …`). Use `engram search --no-project` for global-only ranking, or `--project /path` to override.
+- **Session summary file:** `engram import-session-summary` ingests a markdown file (e.g. `session_summary.md`) into memory for cross-workspace search.
+- **Developers (no `pip install`):** run CLI only from the Engram **repository root** as `python3 -m src.cli` (or set `PYTHONPATH`); do not use that from unrelated project trees.
+- **Optional script:** [`scripts/engram.sh`](scripts/engram.sh) delegates to `engram` on `PATH` or, if `ENGRAM_ROOT` is set, to `python3 -m src.cli` in that checkout.
+- **Antigravity (all workspaces):** Google’s Antigravity IDE merges **global** rules from `~/.gemini/AGENTS.md` (and Antigravity-specific `~/.gemini/GEMINI.md`) on every project. Engram does **not** rely on a user-level `~/.antigravity/` config path; run **`engram antigravity-global`** (or `engram bootstrap --global-antigravity` while bootstrapping a repo) to idempotently add an Engram section to `AGENTS.md`. Per-repo **`.antigravity/instructions.md`** from `engram bootstrap` still adds project-specific workflow detail.
 
 ## Quick Start
 
@@ -69,7 +81,7 @@ Engram turns AI assistants into senior partners who remember your project's hist
 | | **Cursor** | **Antigravity** |
 |---|------------|-----------------|
 | **How Engram is wired** | `.cursor/rules/engram.mdc` + optional [Cursor hooks](cursor-hooks/session-capture.js) | `.antigravity/instructions.md` (from `engram bootstrap`) |
-| **Primary interface** | **MCP tools** (`memory_search`, `memory_suggest_capture`, `memory_add`, …) | **CLI** (`python3 -m src.cli …` from the Engram repo root or `PATH`) |
+| **Primary interface** | **MCP tools** (`memory_search`, `memory_suggest_capture`, `memory_add`, …) | **CLI** (`engram …` on `PATH`; CWD is used for project affinity) |
 | **Session capture** | Hooks can call `suggest-capture` on stop / session end | Agent runs `suggest-capture` per instructions (heuristic, same engine) |
 | **Skill import/export** | Yes (`engram import-cursor-skills`, `export-skills`) | Use CLI / memory search; no separate Antigravity skill sync |
 
@@ -150,7 +162,7 @@ sequenceDiagram
     A->>E: memory_add_mistake() / memory_add_skill()
 ```
 
-*Antigravity / CLI:* use the same flow with `python3 -m src.cli search`, `add session`, `add transcript`, `add decision`, and `suggest-capture` before persisting; see `.antigravity/instructions.md` for exact commands.
+*Antigravity / CLI:* use the same flow with `engram search`, `engram add session`, `engram add transcript`, `engram add decision`, `engram suggest-capture`, and optional `engram import-session-summary` / `engram session-review`; see `.antigravity/instructions.md` for exact commands.
 
 ### 4. Skill Sync (Cursor ↔ Engram)
 
@@ -186,7 +198,9 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 
 | Command | Description |
 |---------|-------------|
-| `engram search "query"` | Search all memory (lexical + semantic) |
+| `engram search "query"` | Search all memory (lexical + semantic); defaults to CWD for project affinity (`--no-project`, `--project DIR`) |
+| `engram session-review` | Print MCP-style retrospective checklist (optionally `--project`, `--tasks`, `--bugs-fixed`, …) |
+| `engram import-session-summary [--file session_summary.md]` | Ingest a session summary file into `conversations` for global search |
 | `engram recent` | Show the 10 most recent memory entries |
 | `engram add mistake` | Log a new mistake with root cause |
 | `engram add pattern` | Log a recurring problem pattern |

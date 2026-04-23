@@ -28,6 +28,69 @@ _AG_SKILL_SOURCES = {
     "minimal":  None,
 }
 
+# Antigravity loads global cross-tool rules from ~/.gemini/AGENTS.md (see Google Antigravity docs).
+_GLOBAL_AGENTS_BEGIN = "<!-- engram-global:begin -->"
+_GLOBAL_AGENTS_END = "<!-- engram-global:end -->"
+
+
+def _global_antigravity_agents_body() -> str:
+    return """## Engram — global engineering memory (all workspaces)
+
+- **CLI:** `engram` must be on your `PATH` (`pip install -e .` from the Engram repo, `pipx`, or `uv tool install`). Run commands from the **current project directory**. Default database: **`~/.engram/memory.db`** (set `ENGRAM_DB_PATH` only if you intentionally want a separate corpus).
+- **Session start:** `engram search "<keywords>" -n 3` — search uses the current working directory for project affinity unless you pass `engram search --no-project`.
+- **Session end (optional):** `engram import-session-summary` if you keep a `session_summary.md`; `engram suggest-capture` for heuristics; `engram session-review` for the full retrospective checklist.
+- **Richer per-repo rules:** run `engram bootstrap` in a repository to add `.antigravity/instructions.md` and Cursor rules alongside this global hint.
+- **Repository:** https://github.com/luismiguelcota/engram"""
+
+
+def write_global_antigravity_agents_snippet(home: str | None = None) -> tuple[bool, str]:
+    """Insert or update the Engram block in ~/.gemini/AGENTS.md (idempotent).
+
+    Returns (success, path_written).
+    """
+    base = home or os.path.expanduser("~")
+    gemini_dir = os.path.join(base, ".gemini")
+    path = os.path.join(gemini_dir, "AGENTS.md")
+    inner = _global_antigravity_agents_body().strip()
+    block = f"{_GLOBAL_AGENTS_BEGIN}\n{inner}\n{_GLOBAL_AGENTS_END}\n"
+    os.makedirs(gemini_dir, exist_ok=True)
+
+    existing = ""
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            existing = f.read()
+
+    if _GLOBAL_AGENTS_BEGIN in existing and _GLOBAL_AGENTS_END in existing:
+        before, _, tail = existing.partition(_GLOBAL_AGENTS_BEGIN)
+        _, _, after = tail.partition(_GLOBAL_AGENTS_END)
+        new_content = before.rstrip() + "\n\n" + block + "\n" + after.lstrip()
+    else:
+        sep = "\n\n" if existing.strip() else ""
+        new_content = existing.rstrip() + sep + block
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    return True, path
+
+
+def cmd_antigravity_global(args):
+    """Standalone: only write ~/.gemini/AGENTS.md snippet (no project files)."""
+    _ = args
+    if not os.path.exists(get_db_path()):
+        init_db()
+        print(f"✓ Initialized database at {get_db_path()}")
+    ok, path = write_global_antigravity_agents_snippet()
+    if ok:
+        print(f"✓ Updated Antigravity global rules: {path}")
+        print(
+            fmt_dim(
+                "Antigravity merges ~/.gemini/AGENTS.md in every workspace. "
+                "If you use Gemini CLI too, note both ecosystems may share ~/.gemini/ — "
+                "see Engram README (Global CLI section)."
+            )
+        )
+
 
 def _prompt_bootstrap_mode() -> str:
     print(fmt_header("\nChoose Engram engagement mode:\n"))
@@ -185,10 +248,21 @@ def cmd_bootstrap(args):
         print(f"  {line}")
 
     print(f"\n{fmt_bold('Next Steps:')}")
-    print(f"  1. Run `{fmt_bold('engram index-project')}` to map this codebase")
-    print(f"  2. Run `{fmt_bold('engram sync-skills')}` to sync any existing Cursor skills into memory")
+    print(f"  1. Ensure `{fmt_bold('engram')}` is on your PATH (e.g. `pip install -e .` from this repo, or `pipx` / `uv tool install`) so Antigravity can run CLI commands from any project directory.")
+    print(f"  2. Run `{fmt_bold('engram index-project')}` to map this codebase")
+    print(f"  3. Run `{fmt_bold('engram sync-skills')}` to sync any existing Cursor skills into memory")
     if mode != "adaptive":
         print(fmt_dim("\n  Tip: Re-run `engram bootstrap --mode adaptive` to switch to adaptive mode."))
+
+    if getattr(args, "global_antigravity", False):
+        _, ag_path = write_global_antigravity_agents_snippet()
+        print(f"\n{fmt_bold('Antigravity (all workspaces):')}")
+        print(f"  ✓ Appended/updated Engram block in {ag_path}")
+        print(
+            fmt_dim(
+                "  Use `engram antigravity-global` anytime to refresh this block without re-bootstrapping the project."
+            )
+        )
 
 
 def cmd_seed(args):

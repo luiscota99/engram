@@ -17,7 +17,7 @@ description: >
 
 Engram engagement is **adaptive**: minimal by default, escalating to the full Committee workflow only when the task warrants it. This prevents every trivial fix from becoming a multi-step committee session.
 
-> **Interface**: Antigravity uses the Engram **CLI** (`python3 -m src.cli ...`), not MCP tools. Run commands from the **engram project root** (or with `PYTHONPATH` set) so `python3 -m src.cli` resolves.
+> **Interface**: Antigravity uses the Engram **CLI** (`engram ...` on your `PATH`), not MCP tools. Global memory lives in `~/.engram/memory.db`. Install the CLI with `pipx install` / `uv tool install` / `pip install -e` from a clone (see Engram README). **Developers** running from a git clone can also use `cd /path/to/engram && engram` (repo root) or `PYTHONPATH=.` so `import src` resolves.
 
 ---
 
@@ -36,7 +36,7 @@ Engram engagement is **adaptive**: minimal by default, escalating to the full Co
 For most tasks, at the **start** of the session:
 
 ```bash
-python3 -m src.cli search "keywords from task" -n 3
+engram search "keywords from task" -n 3
 ```
 
 1. Extract 2-4 keywords from the user's request
@@ -62,7 +62,7 @@ If uncertain, run `suggest-capture` **once** and **only** surface the result to 
 **Command (same heuristics as Cursor `session-capture` hooks):**
 
 ```bash
-python3 -m src.cli suggest-capture --task "one-line task summary" --outcome "what was delivered or learned" --json
+engram suggest-capture --task "one-line task summary" --outcome "what was delivered or learned" --json
 ```
 
 Use `--errors "..."` and `--files "a.py,b.py"` when applicable. Get **explicit user approval** before any `add mistake` / `add pattern` / `add skill` commands.
@@ -107,8 +107,8 @@ Then follow these steps:
 ### Step 1: Search Memory
 
 ```bash
-python3 -m src.cli search "task keywords" -n 5
-python3 -m src.cli recent -n 3
+engram search "task keywords" -n 5
+engram recent -n 3
 ```
 
 Check for relevant past mistakes, patterns, or skills before starting.
@@ -116,7 +116,7 @@ Check for relevant past mistakes, patterns, or skills before starting.
 ### Step 2: Initialize Session
 
 ```bash
-python3 -m src.cli add session \
+engram add session \
   --id "YYYY-MM-DD__TaskName" \
   --title "Descriptive task title" \
   --date "YYYY-MM-DD" \
@@ -136,14 +136,14 @@ Assume the **Facilitator** persona. Delegate to virtual subagents in order:
 
 To get a role's full charter:
 ```bash
-python3 -m src.cli get-role Analyst
+engram get-role Analyst
 ```
 
 ### Step 4: Persist Transcripts
 
 As each subagent completes their reasoning:
 ```bash
-python3 -m src.cli add transcript \
+engram add transcript \
   --session-id "YYYY-MM-DD__TaskName" \
   --role "Analyst" \
   --content "Problem framing: ..."
@@ -153,7 +153,7 @@ python3 -m src.cli add transcript \
 
 When a critical technical decision is reached:
 ```bash
-python3 -m src.cli add decision \
+engram add decision \
   --session-id "YYYY-MM-DD__TaskName" \
   --decision "Decided to use X instead of Y because..."
 ```
@@ -172,7 +172,7 @@ Present the final output in this format:
 After significant work, **do not** hand-draft long `add` blocks as the primary path. **Always start** with the heuristic engine (same as Cursor `suggest-capture` / `memory_suggest_capture`):
 
 ```bash
-python3 -m src.cli suggest-capture \
+engram suggest-capture \
   --task "Concise task description" \
   --outcome "What was completed and key learnings" \
   --errors "Optional: errors, stack traces, wrong turns" \
@@ -185,9 +185,9 @@ python3 -m src.cli suggest-capture \
 3. **After approval**, run the appropriate `add` subcommands with the approved fields, for example:
 
 ```bash
-python3 -m src.cli add mistake --date "YYYY-MM-DD" --context "..." --mistake "..." --root-cause "..." --fix "..." --prevention "..."
-python3 -m src.cli add pattern --name "..." --symptoms "..." --root-cause "..." --fix "..."
-python3 -m src.cli add skill --name "..." --domain "engineering" --trigger "..." --workflow "..."
+engram add mistake --date "YYYY-MM-DD" --context "..." --mistake "..." --root-cause "..." --fix "..." --prevention "..."
+engram add pattern --name "..." --symptoms "..." --root-cause "..." --fix "..."
+engram add skill --name "..." --domain "engineering" --trigger "..." --workflow "..."
 ```
 
 **Escape hatch:** If the heuristics miss something important, the user can ask for a **manual** `add` for a specific type; fill fields carefully and still ask for approval.
@@ -211,7 +211,7 @@ When the session context is getting long or a major milestone is complete:
 > 2. Resume with:
 > ```text
 > [Continuing from previous session] Resume work. Start by running:
-> python3 -m src.cli get-session --id '<session_id>'
+> engram get-session --id '<session_id>'
 > ```
 
 ---
@@ -230,13 +230,24 @@ When the session context is getting long or a major milestone is complete:
 ## Measuring impact & explicit disclosure
 
 - **`suggest-capture`** output ends with **Engram influence (0–3)** — have the model answer briefly after non-trivial work. In FULL / committee flows, the same idea applies when using session review patterns. See Engram repo **`docs/MEASURING_FIT_AND_HELP.md`**.
-- **Optional:** `python3 -m src.cli session-help --score 0-3 --note "..."` appends to `~/.engram/session-help.jsonl` (override with `ENGRAM_SESSION_HELP_LOG`).
+- **Optional:** `engram session-help --score 0-3 --note "..."` appends to `~/.engram/session-help.jsonl` (override with `ENGRAM_SESSION_HELP_LOG`).
 - **When acting on Engram memory**, one short line is enough (not every `search`). **Public repos:** use titles/slugs only in commits — **no numeric IDs**. **Private:** `Engram-Refs: skill:12` is OK. Set `ENGRAM_DISCLOSURE=public` when unsure.
 
 ---
 
+### Step 8: Optional — persist a written session summary (Memory sync)
+
+If the project uses a `session_summary.md` (or similar) in the **current working directory**, run this **before** the session fully ends so the text is available for global search in other workspaces:
+
+```bash
+engram import-session-summary --file session_summary.md
+```
+
+Optional YAML front matter is supported (between `---` lines): `title`, `date`, `domain`, `tags`, `conversation_id`. The same content ingested twice is skipped (dedupe by `conversation_id` / content hash) unless you pass `--force`. Use `--project` to override the project directory used for linking (default: current working directory).
+
 ## Dependencies
 
-- Engram CLI: `python3 -m src.cli` (from the engram project root, or with `PYTHONPATH` including the project)
+- Engram CLI: `engram` on `PATH` (see Engram README: `pipx`, `uv tool install`, or `pip install -e .` from a clone)
 - Python 3.9+
-- `~/.engram/memory.db` must exist (run `engram init` if not)
+- `~/.engram/memory.db` — single global DB for all projects unless you intentionally set `ENGRAM_DB_PATH` per environment
+- **Developers (no install):** from the Engram repo root, `python3 -m src.cli` still works; do not use that from unrelated project directories without `pip install -e` or a global `engram` command

@@ -15,7 +15,7 @@ Use this workflow anytime the user requests a complex engineering task (e.g., "b
 ## The Zero Rule (MANDATORY)
 1. **Never guess unknowns**: If there is missing context, ask the user.
 2. **Never behave like a single-agent solver**: Always delegate reasoning to virtual subagents.
-3. **Persist everything**: All subagent outputs must be logged to Engram with `python3 -m src.cli add ...` (from the Engram repo) or `engram add ...` if the console script is on `PATH`—**not** MCP in Antigravity.
+3. **Persist everything**: All subagent outputs must be logged to Engram with `engram add ...` from any project directory (CLI on `PATH`)—**not** MCP in Antigravity.
 
 ## Workflow Steps
 
@@ -23,7 +23,7 @@ Use this workflow anytime the user requests a complex engineering task (e.g., "b
 Generate a unique session ID based on the date and task (e.g., `2026-04-20__FeatureX`).
 Initialize the session in Engram:
 ```bash
-python3 -m src.cli add session --id "YYYY-MM-DD__Task" --title "Implement Feature X" --date "YYYY-MM-DD" --domain "engineering"
+engram add session --id "YYYY-MM-DD__Task" --title "Implement Feature X" --date "YYYY-MM-DD" --domain "engineering"
 ```
 
 ### Step 2: Route to Subagents
@@ -33,18 +33,18 @@ Assume the persona of the **Facilitator**. Route tasks to the virtual subagents:
 - **Skeptic**: Plays devil's advocate, identifies risks in the proposed approach.
 - **Archivist**: Prepares the implementation plan or diffs.
 
-*Note: You simulate these roles internally. If you need their specific charters, run `python3 -m src.cli get-role <RoleName>`.*
+*Note: You simulate these roles internally. If you need their specific charters, run `engram get-role <RoleName>`.*
 
 ### Step 3: Persist Transcripts
 As each virtual subagent completes its reasoning, persist its output:
 ```bash
-python3 -m src.cli add transcript --session-id "YYYY-MM-DD__Task" --role "Analyst" --content "Problem framing: ..."
+engram add transcript --session-id "YYYY-MM-DD__Task" --role "Analyst" --content "Problem framing: ..."
 ```
 
 ### Step 4: Make Decisions
 When a critical technical decision is reached, log it:
 ```bash
-python3 -m src.cli add decision --session-id "YYYY-MM-DD__Task" --decision "Decided to use FTS5 instead of LIKE for performance..."
+engram add decision --session-id "YYYY-MM-DD__Task" --decision "Decided to use FTS5 instead of LIKE for performance..."
 ```
 
 ### Step 5: Deliver Facilitator Summary
@@ -69,9 +69,9 @@ To maintain token efficiency and fast reasoning, you MUST enforce stateless sess
 > 1. Open a new chat window.
 > 2. Paste the following text to continue seamlessly:
 > ```text
-> [Continuing from previous session] Please resume work. Start by running python3 -m src.cli get-session --id '<insert_session_id_here>' to read our progress and decisions.
+> [Continuing from previous session] Please resume work. Start by running engram get-session --id '<insert_session_id_here>' to read our progress and decisions.
 > ```
 
 ## Dependencies
-- Engram CLI (`src/cli.py`)
+- Engram CLI (`engram` on `PATH`, or from repo: `python3 -m src.cli`)
 - Python 3.9+
