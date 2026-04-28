@@ -6,12 +6,15 @@ multi-factor ranking via src/ranking.py.
 from __future__ import annotations
 
 import json
+import logging
 
 from .database import get_connection, get_or_create_project, get_project_affinities
 from .embeddings import embed_text
 from .query_analyzer import detect_query_tags
 from .ranking import rank_results, rerank_with_bm25
 from .search_audit import append_search_audit
+
+logger = logging.getLogger(__name__)
 
 
 class SearchResults(list):
@@ -39,7 +42,8 @@ def _get_stale_rowids(conn) -> set:
             "SELECT fts_rowid FROM embedding_status WHERE status IN ('stale', 'failed')"
         ).fetchall()
         return {r["fts_rowid"] for r in rows}
-    except Exception:
+    except Exception as e:
+        logger.debug("Stale rowids unavailable (embedding_status): %s", e)
         return set()
 
 
@@ -98,6 +102,7 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
                 })
             return results[:limit], "ok"
         except Exception:
+            logger.exception("semantic_search vec_memory query failed")
             return [], "degraded"
 
 
@@ -237,7 +242,7 @@ def search(
             project = get_or_create_project(project_path, db_path=db_path)
             affinities = get_project_affinities(results, project["id"], db_path=db_path)
         except Exception:
-            pass
+            logger.exception("get_or_create_project / project affinity failed")
 
     # 5. Rank using multi-factor scoring
     results = rank_results(

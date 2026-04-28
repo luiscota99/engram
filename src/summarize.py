@@ -119,6 +119,8 @@ def summarize_file(
     )
 
     raw = _call_ollama(prompt, model=ollama_model)
+    if raw is None:
+        return None
     parsed = _parse_llm_json(raw)
 
     if not parsed or "summary" not in parsed:

@@ -20,22 +20,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "pyright>=1.1.389",
     "ruff>=0.3.0",
     "pre-commit>=3.7.0"
 ]
 
 [project.scripts]
 engram = "src.cli:main"
-
-[project.entry-points."engram.commands"]
-# Sub-package registration (not a real entry point — documents the modular layout)
-memory = "src.cli.commands.memory"
-codebase = "src.cli.commands.codebase"
-sync = "src.cli.commands.sync"
-bootstrap = "src.cli.commands.bootstrap"
-maintenance = "src.cli.commands.maintenance"
-session = "src.cli.commands.session"
-tools = "src.cli.commands.tools"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -46,8 +38,30 @@ line-length = 100
 target-version = "py39"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
+select = ["E", "F", "I", "W", "B"]
 ignore = ["E501"]
+
+[tool.pyright]
+pythonVersion = "3.9"
+typeCheckingMode = "basic"
+include = [
+    "src/embeddings.py",
+    "src/database.py",
+    "src/search.py",
+    "src/summarize.py",
+    "src/version.py",
+    "src/mcp",
+    "src/cli",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true
+fail_under = 0
 
 [tool.pytest.ini_options]
 minversion = "6.0"

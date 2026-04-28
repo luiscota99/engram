@@ -8,7 +8,7 @@ Thanks for your interest in contributing! Engram is a persistent memory system f
 2. Clone your fork locally
 3. Run `bash scripts/setup.sh` to set up the development environment
 4. Make your changes
-5. Test with `engram stats` and `engram search "test"`
+5. Test with `engram stats` and `engram search "test"` (after `pip install -e ".[dev]"` from the repo root)
 6. Submit a pull request
 
 ## Development Setup
@@ -19,65 +19,88 @@ cd engram
 bash scripts/setup.sh
 ```
 
+Install the package in editable mode with dev extras (declared in [`pyproject.toml`](pyproject.toml)):
+
+```bash
+pip install -e ".[dev]"
+```
+
 ### Key Dependencies
 
-Engram aims for a minimal footprint but relies on the following for advanced features:
-- **sqlite-vec**: For vector search/embeddings.
-- **sqlean-py**: For advanced SQLite extensions (FTS5).
-- **Ollama**: For generating local text embeddings (`nomic-embed-text`).
+Declared in [`pyproject.toml`](pyproject.toml) (`[project]` dependencies and `[project.optional-dependencies] dev`):
+
+- **sqlite-vec** — vector search
+- **sqlean-py** — SQLite with FTS5 and extensions as used by Engram
+- **Ollama** (runtime, not pip) — local embeddings; default model `nomic-embed-text`
 
 ## Architecture
 
 ```
 src/
-├── cli.py           # CLI entry point and argument parsing
-├── mcp_server.py    # MCP server for Cursor/Claude Desktop
-├── database.py      # SQLite schema, connections, FTS5
-├── search.py        # Full-text search and hybrid ranking
-├── embeddings.py    # Ollama integration for vector search
-├── doctor.py        # Diagnostic and repair tools
-└── seed.py          # Professional engineering patterns for OOBE
+├── cli/                 # CLI entry: main.py (parser), commands/*.py
+├── mcp/                 # MCP: protocol.py, handlers.py, tools_schema.py, constants.py
+├── mcp_server.py        # Thin launcher; stdio MCP (see mcp/protocol.py)
+├── database.py          # SQLite schema, migrations, FTS5, connections
+├── search.py            # Hybrid FTS5 + semantic search, ranking hooks
+├── embeddings.py        # Ollama embedding client
+├── ranking.py           # Multi-factor and BM25 ranking
+├── workflow.py          # Committee / session phase state
+├── doctor.py            # Diagnostics and repairs
+└── seed.py              # Initial seed data / OOBE helpers
+```
+
+CLI entry point: `engram` → `src.cli:main` ([`pyproject.toml`](pyproject.toml) `[project.scripts]`).
+
+Developers without installing the package should run from the **repository root**:
+
+```bash
+PYTHONPATH=. python3 -m src.cli --help
 ```
 
 ## Guidelines
 
 - **Python 3.9+** compatible.
-- **Hybrid Search** — Always ensure new memory types are indexed in both FTS5 and the vector table if they contain descriptive text.
-- **Agent Focus** — Keep the MCP server (`mcp_server.py`) up to date with any new tools or memory types.
-- **Zero Bloat** — Use standard library where possible. External dependencies must be justified and added to `requirements.txt`.
+- **Hybrid search** — New memory types with searchable text should be indexed in FTS5 and, where appropriate, the vector table (`vec_memory`); see [`database.py`](src/database.py) and [`search.py`](src/search.py).
+- **MCP parity** — New user-facing memory operations should appear in both CLI (under [`src/cli/commands/`](src/cli/commands/)) and MCP ([`src/mcp/tools_schema.py`](src/mcp/tools_schema.py) + [`src/mcp/handlers.py`](src/mcp/handlers.py)).
+- **Dependencies** — Prefer the standard library where possible. New Python dependencies belong in [`pyproject.toml`](pyproject.toml) `[project] dependencies` or `optional-dependencies`, not a separate `requirements.txt`.
 
 ## Adding a New Memory Type
 
-1. Add the table schema in `database.py` (`SCHEMA_SQL`).
-2. Add the handler functions in `cli.py` (add, list).
-3. Add the MCP tool definition and handler in `mcp_server.py`.
-4. Update the indexing logic in `database.py` (`index_in_fts`).
-5. Update `README.md` to reflect the new capability.
+1. Add the table in [`database.py`](src/database.py) (`SCHEMA_SQL`) and bump migrations in [`migrations.py`](src/migrations.py) if needed.
+2. Add CLI commands or flags under [`src/cli/commands/`](src/cli/commands/) and wire them in [`src/cli/main.py`](src/cli/main.py).
+3. Add MCP tool definitions and handlers in [`src/mcp/tools_schema.py`](src/mcp/tools_schema.py) and [`src/mcp/handlers.py`](src/mcp/handlers.py).
+4. Update indexing in [`database.py`](src/database.py) (`index_in_fts`, vector rows if applicable).
+5. Update [`README.md`](README.md) for users.
 
 ## Testing
 
-Engram uses `pytest` for automated testing:
-
 ```bash
-# Install dev dependencies
 pip install -e ".[dev]"
-
-# Run tests
 pytest
 ```
 
-Manual verification:
-```bash
-# Run diagnostics
-engram doctor
+With coverage (optional; see CI):
 
-# Test search
+```bash
+pytest --cov=src --cov-report=term-missing tests/
+```
+
+Manual checks:
+
+```bash
+engram doctor
 engram search "alpha compositing"
 ```
+
+## Linting and types
+
+- **Ruff:** `ruff check src/ tests/ benchmarks/`
+- **Pyright:** `pyright` (configured in [`pyproject.toml`](pyproject.toml); key modules under `src/mcp/`, `src/cli/`, core search/DB)
 
 ## Reporting Issues
 
 Open a GitHub issue with:
+
 - What you expected to happen.
 - What actually happened.
 - Your Python version (`python3 --version`).

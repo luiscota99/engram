@@ -84,7 +84,10 @@ def cmd_run(args):
     try:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         output_lines = []
-        for line in process.stdout:
+        proc_stdout = process.stdout
+        if proc_stdout is None:
+            raise RuntimeError("subprocess stdout unavailable")
+        for line in proc_stdout:
             print(line, end="")
             output_lines.append(line)
         process.wait()

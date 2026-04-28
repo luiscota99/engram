@@ -85,6 +85,11 @@ Engram turns AI assistants into senior partners who remember your project's hist
 | **Session capture** | Hooks can call `suggest-capture` on stop / session end | Agent runs `suggest-capture` per instructions (heuristic, same engine) |
 | **Skill import/export** | Yes (`engram import-cursor-skills`, `export-skills`) | Use CLI / memory search; no separate Antigravity skill sync |
 
+### Where Cursor rule files live
+
+- **In your application repositories:** `engram bootstrap` installs **`.cursor/rules/engram.mdc`** (and related engagement files) into *that* project. That is what Cursor loads for day-to-day work.
+- **In the Engram repo:** committed templates live under [`cursor-rules/`](cursor-rules/) (for example `engram.mdc`, adaptive/committee variants). Those files are the **canonical template source** for bootstrap and documentation; [`.cursor/rules/`](.cursor/rules/) here may mirror them for dogfooding Engram while developing. For consumers, follow bootstrap output in your own repo—do not assume two different trees need to stay manually in sync.
+
 **Same behavior, different channel:** search, add, and suggest-capture map 1:1 between MCP and CLI; pick one client per project or use both for different tasks—avoid writing the same memory twice by agreeing which tool runs capture.
 
 ### 1. Bootstrap your Project
@@ -255,31 +260,33 @@ Stress metrics depend on Ollama and the embedding model; compare runs on the sam
 
 ## Embedding Models
 
-Engram uses [Ollama](https://ollama.com) for local embedding generation. The default model is `nomic-embed-text`. You can switch models via the `ENGRAM_EMBED_MODEL` environment variable.
+Engram uses [Ollama](https://ollama.com) for local embedding generation. Configure the model with **`ENGRAM_EMBED_MODEL`** (canonical). **`ENGRAM_EMBEDDING_MODEL`** is a deprecated alias for the same setting—prefer `ENGRAM_EMBED_MODEL`.
+
+The sqlite-vec index (`vec_memory`) is fixed at **768 dimensions**. Only embeddings with that length are stored for semantic KNN; the default **`nomic-embed-text`** matches this schema. Models that produce other dimensions (e.g. 1024-dim models in the table below) are listed for reference; if selected, lexical search still works, but vector rows are skipped until you use a 768-dim model or migrate the schema.
 
 ```bash
-# Use the default (recommended)
+# Default — full hybrid (FTS5 + semantic); vectors stored
 engram search "database migration"
 
-# Use a higher-quality model (requires `ollama pull mxbai-embed-large`)
-ENGRAM_EMBED_MODEL=mxbai-embed-large engram search "database migration"
+# Explicit default model
+ENGRAM_EMBED_MODEL=nomic-embed-text engram search "database migration"
 
 # Set permanently in your shell profile
-export ENGRAM_EMBED_MODEL=mxbai-embed-large
+export ENGRAM_EMBED_MODEL=nomic-embed-text
 ```
 
 ### Model Comparison
 
 | Model | Dimensions | Context | Size | Notes |
 |-------|-----------|---------|------|-------|
-| `nomic-embed-text` *(default)* | 768 | 8192 tokens | 274 MB | Best context window — handles long entries well |
-| `mxbai-embed-large` | 1024 | 512 tokens | 670 MB | Highest MTEB score; short context |
-| `bge-large-en-v1.5` | 1024 | 512 tokens | 670 MB | Strong English retrieval; short context |
-| `snowflake-arctic-embed` | 1024 | 512 tokens | 669 MB | Fast inference; competitive quality |
+| `nomic-embed-text` *(default)* | 768 | 8192 tokens | 274 MB | Matches `vec_memory`; best context window |
+| `mxbai-embed-large` | 1024 | 512 tokens | 670 MB | Higher MTEB; **not stored** in current vec schema |
+| `bge-large-en-v1.5` | 1024 | 512 tokens | 670 MB | Strong English retrieval; **not stored** in current vec schema |
+| `snowflake-arctic-embed` | 1024 | 512 tokens | 669 MB | Fast; **not stored** in current vec schema |
 
-**Recommendation:** Stick with `nomic-embed-text` unless you need higher semantic precision and are willing to trade the larger context window. Engram's hybrid FTS5 + semantic search reduces the impact of imperfect semantic quality.
+**Recommendation:** Use **`nomic-embed-text`** for semantic + hybrid behavior. Engram's hybrid FTS5 + semantic search still helps when vectors are unavailable (lexical-only path).
 
-> **Note:** Changing models invalidates all existing embeddings. Run `engram doctor --repair` after switching to regenerate them.
+> **Note:** Changing models invalidates existing embeddings for ranking consistency. Run `engram doctor --repair` after switching compatible models.
 
 ## Troubleshooting
 

@@ -35,13 +35,6 @@ def _capture_output(func, *args, **kwargs) -> str:
     return buf.getvalue()
 
 
-@pytest.fixture(autouse=True)
-def _patch_db_path(test_db, monkeypatch):
-    """Point module-level DB_PATH in src.database to the test DB for this test."""
-    import src.database as _db
-    monkeypatch.setattr(_db, "DB_PATH", test_db["path"])
-
-
 # ── cmd_stats ────────────────────────────────────────────────────────
 
 class TestCmdStats:
@@ -103,11 +96,8 @@ class TestCmdSearch:
 # ── import-session-summary ───────────────────────────────────────────
 
 class TestImportSessionSummary:
-    def test_imports_file_and_skips_duplicate(self, test_db, tmp_path, monkeypatch):
-        import src.database as _db
+    def test_imports_file_and_skips_duplicate(self, test_db, tmp_path):
         from src.cli.commands.session import cmd_import_session_summary
-
-        monkeypatch.setattr(_db, "DB_PATH", test_db["path"])
 
         f = tmp_path / "session_summary.md"
         f.write_text(

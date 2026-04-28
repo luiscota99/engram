@@ -105,7 +105,7 @@ def cmd_sync_skills(args):
 
     if only_engram:
         print(fmt_bold("Skills in Engram but NOT in Cursor (→ export):"))
-        for slug, skill in sorted(only_engram.items()):
+        for _slug, skill in sorted(only_engram.items()):
             usage = skill.get("usage_count", 0)
             print(f"  {fmt_type('skill')} {fmt_bold(skill['name'])} [{skill['domain']}]  usage:{usage}")
         print()

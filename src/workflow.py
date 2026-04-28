@@ -12,8 +12,11 @@ having contributed raises a WorkflowViolationError.
 from __future__ import annotations
 
 import json
+import logging
 
 from .database import get_connection
+
+logger = logging.getLogger(__name__)
 
 # Default workflow: ordered phases and the roles required in each.
 DEFAULT_PHASES = ["analysis", "research", "critique", "decision", "archive"]
@@ -62,13 +65,21 @@ def init_session_state(
                 if wf["phases"]:
                     try:
                         phases = json.loads(wf["phases"])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(
+                            "Invalid JSON in workflows.phases for workflow %r: %s",
+                            workflow_name,
+                            e,
+                        )
                 if wf["phase_requirements"]:
                     try:
                         requirements = json.loads(wf["phase_requirements"])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(
+                            "Invalid JSON in workflows.phase_requirements for workflow %r: %s",
+                            workflow_name,
+                            e,
+                        )
 
     first_phase = phases[0] if phases else "analysis"
     required = requirements.get(first_phase, [])
@@ -160,13 +171,21 @@ def _load_workflow_phases(session_id: str, db_path=None) -> tuple[list[str], dic
                 if wf["phases"]:
                     try:
                         phases = json.loads(wf["phases"])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(
+                            "Invalid JSON in workflows.phases for workflow %r: %s",
+                            workflow_name,
+                            e,
+                        )
                 if wf["phase_requirements"]:
                     try:
                         requirements = json.loads(wf["phase_requirements"])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(
+                            "Invalid JSON in workflows.phase_requirements for workflow %r: %s",
+                            workflow_name,
+                            e,
+                        )
                 return phases, requirements
 
     return DEFAULT_PHASES[:], DEFAULT_PHASE_REQUIREMENTS.copy()

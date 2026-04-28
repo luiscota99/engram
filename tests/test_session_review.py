@@ -19,12 +19,9 @@ def test_build_session_review_prompt_contains_checklist():
     assert "Engram influence" in t or "0–3" in t
 
 
-def test_mcp_and_module_same_output(monkeypatch, test_db):
+def test_mcp_and_module_same_output(test_db):
     """MCP handler should match build_session_review_prompt for same args."""
-    import src.database as _db
     from src.mcp_server import handle_memory_session_review
-
-    monkeypatch.setattr(_db, "DB_PATH", test_db["path"])
 
     args = {
         "conversation_id": "cid-1",

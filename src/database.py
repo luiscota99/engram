@@ -1,11 +1,14 @@
 """
 Database module — schema, connection, and migrations for Engram.
-Uses SQLite with FTS5 for full-text search. Zero external dependencies.
+
+Uses SQLite with FTS5 (bundled via sqlean-py when installed), optional sqlite-vec
+for embeddings, and optional local Ollama for embedding generation — see src/embeddings.py.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import contextmanager
 
@@ -19,12 +22,16 @@ try:
 except ImportError:
     sqlite_vec = None
 
-from .embeddings import embed_text
+from .embeddings import (
+    embed_text,
+    embedding_matches_vec_schema,
+    resolve_embedding_model_name,
+)
 from .migrations import backup_before_migration, run_migrations
 
-DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
+logger = logging.getLogger(__name__)
 
-DB_PATH = os.environ.get("ENGRAM_DB_PATH", DEFAULT_DB_PATH)
+DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
 SCHEMA_VERSION = 9
 
@@ -288,20 +295,24 @@ CREATE INDEX IF NOT EXISTS idx_file_relationships_target ON file_relationships(p
 """
 
 
-def get_db_path():
-    """Return the resolved database path."""
-    return DB_PATH
+def get_db_path() -> str:
+    """Return the database path from ENGRAM_DB_PATH or the default ``~/.engram/memory.db``.
+
+    Resolved at call time so tests and tooling can set ENGRAM_DB_PATH without import-order bugs.
+    """
+    return os.environ.get("ENGRAM_DB_PATH", DEFAULT_DB_PATH)
 
 
 @contextmanager
 def get_connection(db_path=None):
     """Context manager for database connections with WAL mode and foreign keys."""
-    path = db_path or DB_PATH
+    path = db_path or get_db_path()
     db_dir = os.path.dirname(path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
+    # sqlean-py may lack complete stubs; runtime matches stdlib sqlite3 API.
+    conn = sqlite3.connect(path)  # type: ignore[attr-defined]
+    conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
 
@@ -401,8 +412,7 @@ def get_tags_for_item(conn, item_type, item_id):
 
 def index_in_fts(conn, item_type, item_id, title, content, tags_list):
     """Insert or replace an item in the FTS index and generate its embedding."""
-    import os as _os
-    embedding_model = _os.environ.get("ENGRAM_EMBEDDING_MODEL", "nomic-embed-text")
+    embedding_model = resolve_embedding_model_name()
 
     # Remove old FTS and embedding_status entries
     old_row = conn.execute(
@@ -428,19 +438,39 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
     embedding = embed_text(full_text)
 
     if embedding and sqlite_vec is not None:
-        conn.execute(
-            "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)", (rowid, json.dumps(embedding))
-        )
-        conn.execute(
-            """INSERT INTO embedding_status (fts_rowid, item_type, item_id, embedding_model, status, updated_at)
-               VALUES (?, ?, ?, ?, 'ready', datetime('now'))
-               ON CONFLICT(fts_rowid) DO UPDATE SET
-                 embedding_model = excluded.embedding_model,
-                 status = 'ready',
-                 updated_at = datetime('now'),
-                 error_message = NULL""",
-            (rowid, item_type, int(item_id), embedding_model),
-        )
+        ok_vec, vec_err = embedding_matches_vec_schema(embedding, embedding_model)
+        if ok_vec:
+            conn.execute(
+                "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
+                (rowid, json.dumps(embedding)),
+            )
+            conn.execute(
+                """INSERT INTO embedding_status (fts_rowid, item_type, item_id, embedding_model, status, updated_at)
+                   VALUES (?, ?, ?, ?, 'ready', datetime('now'))
+                   ON CONFLICT(fts_rowid) DO UPDATE SET
+                     embedding_model = excluded.embedding_model,
+                     status = 'ready',
+                     updated_at = datetime('now'),
+                     error_message = NULL""",
+                (rowid, item_type, int(item_id), embedding_model),
+            )
+        else:
+            logger.warning(
+                "vec_memory skipped for %s id=%s: %s",
+                item_type,
+                item_id,
+                vec_err,
+            )
+            conn.execute(
+                """INSERT INTO embedding_status (fts_rowid, item_type, item_id, embedding_model, status, updated_at, error_message)
+                   VALUES (?, ?, ?, ?, 'failed', datetime('now'), ?)
+                   ON CONFLICT(fts_rowid) DO UPDATE SET
+                     embedding_model = excluded.embedding_model,
+                     status = 'failed',
+                     updated_at = datetime('now'),
+                     error_message = excluded.error_message""",
+                (rowid, item_type, int(item_id), embedding_model, vec_err),
+            )
     else:
         # Mark as pending if Ollama is not available or sqlite_vec not loaded
         status = "failed" if sqlite_vec is None else "pending"
@@ -678,6 +708,12 @@ def find_similar(content: str, item_type: str | None = None, threshold: float = 
     if not embedding or sqlite_vec is None:
         return []
 
+    model = resolve_embedding_model_name()
+    ok_vec, vec_err = embedding_matches_vec_schema(embedding, model)
+    if not ok_vec:
+        logger.warning("find_similar: %s", vec_err)
+        return []
+
     with get_connection(db_path) as conn:
         try:
             conditions = []
@@ -719,13 +755,13 @@ def find_similar(content: str, item_type: str | None = None, threshold: float = 
                     })
             return results
         except Exception:
+            logger.exception("find_similar vector query failed")
             return []
 
 
 def get_embedding_stats(db_path=None) -> dict:
     """Return counts of embedding_status values plus the current model."""
-    import os as _os
-    current_model = _os.environ.get("ENGRAM_EMBEDDING_MODEL", "nomic-embed-text")
+    current_model = resolve_embedding_model_name()
 
     with get_connection(db_path) as conn:
         rows = conn.execute(
@@ -762,14 +798,12 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
     Processes up to batch_size items per call.  Returns a progress dict:
       {'processed': N, 'succeeded': N, 'failed': N, 'remaining': N}
     """
-    import os as _os
-
     from .embeddings import embed_text as _embed
 
     if sqlite_vec is None:
         return {"processed": 0, "succeeded": 0, "failed": 0, "remaining": 0, "error": "sqlite_vec not available"}
 
-    embedding_model = _os.environ.get("ENGRAM_EMBEDDING_MODEL", "nomic-embed-text")
+    embedding_model = resolve_embedding_model_name()
     succeeded = failed = 0
 
     with get_connection(db_path) as conn:
@@ -797,23 +831,33 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
             embedding = _embed(full_text, model=embedding_model)
 
             if embedding:
-                conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (row["fts_rowid"],))
-                conn.execute(
-                    "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
-                    (row["fts_rowid"], json.dumps(embedding))
-                )
-                conn.execute(
-                    "UPDATE embedding_status SET status = 'ready', embedding_model = ?, "
-                    "updated_at = datetime('now'), error_message = NULL WHERE fts_rowid = ?",
-                    (embedding_model, row["fts_rowid"])
-                )
-                succeeded += 1
+                ok_vec, vec_err = embedding_matches_vec_schema(embedding, embedding_model)
+                if ok_vec:
+                    conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (row["fts_rowid"],))
+                    conn.execute(
+                        "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
+                        (row["fts_rowid"], json.dumps(embedding)),
+                    )
+                    conn.execute(
+                        "UPDATE embedding_status SET status = 'ready', embedding_model = ?, "
+                        "updated_at = datetime('now'), error_message = NULL WHERE fts_rowid = ?",
+                        (embedding_model, row["fts_rowid"]),
+                    )
+                    succeeded += 1
+                else:
+                    logger.warning("reembed_stale skipping vec for fts_rowid=%s: %s", row["fts_rowid"], vec_err)
+                    conn.execute(
+                        "UPDATE embedding_status SET status = 'failed', error_message = ?, "
+                        "updated_at = datetime('now') WHERE fts_rowid = ?",
+                        (vec_err, row["fts_rowid"]),
+                    )
+                    failed += 1
             else:
                 conn.execute(
                     "UPDATE embedding_status SET status = 'failed', "
                     "error_message = 'Ollama unavailable or model not found', "
                     "updated_at = datetime('now') WHERE fts_rowid = ?",
-                    (row["fts_rowid"],)
+                    (row["fts_rowid"],),
                 )
                 failed += 1
 

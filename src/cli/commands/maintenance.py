@@ -110,10 +110,12 @@ def cmd_migrate(args):
     import os
     import shutil
 
-    from ...database import DB_PATH
+    from ...database import get_db_path
+
+    db_path = get_db_path()
 
     if args.rollback:
-        backup_dir = os.path.join(os.path.dirname(DB_PATH), "backups")
+        backup_dir = os.path.join(os.path.dirname(db_path), "backups")
         if not os.path.exists(backup_dir):
             print("No backups found.")
             return
@@ -125,7 +127,7 @@ def cmd_migrate(args):
             print("No migration backups found.")
             return
         latest = os.path.join(backup_dir, backups[0])
-        shutil.copy2(latest, DB_PATH)
+        shutil.copy2(latest, db_path)
         print(f"✓ Rolled back to {latest}")
         return
 

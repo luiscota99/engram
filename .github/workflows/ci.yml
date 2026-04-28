@@ -34,12 +34,18 @@ jobs:
     - name: Lint with ruff
       run: |
         python -m ruff check src/ tests/ benchmarks/
-        
-    - name: Test with pytest
+
+    - name: Typecheck with pyright
       env:
         PYTHONPATH: .
       run: |
-        python -m pytest tests/ -v
+        python -m pyright
+        
+    - name: Test with pytest (with coverage report)
+      env:
+        PYTHONPATH: .
+      run: |
+        python -m pytest tests/ -v --cov=src --cov-report=term-missing
 
     - name: Retrieval benchmark smoke (seeded DB)
       env:
