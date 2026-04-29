@@ -24,6 +24,8 @@ AI assistants are brilliant but stateless. They forget every lesson learned as s
 
 Engram uses a hybrid search engine combining **SQLite FTS5** (lexical) and **sqlite-vec** (semantic) to retrieve relevant context.
 
+**Retrieval and ranking:** Semantic (KNN over `vec_memory`) and lexical (FTS5 over `memory_fts`) ranked lists are fused with **reciprocal rank fusion (RRF)** so neither channel always wins a priori; fused scores feed the same **utility** model (usage, project affinity, recency, type hints) and **BM25-style** reranking on the candidate set. Lexical query terms are tokenized consistently with that ranking (alphanumeric words), so punctuation does not fight keyword overlap.
+
 ```mermaid
 graph TD
     User[User] -->|manual_terminal| CLI[CLI_handler]
@@ -76,6 +78,10 @@ This script will:
 
 Engram turns AI assistants into senior partners who remember your project's history.
 
+### Explicit recall
+
+Chats **do not** automatically surface everything Engram knows on every turn. When retrieval matters—project facts you indexed, mistakes to avoid, past decisions—**say so**: e.g. **check Engram**, **search Engram for …**, **`@engram full`** (Cursor), or run **`memory_search`** (MCP), **`engram search`** (CLI). Default **LIGHT** mode may still only search lightly at session start; explicit phrasing or **FULL** mode is how you make recall deliberate. See engagement modes below and `.cursor/rules/engram.mdc` (or bootstrap output in your repo) for behavior.
+
 ### Cursor vs Antigravity at a glance
 
 | | **Cursor** | **Antigravity** |
@@ -98,6 +104,8 @@ Run this in any repository you want your AI agent to remember:
 engram bootstrap
 ```
 This creates `.cursor/rules/engram.mdc` for Cursor and `.antigravity/instructions.md` for Antigravity. You will be prompted to choose an **engagement mode**.
+
+**Repos that must not add those workspace files:** create an empty file **`.omit-agent-integration`** at the project root **or** run `engram bootstrap --omit-project-integration`. Bootstrap still initializes the database (if needed) and can still prompt for MCP; only the Cursor rule and `.antigravity/instructions.md` are skipped.
 
 ### 2. Engagement Modes
 

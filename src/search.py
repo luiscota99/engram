@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from .database import get_connection, get_or_create_project, get_project_affinities
 from .embeddings import embed_text
 from .query_analyzer import detect_query_tags
-from .ranking import rank_results, rerank_with_bm25
+from .ranking import rank_results, reciprocal_rank_scores, rerank_with_bm25, result_key
 from .search_audit import append_search_audit
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,24 @@ logger = logging.getLogger(__name__)
 class SearchResults(list):
     """A list subclass that carries a ``semantic_status`` attribute."""
     semantic_status: str = "ok"
+
+
+def _fts_query_terms(query: str) -> list[str]:
+    """Tokenize query for FTS5 ``MATCH``: same alphanumeric words as BM25/Ranking (# ``_tokenize``).
+
+    Strips punctuation (e.g. ``migration.`` → ``migration``). If normalization
+    yields nothing but the trimmed query looks textual, falls back to
+    whitespace split (handles odd Unicode / punctuation-only edge cases).
+    """
+    q = query.strip()
+    if not q:
+        return []
+    terms = re.findall(r"[a-z0-9]+", q.lower())
+    if terms:
+        return terms
+    if any(ch.isalpha() for ch in q):
+        return [t for t in q.split() if t]
+    return [t for t in q.split() if t]
 
 
 def _fts5_tag_phrase(tag: str) -> str:
@@ -135,8 +154,7 @@ def search(
     line per call (see ``src/search_audit.py``). Use ``skip_audit=True`` for internal
     or bulk calls (e.g. benchmarks, duplicate checks).
     """
-    results = []
-    seen = set()
+    results: list[dict] = []
     semantic_status = "ok"
 
     # 0. Auto-detect tags for score boosting only; optional caller tags filter results
@@ -145,16 +163,14 @@ def search(
         detected_tags = detect_query_tags(query, db_path=db_path)
     filter_tags = list(tags) if tags else []
 
+    sem_results: list[dict] = []
+    lex_results: list[dict] = []
+
     # 1. Semantic Search
     if query and query.strip():
         sem_results, semantic_status = semantic_search(
             query, item_type, filter_tags, limit=limit, db_path=db_path
         )
-        for r in sem_results:
-            key = f"{r['item_type']}-{r['item_id']}"
-            if key not in seen:
-                seen.add(key)
-                results.append(r)
 
     # 2. Lexical FTS5 Search
     with get_connection(db_path) as conn:
@@ -171,7 +187,10 @@ def search(
         where_extra = ("AND " + " AND ".join(conditions)) if conditions else ""
 
         if query and query.strip():
-            fts_query = " OR ".join(f'"{term}"' for term in query.strip().split() if term)
+            qterms = _fts_query_terms(query)
+            if not qterms:
+                qterms = [query.strip()]
+            fts_query = " OR ".join(f'"{term}"' for term in qterms if term)
             sql = f"""
                 SELECT item_type, item_id, title, content as snippet, tags, rank,
                        rowid as fts_rowid
@@ -194,21 +213,29 @@ def search(
             rows = conn.execute(sql, params + [limit]).fetchall()
 
         for row in rows:
-            key = f"{row['item_type']}-{row['item_id']}"
-            if key not in seen:
-                seen.add(key)
-                results.append({
-                    "item_type": row["item_type"],
-                    "item_id": row["item_id"],
-                    "title": row["title"],
-                    "snippet": row["snippet"] or "",
-                    "tags": row["tags"],
-                    "rank": row["rank"],
-                    "rowid": row["fts_rowid"],
-                    "is_semantic": False,
-                })
+            lex_results.append({
+                "item_type": row["item_type"],
+                "item_id": row["item_id"],
+                "title": row["title"],
+                "snippet": row["snippet"] or "",
+                "tags": row["tags"],
+                "rank": row["rank"],
+                "rowid": row["fts_rowid"],
+                "is_semantic": False,
+            })
 
         stale_rowids = _get_stale_rowids(conn)
+
+    # 2b. Hybrid merge — RRF fusion order, semantic row wins on duplicate key
+    rrf_scores = reciprocal_rank_scores(sem_results, lex_results)
+    sem_map = {result_key(r): r for r in sem_results}
+    lex_map = {result_key(r): r for r in lex_results}
+    ordered_keys = sorted(rrf_scores.keys(), key=lambda kk: rrf_scores[kk], reverse=True)
+    for kk in ordered_keys:
+        if kk in sem_map:
+            results.append(sem_map[kk])
+        else:
+            results.append(lex_map[kk])
 
     # 3. Batch-fetch usage_count and last_used_at per type (avoids N+1 queries)
     table_map = {
@@ -244,7 +271,7 @@ def search(
         except Exception:
             logger.exception("get_or_create_project / project affinity failed")
 
-    # 5. Rank using multi-factor scoring
+    # 5. Rank using multi-factor scoring (+ RRF hybrid boost)
     results = rank_results(
         results=results,
         usage_counts=usage_counts,
@@ -253,6 +280,7 @@ def search(
         query=query or "",
         stale_rowids=stale_rowids,
         detected_tags=detected_tags,
+        rrf_scores=rrf_scores if rrf_scores else None,
     )
 
     # 6. BM25 reranking — adjusts utility scores using keyword overlap signal

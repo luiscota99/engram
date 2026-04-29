@@ -283,6 +283,12 @@ def build_parser() -> argparse.ArgumentParser:
     # ── Bootstrap & Maintenance ──────────────────────────────────────
     p_bootstrap = sub.add_parser("bootstrap", help="Bootstrap agent rules for the current project")
     p_bootstrap.add_argument("--mode", choices=["adaptive", "full", "minimal"], default=None)
+    p_bootstrap.add_argument(
+        "--omit-project-integration",
+        action="store_true",
+        dest="omit_project_integration",
+        help="Skip Cursor rules + .antigravity/instructions.md (also if .omit-agent-integration exists)",
+    )
     mcp_group = p_bootstrap.add_mutually_exclusive_group()
     mcp_group.add_argument("--setup-mcp", dest="setup_mcp", action="store_true", default=None)
     mcp_group.add_argument("--no-mcp", dest="setup_mcp", action="store_false")

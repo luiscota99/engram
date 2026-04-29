@@ -43,6 +43,43 @@ BM25_K1 = 1.5   # term frequency saturation
 BM25_B = 0.75   # document length normalization
 BM25_WEIGHT = 0.3  # how much BM25 adjusts the final score: score *= (1 + BM25_WEIGHT * bm25)
 
+# Reciprocal rank fusion — combines semantic vs lexical ranked lists (see search.py).
+# Typical k≈60 (Cormack-style RRF). Normalized scores are summed into utility_score.
+RRF_K = 60
+RRF_WEIGHT = 15.0
+
+
+def result_key(result: dict) -> str:
+    """Stable key for a search result row: ``"{item_type}-{item_id}"``."""
+    return f"{result['item_type']}-{result['item_id']}"
+
+
+def reciprocal_rank_scores(
+    semantic: list[dict],
+    lexical: list[dict],
+    *,
+    k: int = RRF_K,
+) -> dict[str, float]:
+    """Reciprocal rank fusion scores per result key, normalized to ``[0, 1]``.
+
+    For rank ``r`` (1-based) in each list, contributes ``1/(k + r)`` to that
+    document. Normalization divides by ``max(score)`` so the strongest fused
+    hit maps to ``1.0``.
+    """
+    raw: dict[str, float] = {}
+    for rank, r in enumerate(semantic, start=1):
+        key = result_key(r)
+        raw[key] = raw.get(key, 0.0) + 1.0 / (k + rank)
+    for rank, r in enumerate(lexical, start=1):
+        key = result_key(r)
+        raw[key] = raw.get(key, 0.0) + 1.0 / (k + rank)
+    if not raw:
+        return {}
+    m = max(raw.values())
+    if m <= 0:
+        return {kk: 0.0 for kk in raw}
+    return {kk: v / m for kk, v in raw.items()}
+
 
 # ── BM25 ─────────────────────────────────────────────────────────────────────
 
@@ -316,6 +353,7 @@ def rank_results(
     query: str = "",
     stale_rowids: set | None = None,
     detected_tags: list[str] | None = None,
+    rrf_scores: dict[str, float] | None = None,
 ) -> list[dict]:
     """Apply utility scoring to a list of results and sort descending.
 
@@ -335,22 +373,28 @@ def rank_results(
         Set of FTS rowids whose embeddings are stale.
     detected_tags:
         Auto-detected technology tags from the query (from query_analyzer).
+    rrf_scores:
+        Normalized reciprocal-rank fusion scores per ``result_key``, when hybrid
+        search merged semantic + lexical lists.
     """
     inferred_type = infer_type_from_query(query)
     stale_rowids = stale_rowids or set()
 
     for r in results:
-        key = (r["item_type"], int(r["item_id"]))
-        score = calculate_utility_score(
+        key_row = (r["item_type"], int(r["item_id"]))
+        base = calculate_utility_score(
             result=r,
-            usage_count=usage_counts.get(key, 0),
-            last_used_at=last_used_map.get(key),
-            affinity=affinities.get(key),
+            usage_count=usage_counts.get(key_row, 0),
+            last_used_at=last_used_map.get(key_row),
+            affinity=affinities.get(key_row),
             inferred_type=inferred_type,
             embedding_is_stale=r.get("rowid") in stale_rowids,
             detected_tags=detected_tags,
         )
-        r["utility_score"] = score
+        rk = result_key(r)
+        rrf = RRF_WEIGHT * rrf_scores.get(rk, 0.0) if rrf_scores else 0.0
+        r["rrf_normalized"] = round(rrf_scores.get(rk, 0.0), 6) if rrf_scores else 0.0
+        r["utility_score"] = base + rrf
 
     results.sort(key=lambda x: x.get("utility_score", 0.0), reverse=True)
     return results

@@ -32,6 +32,16 @@ _AG_SKILL_SOURCES = {
 _GLOBAL_AGENTS_BEGIN = "<!-- engram-global:begin -->"
 _GLOBAL_AGENTS_END = "<!-- engram-global:end -->"
 
+# If present at project root (or bootstrap is run with --omit-project-integration),
+# do not copy Cursor rules or write .antigravity/instructions.md.
+_OMIT_PROJECT_INTEGRATION_SENTINEL = ".omit-agent-integration"
+
+
+def _omit_project_integration_files(project_root: str, args) -> bool:
+    if getattr(args, "omit_project_integration", False):
+        return True
+    return os.path.isfile(os.path.join(project_root, _OMIT_PROJECT_INTEGRATION_SENTINEL))
+
 
 def _global_antigravity_agents_body() -> str:
     return """## Engram — global engineering memory (all workspaces)
@@ -146,7 +156,10 @@ def cmd_bootstrap(args):
     import urllib.request as _urllib_req
 
     project_root = os.getcwd()
-    engram_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # __file__ is src/cli/commands/bootstrap.py → package root is four levels up
+    engram_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    )
 
     db_path = get_db_path()
     if not os.path.exists(db_path):
@@ -154,47 +167,61 @@ def cmd_bootstrap(args):
         init_db()
         print(f"✓ Created database at {db_path}")
 
+    omit_project = _omit_project_integration_files(project_root, args)
     mode = getattr(args, "mode", None)
-    if not mode:
+    if omit_project:
+        mode = mode or "adaptive"
+    elif not mode:
         mode = _prompt_bootstrap_mode()
     if mode not in _CURSOR_RULE_SOURCES:
         print(f"Unknown mode '{mode}'. Choose from: adaptive, full, minimal")
         sys.exit(1)
 
-    print(fmt_header(f"\nBootstrapping in {fmt_bold(mode.upper())} mode"))
-    print(fmt_dim(f"  {_BOOTSTRAP_MODE_DESCRIPTIONS[mode]}\n"))
-
-    # Cursor rule
-    cursor_rules_dir = os.path.join(project_root, ".cursor", "rules")
-    os.makedirs(cursor_rules_dir, exist_ok=True)
-    source_cursor = os.path.join(engram_root, "cursor-rules", _CURSOR_RULE_SOURCES[mode])
-    dest_cursor = os.path.join(cursor_rules_dir, "engram.mdc")
-    if os.path.exists(source_cursor):
-        shutil.copy2(source_cursor, dest_cursor)
-        print(f"✓ Created {os.path.join('.cursor', 'rules', 'engram.mdc')}  [{mode} mode]")
+    if omit_project:
+        print(
+            fmt_header(
+                "\nBootstrapping (database / MCP); "
+                f"{fmt_bold(_OMIT_PROJECT_INTEGRATION_SENTINEL)} or --omit-project-integration prevents "
+                "Cursor rules / Antigravity instructions in this workspace."
+            )
+        )
+        print()
     else:
-        print(fmt_dim(f"Warning: Source rule not found: {source_cursor}"))
+        print(fmt_header(f"\nBootstrapping in {fmt_bold(mode.upper())} mode"))
+        print(fmt_dim(f"  {_BOOTSTRAP_MODE_DESCRIPTIONS[mode]}\n"))
 
-    # Antigravity instructions
-    antigravity_dir = os.path.join(project_root, ".antigravity")
-    os.makedirs(antigravity_dir, exist_ok=True)
-    ag_instructions = os.path.join(antigravity_dir, "instructions.md")
-    ag_skill_file = _AG_SKILL_SOURCES[mode]
-    with open(ag_instructions, "w") as f:
-        f.write("# Engram Project Instructions\n\n")
-        f.write(f"Engagement mode: **{mode.upper()}** — {_BOOTSTRAP_MODE_DESCRIPTIONS[mode]}\n\n")
-        f.write("You are operating in a project backed by the **Engram Persistent Memory System**.\n\n")
-        if ag_skill_file:
-            source_ag = os.path.join(engram_root, "antigravity-skills", ag_skill_file)
-            if os.path.exists(source_ag):
-                with open(source_ag, "r") as src:
-                    f.write(src.read())
-            else:
-                print(fmt_dim(f"Warning: Antigravity skill file not found: {source_ag}"))
+    if not omit_project:
+        # Cursor rule
+        cursor_rules_dir = os.path.join(project_root, ".cursor", "rules")
+        os.makedirs(cursor_rules_dir, exist_ok=True)
+        source_cursor = os.path.join(engram_root, "cursor-rules", _CURSOR_RULE_SOURCES[mode])
+        dest_cursor = os.path.join(cursor_rules_dir, "engram.mdc")
+        if os.path.exists(source_cursor):
+            shutil.copy2(source_cursor, dest_cursor)
+            print(f"✓ Created {os.path.join('.cursor', 'rules', 'engram.mdc')}  [{mode} mode]")
         else:
-            f.write("## Engram Usage\n\nEngram is available but **off by default** for this project.\n\n")
-            f.write("Activate by saying:\n- `use engram` — enables full memory search\n- `no engram` — keeps disabled\n")
-    print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}  [{mode} mode]")
+            print(fmt_dim(f"Warning: Source rule not found: {source_cursor}"))
+
+        # Antigravity instructions
+        antigravity_dir = os.path.join(project_root, ".antigravity")
+        os.makedirs(antigravity_dir, exist_ok=True)
+        ag_instructions = os.path.join(antigravity_dir, "instructions.md")
+        ag_skill_file = _AG_SKILL_SOURCES[mode]
+        with open(ag_instructions, "w") as f:
+            f.write("# Engram Project Instructions\n\n")
+            f.write(f"Engagement mode: **{mode.upper()}** — {_BOOTSTRAP_MODE_DESCRIPTIONS[mode]}\n\n")
+            f.write("You are operating in a project backed by the **Engram Persistent Memory System**.\n\n")
+            if ag_skill_file:
+                source_ag = os.path.join(engram_root, "antigravity-skills", ag_skill_file)
+                if os.path.exists(source_ag):
+                    with open(source_ag, "r") as src:
+                        f.write(src.read())
+                else:
+                    print(fmt_dim(f"Warning: Antigravity skill file not found: {source_ag}"))
+            else:
+                f.write("## Engram Usage\n\nEngram is available but **off by default** for this project.\n\n")
+                f.write("Activate by saying:\n- `use engram` — enables full memory search\n- `no engram` — keeps disabled\n")
+        print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}  [{mode} mode]")
 
     # MCP config
     setup_mcp = getattr(args, "setup_mcp", None)
@@ -233,7 +260,14 @@ def cmd_bootstrap(args):
         )
 
     print(fmt_header(f"\nProject successfully bootstrapped! ({mode} mode)"))
-    if mode == "adaptive":
+    if omit_project:
+        print(
+            fmt_dim(
+                "  Per-repo Cursor / Antigravity workspace files omitted — see "
+                f"{_OMIT_PROJECT_INTEGRATION_SENTINEL} or `--omit-project-integration`."
+            )
+        )
+    elif mode == "adaptive":
         print("  Cursor and Antigravity will use LIGHT mode by default.")
     elif mode == "full":
         print("  Cursor and Antigravity will use the full Committee Workflow for every session.")
@@ -242,8 +276,12 @@ def cmd_bootstrap(args):
 
     print(f"\n{fmt_bold('Status:')}")
     print(f"  ✓ DB:     {get_db_path()}")
-    print(f"  ✓ Rule:   .cursor/rules/engram.mdc  [{mode} mode]")
-    print(f"  ✓ Guide:  .antigravity/instructions.md  [{mode} mode]")
+    if omit_project:
+        print("  ⊗ Rule:   (skipped) .cursor/rules/engram.mdc")
+        print("  ⊗ Guide:  (skipped) .antigravity/instructions.md")
+    else:
+        print(f"  ✓ Rule:   .cursor/rules/engram.mdc  [{mode} mode]")
+        print(f"  ✓ Guide:  .antigravity/instructions.md  [{mode} mode]")
     for line in ollama_status.splitlines():
         print(f"  {line}")
 

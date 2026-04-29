@@ -4,6 +4,14 @@ All notable changes to Engram will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `engram bootstrap --omit-project-integration` and sentinel file `.omit-agent-integration` (project root) to skip Cursor rules + Antigravity `instructions.md` while still initializing the database and MCP when applicable.
+- README guidance on explicitly asking for retrieval (Agent Integration).
+- Hybrid search merges semantic vs lexical rankings with reciprocal rank fusion (RRF); FTS query tokenization aligns with BM25/ranking tokenizer; tests in `tests/test_rrf.py`.
+
 ## [1.1.0] - 2026-04-21
 
 ### Added
