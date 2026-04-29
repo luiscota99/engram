@@ -4,7 +4,7 @@ from __future__ import annotations
 from ...backup import run_backup
 from ...database import get_embedding_stats, mark_embeddings_stale, reembed_stale
 from ...doctor import run_diagnostics
-from ...maintenance import run_gc, run_health_check
+from ...maintenance import merge_projects, run_gc, run_health_check
 from ..fmt import fmt_bold, fmt_dim, fmt_header, fmt_type
 
 
@@ -79,6 +79,57 @@ def cmd_health(args):
             print(f"  • {rec}")
     else:
         print(fmt_dim("✓ No issues detected."))
+
+
+def cmd_merge_projects(args):
+    from ...database import get_connection
+
+    def resolve(conn, spec: str) -> int:
+        spec = (spec or "").strip()
+        if not spec:
+            raise SystemExit("Project id, path, or name is required.")
+        if spec.isdigit():
+            row = conn.execute("SELECT id FROM projects WHERE id = ?", (int(spec),)).fetchone()
+            if not row:
+                raise SystemExit(f"No project with id {spec}.")
+            return int(row["id"])
+        row = conn.execute(
+            "SELECT id FROM projects WHERE path = ? OR name = ?",
+            (spec, spec),
+        ).fetchone()
+        if row:
+            return int(row["id"])
+        raise SystemExit(f"No project with path or name matching {spec!r}.")
+
+    with get_connection() as conn:
+        src = resolve(conn, args.merge_from)
+        dst = resolve(conn, args.merge_into)
+
+    dry = not args.execute
+    result = merge_projects(src, dst, dry_run=dry, db_path=None)
+
+    print(fmt_header("Merge projects (Engram DB)\n"))
+    print(
+        f"  {fmt_bold('From:')} id={result['from_project_id']}  {result['from_name']!r}  {result['from_path']!r}"
+    )
+    print(
+        f"  {fmt_bold('Into:')} id={result['to_project_id']}  {result['to_name']!r}  {result['to_path']!r}"
+    )
+    print()
+    print(fmt_dim("Codebase knowledge:"))
+    print(f"  Overlap rows dropped (source): {result['codebase_overlap_removed']}")
+    print(f"  Rows reassigned to target:    {result['codebase_reassigned']}")
+    print(fmt_dim("File relationships:"))
+    print(f"  Overlap rows dropped:         {result['relationships_overlap_removed']}")
+    print(f"  Rows reassigned:              {result['relationships_reassigned']}")
+    print(fmt_dim("Item ↔ project links:"))
+    print(f"  Overlap rows dropped:         {result['item_projects_overlap_removed']}")
+    print(f"  Rows reassigned:              {result['item_projects_reassigned']}")
+    print()
+    if dry:
+        print(fmt_dim("Dry-run only. Re-run with --execute to apply."))
+    else:
+        print(f"{fmt_bold('✓')} Source project removed; all scoped rows now use the target project.")
 
 
 def cmd_reembed(args):

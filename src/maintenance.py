@@ -4,6 +4,7 @@ Maintenance module — garbage collection, consolidation suggestions, and health
 Commands:
   engram gc            — Archive or delete unused memories
   engram suggest-consolidate — Find near-duplicate clusters for merging
+  engram merge-projects — Point all knowledge from one project row at another (e.g. after rename)
   engram health        — Show a health report with actionable recommendations
 """
 
@@ -274,6 +275,155 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if mag_a == 0 or mag_b == 0:
         return 0.0
     return dot / (mag_a * mag_b)
+
+
+# ── Merge project rows ──────────────────────────────────────────────
+
+
+def merge_projects(
+    from_project_id: int,
+    to_project_id: int,
+    *,
+    dry_run: bool = True,
+    db_path=None,
+) -> dict:
+    """Reassign codebase knowledge, file graph, and item links from one project to another.
+
+    Use when the same repo was indexed under two paths or names (e.g. rename ``tcg-pos`` → ``lzp-pos``).
+    Rows that would violate a uniqueness constraint on the target project are dropped from the source.
+
+    Does **not** rewrite paths inside memory item bodies or FTS rows — only ``projects``-scoped tables.
+    """
+    if from_project_id == to_project_id:
+        raise ValueError("from_project_id and to_project_id must differ")
+
+    summary: dict = {
+        "dry_run": dry_run,
+        "from_project_id": from_project_id,
+        "to_project_id": to_project_id,
+        "from_name": None,
+        "from_path": None,
+        "to_name": None,
+        "to_path": None,
+        "codebase_overlap_removed": 0,
+        "codebase_reassigned": 0,
+        "relationships_overlap_removed": 0,
+        "relationships_reassigned": 0,
+        "item_projects_overlap_removed": 0,
+        "item_projects_reassigned": 0,
+        "source_project_deleted": False,
+    }
+
+    with get_connection(db_path) as conn:
+        fr = conn.execute(
+            "SELECT id, name, path FROM projects WHERE id = ?", (from_project_id,)
+        ).fetchone()
+        to = conn.execute(
+            "SELECT id, name, path FROM projects WHERE id = ?", (to_project_id,)
+        ).fetchone()
+        if not fr or not to:
+            raise ValueError("Both project IDs must exist in the database")
+
+        summary["from_name"] = fr["name"]
+        summary["from_path"] = fr["path"]
+        summary["to_name"] = to["name"]
+        summary["to_path"] = to["path"]
+
+        ck_overlap = conn.execute(
+            """SELECT COUNT(*) AS c FROM codebase_knowledge a
+               WHERE a.project_id = ? AND EXISTS (
+                 SELECT 1 FROM codebase_knowledge b
+                 WHERE b.project_id = ? AND b.file_path = a.file_path
+               )""",
+            (from_project_id, to_project_id),
+        ).fetchone()["c"]
+        ck_src = conn.execute(
+            "SELECT COUNT(*) AS c FROM codebase_knowledge WHERE project_id = ?",
+            (from_project_id,),
+        ).fetchone()["c"]
+
+        rel_overlap = conn.execute(
+            """SELECT COUNT(*) AS c FROM file_relationships a
+               WHERE a.project_id = ? AND EXISTS (
+                 SELECT 1 FROM file_relationships b
+                 WHERE b.project_id = ?
+                   AND b.source_file = a.source_file
+                   AND b.target_file = a.target_file
+                   AND b.relationship_type = a.relationship_type
+               )""",
+            (from_project_id, to_project_id),
+        ).fetchone()["c"]
+        rel_src = conn.execute(
+            "SELECT COUNT(*) AS c FROM file_relationships WHERE project_id = ?",
+            (from_project_id,),
+        ).fetchone()["c"]
+
+        ip_overlap = conn.execute(
+            """SELECT COUNT(*) AS c FROM item_projects a
+               WHERE a.project_id = ? AND EXISTS (
+                 SELECT 1 FROM item_projects b
+                 WHERE b.project_id = ?
+                   AND b.item_type = a.item_type AND b.item_id = a.item_id
+               )""",
+            (from_project_id, to_project_id),
+        ).fetchone()["c"]
+        ip_src = conn.execute(
+            "SELECT COUNT(*) AS c FROM item_projects WHERE project_id = ?",
+            (from_project_id,),
+        ).fetchone()["c"]
+
+        summary["codebase_overlap_removed"] = ck_overlap
+        summary["codebase_reassigned"] = ck_src - ck_overlap
+        summary["relationships_overlap_removed"] = rel_overlap
+        summary["relationships_reassigned"] = rel_src - rel_overlap
+        summary["item_projects_overlap_removed"] = ip_overlap
+        summary["item_projects_reassigned"] = ip_src - ip_overlap
+
+        if dry_run:
+            return summary
+
+        conn.execute(
+            """DELETE FROM codebase_knowledge WHERE project_id = ? AND EXISTS (
+                 SELECT 1 FROM codebase_knowledge b
+                 WHERE b.project_id = ? AND b.file_path = codebase_knowledge.file_path
+               )""",
+            (from_project_id, to_project_id),
+        )
+        conn.execute(
+            "UPDATE codebase_knowledge SET project_id = ? WHERE project_id = ?",
+            (to_project_id, from_project_id),
+        )
+        conn.execute(
+            """DELETE FROM file_relationships WHERE project_id = ? AND EXISTS (
+                 SELECT 1 FROM file_relationships b
+                 WHERE b.project_id = ?
+                   AND b.source_file = file_relationships.source_file
+                   AND b.target_file = file_relationships.target_file
+                   AND b.relationship_type = file_relationships.relationship_type
+               )""",
+            (from_project_id, to_project_id),
+        )
+        conn.execute(
+            "UPDATE file_relationships SET project_id = ? WHERE project_id = ?",
+            (to_project_id, from_project_id),
+        )
+        conn.execute(
+            """DELETE FROM item_projects WHERE project_id = ? AND EXISTS (
+                 SELECT 1 FROM item_projects b
+                 WHERE b.project_id = ?
+                   AND b.item_type = item_projects.item_type
+                   AND b.item_id = item_projects.item_id
+               )""",
+            (from_project_id, to_project_id),
+        )
+        conn.execute(
+            "UPDATE item_projects SET project_id = ? WHERE project_id = ?",
+            (to_project_id, from_project_id),
+        )
+        conn.execute("DELETE FROM projects WHERE id = ?", (from_project_id,))
+        summary["source_project_deleted"] = True
+
+    return summary
 
 
 # ── Health Dashboard ─────────────────────────────────────────────────

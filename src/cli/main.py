@@ -16,6 +16,7 @@ from .commands.maintenance import (
     cmd_doctor,
     cmd_gc,
     cmd_health,
+    cmd_merge_projects,
     cmd_migrate,
     cmd_reembed,
 )
@@ -329,6 +330,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_health = sub.add_parser("health", help="Show a health report for the memory database")
     p_health.set_defaults(func=cmd_health)
+
+    p_merge_proj = sub.add_parser(
+        "merge-projects",
+        help="Merge one project record into another (codebase rows, graph, item links); deletes the source project",
+    )
+    p_merge_proj.add_argument(
+        "--from",
+        dest="merge_from",
+        required=True,
+        metavar="ID|PATH|NAME",
+        help="Source project: numeric id, path as stored in DB, or project name",
+    )
+    p_merge_proj.add_argument(
+        "--into",
+        dest="merge_into",
+        required=True,
+        metavar="ID|PATH|NAME",
+        help="Target project to keep (id, path, or name)",
+    )
+    p_merge_proj.add_argument(
+        "--execute",
+        action="store_true",
+        help="Apply changes (default: dry-run)",
+    )
+    p_merge_proj.set_defaults(func=cmd_merge_projects)
 
     p_reembed = sub.add_parser("reembed", help="Re-generate embeddings for stale/pending items")
     p_reembed.add_argument("--batch-size", type=int, default=50)

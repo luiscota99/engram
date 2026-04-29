@@ -428,7 +428,7 @@ TOOLS = [
     },
     {
         "name": "memory_query_codebase",
-        "description": "Query the persistent codebase knowledge for a project. Returns summaries of files matching the query. Use this to 'map' the project structure without re-reading all files.",
+        "description": "Query persistent codebase knowledge for a project. Matches keywords extracted from the query against indexed file paths and summaries (natural-language questions work, not only exact substrings). Omit query to list all indexed files.",
         "inputSchema": {
             "type": "object",
             "properties": {

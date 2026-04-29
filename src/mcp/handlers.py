@@ -6,6 +6,7 @@ import json
 import os
 from typing import Any, Callable, Mapping
 
+from src.codebase_query import fetch_codebase_rows_for_query
 from src.database import (
     delete_item,
     find_similar,
@@ -463,19 +464,7 @@ def handle_memory_query_codebase(args: McpToolArgs) -> str:
     project_id = project["id"]
 
     with get_connection() as conn:
-        if query:
-            rows = conn.execute(
-                """SELECT file_path, summary, exports, dependencies
-                   FROM codebase_knowledge
-                   WHERE project_id = ? AND (file_path LIKE ? OR summary LIKE ?)
-                   ORDER BY file_path""",
-                (project_id, f"%{query}%", f"%{query}%"),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT file_path, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? ORDER BY file_path",
-                (project_id,),
-            ).fetchall()
+        rows = fetch_codebase_rows_for_query(conn, project_id, query)
 
     if not rows:
         return f"No codebase knowledge found for project '{project['name']}'" + (f" matching '{query}'" if query else "") + "."

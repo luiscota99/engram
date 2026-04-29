@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 
+from ...codebase_query import fetch_codebase_rows_for_query
 from ...database import get_connection, get_or_create_project
 from ...graph import (
     format_dot,
@@ -152,17 +153,7 @@ def cmd_query_codebase(args):
     query = " ".join(args.query) if args.query else ""
 
     with get_connection() as conn:
-        if query:
-            rows = conn.execute(
-                """SELECT file_path, summary, exports, dependencies FROM codebase_knowledge
-                   WHERE project_id = ? AND (file_path LIKE ? OR summary LIKE ?) ORDER BY file_path""",
-                (project_id, f"%{query}%", f"%{query}%"),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT file_path, summary, exports, dependencies FROM codebase_knowledge WHERE project_id = ? ORDER BY file_path",
-                (project_id,),
-            ).fetchall()
+        rows = fetch_codebase_rows_for_query(conn, project_id, query)
 
     if not rows:
         print("No codebase knowledge found for this project matching your query.")
