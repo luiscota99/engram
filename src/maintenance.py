@@ -13,7 +13,19 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-from .database import get_connection, get_embedding_stats
+from .database import (
+    get_connection,
+    get_consolidation_fingerprint,
+    get_embedding_stats,
+    get_stored_consolidation_fingerprint,
+    save_consolidation_fingerprint,
+)
+from .item_registry import gc_types, table_for
+
+# ── Safety guardrails for bulk delete/archive operations ─────────────
+
+GC_MAX_REMOVAL_FRACTION = 0.50
+GC_MIN_COUNT_FOR_GUARD = 8
 
 # ── Garbage Collection ───────────────────────────────────────────────
 
@@ -30,20 +42,12 @@ def find_gc_candidates(
       - Stale: last_used_at IS NOT NULL AND last_used_at < cutoff
     """
     cutoff = (datetime.now() - timedelta(days=days_unused)).isoformat()
-    types = item_types or ["mistake", "pattern", "skill", "conversation", "prompt"]
-
-    table_map = {
-        "mistake": "mistakes",
-        "pattern": "patterns",
-        "skill": "skills",
-        "conversation": "conversations",
-        "prompt": "prompts",
-    }
+    types = item_types or list(gc_types())
 
     candidates = []
     with get_connection(db_path) as conn:
         for itype in types:
-            table = table_map.get(itype)
+            table = table_for(itype)
             if not table:
                 continue
             rows = conn.execute(
@@ -65,14 +69,38 @@ def find_gc_candidates(
     return candidates
 
 
+def _count_live_items(item_types: list[str] | None = None, db_path=None) -> int:
+    types = item_types or list(gc_types())
+    total = 0
+    with get_connection(db_path) as conn:
+        for itype in types:
+            table = table_for(itype)
+            if table:
+                total += conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()["c"]
+    return total
+
+
+def _gc_would_exceed_guard(candidates: list[dict], item_types: list[str] | None, db_path=None) -> str | None:
+    if len(candidates) < GC_MIN_COUNT_FOR_GUARD:
+        return None
+    total = _count_live_items(item_types=item_types, db_path=db_path)
+    if total <= 0:
+        return None
+    fraction = len(candidates) / total
+    if fraction > GC_MAX_REMOVAL_FRACTION:
+        pct = int(fraction * 100)
+        return (
+            f"GC blocked: would affect {len(candidates)}/{total} items ({pct}%) — "
+            f"exceeds {int(GC_MAX_REMOVAL_FRACTION * 100)}% safety limit. "
+            f"Use dry-run to review or narrow item_types/days_unused."
+        )
+    return None
+
+
 def archive_item(conn, item_type: str, item_id: int, reason: str = "gc") -> bool:
     """Copy an item to archived_memories then delete it from the live table."""
-    table_map = {
-        "mistake": "mistakes", "pattern": "patterns", "skill": "skills",
-        "conversation": "conversations", "prompt": "prompts",
-    }
-    table = table_map.get(item_type)
-    if not table:
+    table = table_for(item_type)
+    if not table or item_type not in gc_types():
         return False
 
     row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (item_id,)).fetchone()
@@ -108,7 +136,17 @@ def run_gc(
     candidates = find_gc_candidates(days_unused=days_unused, item_types=item_types, db_path=db_path)
 
     if mode == "dry-run":
-        return {"mode": mode, "candidates": candidates, "processed": 0}
+        return {"mode": mode, "candidates": candidates, "processed": 0, "blocked": False}
+
+    guard_reason = _gc_would_exceed_guard(candidates, item_types, db_path=db_path)
+    if guard_reason:
+        return {
+            "mode": mode,
+            "candidates": candidates,
+            "processed": 0,
+            "blocked": True,
+            "reason": guard_reason,
+        }
 
     processed = 0
     with get_connection(db_path) as conn:
@@ -124,7 +162,7 @@ def run_gc(
                 except Exception:
                     pass
 
-    return {"mode": mode, "candidates": candidates, "processed": processed}
+    return {"mode": mode, "candidates": candidates, "processed": processed, "blocked": False}
 
 
 # ── Consolidation Suggestions ────────────────────────────────────────
@@ -159,22 +197,29 @@ def find_consolidation_candidates(
     threshold: float = 0.80,
     item_types: list[str] | None = None,
     db_path=None,
-) -> list[dict]:
+    *,
+    force_rescan: bool = False,
+) -> tuple[list[dict], str | None]:
     """Find transitive clusters of similar memories that could be consolidated.
 
     Uses vector similarity from vec_memory. Overlapping pairs are merged into
     larger clusters via Union-Find — e.g. if A~B and B~C then {A, B, C} is
     one cluster rather than two separate pairs.
 
-    Returns a list of cluster dicts:
-        {item_type, items: [...], avg_similarity, cluster_size}
-    sorted by cluster_size (desc) then avg_similarity (desc).
+    Returns ``(clusters, skip_reason)``. When fingerprint is unchanged since the
+    last scan, returns ``([], "unchanged")`` unless ``force_rescan=True``.
     """
     if not _SQLITE_VEC:
-        return []
+        return [], "sqlite_vec_unavailable"
+
+    types = item_types or ["mistake", "pattern", "skill"]
+    fingerprint = get_consolidation_fingerprint(types, db_path=db_path)
+    if not force_rescan:
+        stored = get_stored_consolidation_fingerprint(db_path=db_path)
+        if stored and stored == fingerprint:
+            return [], "unchanged"
 
     import json as _json
-    types = item_types or ["mistake", "pattern", "skill"]
     all_clusters = []
 
     with get_connection(db_path) as conn:
@@ -262,7 +307,418 @@ def find_consolidation_candidates(
                 })
 
     all_clusters.sort(key=lambda x: (-x["cluster_size"], -x["avg_similarity"]))
-    return all_clusters
+    save_consolidation_fingerprint(fingerprint, db_path=db_path)
+    return all_clusters, None
+
+
+# ── LLM-Driven Consolidation Audit ───────────────────────────────────
+
+_AUDIT_SYSTEM = """You are an engineering knowledge curator. Given near-duplicate memory entries,
+decide for each cluster:
+- keep_both: distinct facts — do not merge
+- merge: same fact in different words — recommend merge (needs approval)
+- auto_merge: obvious duplicate — safe to merge automatically
+
+Be CONSERVATIVE: only use auto_merge when entries state the same fact with no unique details.
+
+Return ONLY a JSON array:
+[{"cluster_index": 0, "decision": "auto_merge", "reason": "...", "ids": [1, 2]}]
+"""
+
+
+def _cluster_snippets(cluster: dict, db_path=None) -> list[dict]:
+    """Load id/title/snippet for each item in a consolidation cluster."""
+    from .database import get_item
+
+    item_type = cluster["item_type"]
+    snippets = []
+    for item in cluster["items"]:
+        full = get_item(item_type, item["item_id"], db_path=db_path) or {}
+        parts = []
+        for key in ("name", "mistake", "symptoms", "trigger_desc", "workflow", "fix", "standard_fix"):
+            val = full.get(key)
+            if val:
+                parts.append(str(val)[:200])
+        snippet = " | ".join(parts)[:400] if parts else item.get("title", "")
+        snippets.append({
+            "id": item["item_id"],
+            "title": item.get("title") or full.get("name") or full.get("mistake", ""),
+            "snippet": snippet,
+        })
+    return snippets
+
+
+def llm_audit_clusters(
+    clusters: list[dict],
+    *,
+    db_path=None,
+) -> list[dict]:
+    """Use an LLM to score consolidation clusters. Returns audit decisions."""
+    from .llm import call_chat_completion, is_llm_available, parse_json_from_llm, resolve_llm_model
+
+    if not clusters:
+        return []
+    if not is_llm_available():
+        return []
+
+    payload = []
+    for idx, cluster in enumerate(clusters):
+        payload.append({
+            "cluster_index": idx,
+            "item_type": cluster["item_type"],
+            "avg_similarity": cluster.get("avg_similarity"),
+            "entries": _cluster_snippets(cluster, db_path=db_path),
+        })
+
+    user_msg = (
+        "Review these near-duplicate clusters and return JSON decisions:\n\n"
+        + json.dumps(payload, indent=2)
+    )
+    raw = call_chat_completion(
+        [
+            {"role": "system", "content": _AUDIT_SYSTEM},
+            {"role": "user", "content": user_msg},
+        ],
+        task="audit",
+        max_tokens=1200,
+    )
+    parsed = parse_json_from_llm(raw or "")
+    if not isinstance(parsed, list):
+        return []
+
+    decisions = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        decision = str(entry.get("decision", "keep_both")).lower()
+        if decision not in ("keep_both", "merge", "auto_merge"):
+            decision = "keep_both"
+        idx = entry.get("cluster_index")
+        cluster = clusters[idx] if isinstance(idx, int) and 0 <= idx < len(clusters) else None
+        ids = entry.get("ids")
+        if not ids and cluster:
+            ids = [i["item_id"] for i in cluster["items"]]
+        decisions.append({
+            "cluster_index": idx,
+            "item_type": cluster["item_type"] if cluster else None,
+            "decision": decision,
+            "reason": entry.get("reason", ""),
+            "ids": ids or [],
+            "model": resolve_llm_model(task="audit"),
+        })
+    return decisions
+
+
+def _insert_merged_item(conn, item_type: str, merged: dict, tags: list[str]) -> int | None:
+    """Insert a merged memory row and FTS index. Returns new item id."""
+    from .database import index_in_fts, link_tags
+
+    if item_type == "mistake":
+        cursor = conn.execute(
+            """INSERT INTO mistakes (date, context, mistake, root_cause, fix, prevention, conversation_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                merged.get("date", datetime.now().strftime("%Y-%m-%d")),
+                merged.get("context", ""),
+                merged.get("mistake", merged.get("name", "Merged mistake")),
+                merged.get("root_cause"),
+                merged.get("fix", ""),
+                merged.get("prevention"),
+                merged.get("conversation_id"),
+            ),
+        )
+        mid = cursor.lastrowid
+        title = (merged.get("mistake") or "Merged mistake")[:80]
+        content = f"{merged.get('context', '')} | {merged.get('mistake', '')} | {merged.get('fix', '')}"
+        link_tags(conn, "mistake", mid, tags)
+        index_in_fts(conn, "mistake", mid, title, content, tags)
+        return mid
+
+    if item_type == "pattern":
+        cursor = conn.execute(
+            """INSERT INTO patterns (name, symptoms, root_cause, standard_fix)
+               VALUES (?, ?, ?, ?)""",
+            (
+                merged.get("name", "Merged pattern"),
+                merged.get("symptoms", ""),
+                merged.get("root_cause", ""),
+                merged.get("standard_fix", merged.get("fix", "")),
+            ),
+        )
+        pid = cursor.lastrowid
+        name = merged.get("name", "Merged pattern")
+        content = f"{merged.get('symptoms', '')} | {merged.get('root_cause', '')} | {merged.get('standard_fix', '')}"
+        link_tags(conn, "pattern", pid, tags)
+        index_in_fts(conn, "pattern", pid, name, content, tags)
+        return pid
+
+    if item_type == "skill":
+        cursor = conn.execute(
+            """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                merged.get("name", "Merged skill"),
+                merged.get("domain", "engineering"),
+                merged.get("trigger_desc", merged.get("trigger", "")),
+                merged.get("workflow", ""),
+                merged.get("pitfalls"),
+                merged.get("key_files"),
+                merged.get("dependencies"),
+            ),
+        )
+        sid = cursor.lastrowid
+        name = merged.get("name", "Merged skill")
+        content = f"{merged.get('trigger_desc', '')} | {merged.get('workflow', '')}"
+        link_tags(conn, "skill", sid, tags)
+        index_in_fts(conn, "skill", sid, name, content, tags)
+        return sid
+
+    return None
+
+
+def _apply_auto_merge(
+    cluster: dict,
+    *,
+    db_path=None,
+) -> dict:
+    """Apply auto_merge for a 2-item cluster. Returns result metadata."""
+    from .database import get_item
+    from .merge import merge_entries
+
+    item_type = cluster["item_type"]
+    items = cluster["items"]
+    if len(items) != 2:
+        return {"applied": False, "reason": "auto_merge requires exactly 2 items"}
+
+    id_a, id_b = items[0]["item_id"], items[1]["item_id"]
+    entry_a = get_item(item_type, id_a, db_path=db_path)
+    entry_b = get_item(item_type, id_b, db_path=db_path)
+    if not entry_a or not entry_b:
+        return {"applied": False, "reason": "one or both items not found"}
+
+    merged = merge_entries(entry_a, entry_b)
+    if not merged:
+        return {"applied": False, "reason": "LLM merge failed"}
+
+    tags = list({*(entry_a.get("tags") or []), *(entry_b.get("tags") or [])})
+    with get_connection(db_path) as conn:
+        new_id = _insert_merged_item(conn, item_type, merged, tags)
+        if not new_id:
+            return {"applied": False, "reason": f"unsupported item_type {item_type}"}
+        archive_item(conn, item_type, id_a, reason="llm_auto_merge")
+        archive_item(conn, item_type, id_b, reason="llm_auto_merge")
+
+    return {
+        "applied": True,
+        "item_type": item_type,
+        "merged_id": new_id,
+        "archived_ids": [id_a, id_b],
+    }
+
+
+def run_llm_consolidation_audit(
+    threshold: float = 0.80,
+    *,
+    dry_run: bool = True,
+    db_path=None,
+    force_rescan: bool = False,
+) -> dict:
+    """Run LLM consolidation audit on near-duplicate clusters."""
+    from .llm import get_llm_status, is_llm_available
+
+    clusters, skip_reason = find_consolidation_candidates(
+        threshold=threshold,
+        db_path=db_path,
+        force_rescan=force_rescan,
+    )
+    report: dict = {
+        "dry_run": dry_run,
+        "llm_available": is_llm_available(),
+        "skip_reason": skip_reason,
+        "clusters_found": len(clusters),
+        "decisions": [],
+        "applied": [],
+        "blocked": False,
+    }
+    report["llm_status"] = get_llm_status()
+
+    if skip_reason == "unchanged":
+        return report
+    if not clusters:
+        return report
+    if not is_llm_available():
+        report["fallback"] = "LLM unavailable — use engram suggest-consolidate for vector-only suggestions"
+        report["clusters"] = clusters
+        return report
+
+    decisions = llm_audit_clusters(clusters, db_path=db_path)
+    report["decisions"] = decisions
+
+    if dry_run:
+        report["clusters"] = clusters
+        return report
+
+    auto_merges = [d for d in decisions if d.get("decision") == "auto_merge"]
+    if len(auto_merges) > len(clusters) * GC_MAX_REMOVAL_FRACTION and len(clusters) >= GC_MIN_COUNT_FOR_GUARD:
+        report["blocked"] = True
+        report["reason"] = (
+            f"Audit blocked: would auto-merge {len(auto_merges)}/{len(clusters)} clusters — "
+            f"exceeds {int(GC_MAX_REMOVAL_FRACTION * 100)}% safety limit."
+        )
+        return report
+
+    for decision in auto_merges:
+        idx = decision.get("cluster_index")
+        if not isinstance(idx, int) or idx < 0 or idx >= len(clusters):
+            continue
+        result = _apply_auto_merge(clusters[idx], db_path=db_path)
+        report["applied"].append({**decision, **result})
+
+    return report
+
+
+# ── LLM-Assisted GC Scoring ──────────────────────────────────────────
+
+_GC_SYSTEM = """You are evaluating whether old engineering memories should be kept or discarded.
+For each item, return {"item_type": "...", "item_id": N, "decision": "keep"|"discard", "reason": "..."}
+
+Be CONSERVATIVE: keep anything that might still be useful, reference-worthy, or unique.
+Only discard entries that are clearly obsolete, trivial, or fully superseded.
+
+Return ONLY a JSON array of decisions."""
+
+
+def _enrich_gc_candidates(candidates: list[dict], db_path=None) -> list[dict]:
+    """Add title/snippet from FTS for GC candidates."""
+    enriched = []
+    with get_connection(db_path) as conn:
+        for c in candidates:
+            row = conn.execute(
+                """SELECT title, content FROM memory_fts
+                   WHERE item_type = ? AND item_id = ? LIMIT 1""",
+                (c["item_type"], c["item_id"]),
+            ).fetchone()
+            enriched.append({
+                **c,
+                "title": row["title"] if row else "",
+                "snippet": (row["content"][:300] if row and row["content"] else ""),
+            })
+    return enriched
+
+
+def llm_gc_score_candidates(
+    candidates: list[dict],
+    *,
+    db_path=None,
+) -> list[dict]:
+    """Ask the LLM to score GC candidates as keep or discard."""
+    from .llm import call_chat_completion, is_llm_available, parse_json_from_llm
+
+    if not candidates or not is_llm_available():
+        return []
+
+    enriched = _enrich_gc_candidates(candidates, db_path=db_path)
+    payload = [
+        {
+            "item_type": c["item_type"],
+            "item_id": c["item_id"],
+            "usage_count": c.get("usage_count", 0),
+            "created_at": c.get("created_at"),
+            "last_used_at": c.get("last_used_at"),
+            "title": c.get("title", ""),
+            "snippet": c.get("snippet", ""),
+        }
+        for c in enriched
+    ]
+
+    raw = call_chat_completion(
+        [
+            {"role": "system", "content": _GC_SYSTEM},
+            {"role": "user", "content": "Score these GC candidates:\n\n" + json.dumps(payload, indent=2)},
+        ],
+        task="gc",
+        max_tokens=1500,
+    )
+    parsed = parse_json_from_llm(raw or "")
+    if not isinstance(parsed, list):
+        return []
+
+    scored = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        decision = str(entry.get("decision", "keep")).lower()
+        if decision not in ("keep", "discard"):
+            decision = "keep"
+        scored.append({
+            "item_type": entry.get("item_type"),
+            "item_id": entry.get("item_id"),
+            "decision": decision,
+            "reason": entry.get("reason", ""),
+        })
+    return scored
+
+
+def run_llm_gc(
+    *,
+    dry_run: bool = True,
+    days_unused: int = 180,
+    item_types: list[str] | None = None,
+    db_path=None,
+) -> dict:
+    """Run GC with optional LLM scoring pass."""
+    from .llm import get_llm_status, is_llm_available
+
+    candidates = find_gc_candidates(
+        days_unused=days_unused,
+        item_types=item_types,
+        db_path=db_path,
+    )
+    report: dict = {
+        "dry_run": dry_run,
+        "llm_available": is_llm_available(),
+        "candidates": candidates,
+        "scored": [],
+        "to_discard": [],
+        "processed": 0,
+        "blocked": False,
+        "mode": "dry-run" if dry_run else "archive",
+    }
+    report["llm_status"] = get_llm_status()
+
+    if not candidates:
+        return report
+
+    if is_llm_available():
+        scored = llm_gc_score_candidates(candidates, db_path=db_path)
+        report["scored"] = scored
+        discard_keys = {
+            (s["item_type"], s["item_id"])
+            for s in scored
+            if s.get("decision") == "discard" and s.get("item_type") and s.get("item_id") is not None
+        }
+        to_discard = [c for c in candidates if (c["item_type"], c["item_id"]) in discard_keys]
+        report["to_discard"] = to_discard
+    else:
+        to_discard = candidates
+        report["fallback"] = "LLM unavailable — using time-based GC candidates only"
+
+    if dry_run:
+        return report
+
+    guard_reason = _gc_would_exceed_guard(to_discard, item_types, db_path=db_path)
+    if guard_reason:
+        report["blocked"] = True
+        report["reason"] = guard_reason
+        return report
+
+    processed = 0
+    with get_connection(db_path) as conn:
+        for c in to_discard:
+            if archive_item(conn, c["item_type"], c["item_id"], reason="llm_gc"):
+                processed += 1
+    report["processed"] = processed
+    return report
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -436,14 +892,15 @@ def run_health_check(db_path=None) -> dict:
     with get_connection(db_path) as conn:
         # Item counts by type and age
         type_stats = {}
-        table_map = {
-            "mistakes": "mistake", "patterns": "pattern", "skills": "skill",
-            "conversations": "conversation", "prompts": "prompt",
-        }
+        from .item_registry import REGISTRY
+
         cutoff_30 = (datetime.now() - timedelta(days=30)).isoformat()
         cutoff_180 = (datetime.now() - timedelta(days=180)).isoformat()
 
-        for table, itype in table_map.items():
+        for itype, spec in REGISTRY.items():
+            if not spec.gc_eligible:
+                continue
+            table = spec.table
             total = conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()["c"]
             recent = conn.execute(
                 f"SELECT COUNT(*) as c FROM {table} WHERE created_at > ?", (cutoff_30,)
@@ -528,3 +985,51 @@ def run_health_check(db_path=None) -> dict:
 
     report["recommendations"] = recommendations
     return report
+
+
+def run_sleep(
+    *,
+    threshold: float = 0.85,
+    days_unused: int = 30,
+    dry_run: bool = False,
+    db_path=None,
+) -> dict:
+    """Sleep-time consolidation: scan duplicates, archive stale items, invalidate superseded."""
+    from .temporal import invalidate_memory
+
+    summary: dict = {
+        "clusters_found": 0,
+        "items_archived": 0,
+        "items_invalidated": 0,
+        "dry_run": dry_run,
+    }
+
+    clusters = find_consolidation_candidates(threshold=threshold, db_path=db_path)
+    summary["clusters_found"] = len(clusters)
+
+    if not dry_run and len(clusters) > 1:
+        for cluster in clusters[:5]:
+            items = cluster.get("items", [])
+            if len(items) < 2:
+                continue
+            keeper = items[0]
+            for item in items[1:]:
+                invalidate_memory(
+                    item["item_type"],
+                    int(item["item_id"]),
+                    superseded_by=int(keeper["item_id"]),
+                    reason="sleep-time consolidation",
+                    db_path=db_path,
+                )
+                summary["items_invalidated"] += 1
+
+    gc_candidates = find_gc_candidates(days_unused=days_unused, db_path=db_path)
+    if not dry_run and gc_candidates:
+        with get_connection(db_path) as conn:
+            for cand in gc_candidates[:50]:
+                if archive_item(conn, cand["item_type"], cand["item_id"], reason="sleep-gc"):
+                    summary["items_archived"] += 1
+    else:
+        summary["gc_candidates"] = len(gc_candidates)
+
+    return summary

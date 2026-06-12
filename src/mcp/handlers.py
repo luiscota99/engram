@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 
 from src.codebase_query import fetch_codebase_rows_for_query
 from src.database import (
+    check_duplicate_before_add,
     delete_item,
     find_similar,
     get_connection,
@@ -15,17 +16,32 @@ from src.database import (
     get_embedding_stats,
     get_item,
     get_or_create_project,
+    get_pinned_items,
     get_session_details,
     get_tags_for_item,
     index_in_fts,
     link_tags,
+    pin_item,
     record_usage,
+    unpin_item,
 )
-from src.maintenance import find_consolidation_candidates, run_gc, run_health_check
+from src.maintenance import find_consolidation_candidates, run_gc, run_health_check, run_sleep
+from src.memory_ops import (
+    add_decision,
+    create_conversation,
+    create_mistake,
+    create_pattern,
+    create_prompt,
+    create_session,
+    create_skill,
+    create_transcript,
+)
 from src.merge import merge_available, merge_entries
+from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, wrap_untrusted_text
 from src.search import get_recent, get_stats
 from src.search import search as memory_search
 from src.session_review import build_session_review_prompt
+from src.temporal import invalidate_memory
 from src.workflow import (
     WorkflowViolationError,
     advance_phase,
@@ -38,25 +54,32 @@ from src.workflow import (
 McpToolArgs = Mapping[str, Any]
 
 
-def format_and_truncate_results(results: Any, semantic_status: str | None = None) -> str:
+def format_and_truncate_results(
+    results: Any,
+    semantic_status: str | None = None,
+    semantic_available: bool | None = None,
+) -> str:
     if not results:
         if semantic_status and semantic_status != "ok":
-            return (
+            msg = (
                 f"No results found. "
                 f"[Note: semantic search {semantic_status} — results are lexical-only. "
-                f"Run `engram doctor` to check Ollama/embedding status.]"
+                f"semantic_available=false. Run `engram doctor` to check Ollama/embedding status.]"
             )
-        return "No results found."
+            return wrap_untrusted_text("Engram memory search results", msg)
+        return wrap_untrusted_text("Engram memory search results", "No results found.")
 
     max_chars = int(os.environ.get("ENGRAM_MAX_CONTEXT_CHARS", 8000))
     lines = [
+        f"{UNTRUSTED_CONTEXT_POLICY}\n",
         "Found results. NOTE: These are truncated summaries to save context tokens.\n",
         "If an item looks relevant, you MUST use `memory_read_item(item_type, item_id)` to read the full context.\n\n",
     ]
-    if semantic_status and semantic_status != "ok":
+    if semantic_available is False or (semantic_status and semantic_status != "ok"):
+        avail = "false" if semantic_available is False else "unknown"
         lines.append(
-            f"[Note: semantic search {semantic_status} — results are lexical-only. "
-            f"Run `engram doctor` to check Ollama/embedding status.]\n\n"
+            f"[Note: semantic search {semantic_status or 'degraded'} — semantic_available={avail}. "
+            f"Results may be lexical-only. Run `engram doctor` to check Ollama/embedding status.]\n\n"
         )
     total_length = sum(len(line) for line in lines)
     truncated = False
@@ -64,8 +87,9 @@ def format_and_truncate_results(results: Any, semantic_status: str | None = None
     for r in results:
         score = r.get("utility_score")
         search_type = "S" if r.get("is_semantic") else "K"
+        pin_marker = " [PINNED]" if r.get("pinned") else ""
         score_str = f" (score: {score:.1f}, {search_type})" if score is not None else f" ({search_type})"
-        block = f"[{r['item_type'].upper()} ID: {r['item_id']}]{score_str} {r['title']}\n"
+        block = f"[{r['item_type'].upper()} ID: {r['item_id']}]{pin_marker}{score_str} {r['title']}\n"
         if r.get("snippet"):
             snippet = r["snippet"].replace("\n", " ")
             block += f"  Snippet: {snippet[:150]}...\n"
@@ -84,7 +108,28 @@ def format_and_truncate_results(results: Any, semantic_status: str | None = None
     if truncated:
         output += f"[WARNING: Truncated at {max_chars} chars. Use memory_read_item on the IDs above to read more.]\n"
 
-    return output
+    return wrap_untrusted_text("Engram memory search results", output)
+
+
+def _dedup_gate(args: McpToolArgs, content: str, item_type: str, *, name: str | None = None) -> str | None:
+    """Block insert when near-duplicates exist unless force/skip_dedup is set."""
+    if args.get("force") or args.get("skip_dedup"):
+        return None
+    dedup = check_duplicate_before_add(content, item_type, name=name)
+    if not dedup["duplicates"]:
+        return None
+    lines = [
+        "Near-duplicate detected — insert blocked. Set force=true to add anyway.\n",
+    ]
+    for d in dedup["duplicates"]:
+        sim = d.get("similarity", "?")
+        kind = d.get("match_kind", "similar")
+        lines.append(
+            f"  [{d['item_type'].upper()} ID:{d['item_id']}] {d.get('title', '')} "
+            f"(similarity: {sim}, {kind})"
+        )
+    lines.append("\nOptions: force=true | memory_find_similar | memory_merge_entries")
+    return "\n".join(lines)
 
 
 def handle_memory_record_usage(args: McpToolArgs) -> str:
@@ -132,15 +177,21 @@ def handle_memory_search(args: McpToolArgs) -> str:
         audit_source="mcp",
     )
     semantic_status = getattr(results, "semantic_status", None)
+    semantic_available = getattr(results, "semantic_available", None)
     if not results:
         if semantic_status and semantic_status != "ok":
-            return (
+            msg = (
                 f"No results found. "
-                f"[Note: semantic search {semantic_status} — results are lexical-only. "
+                f"[Note: semantic search {semantic_status} — semantic_available=false. "
                 f"Run `engram doctor` to check Ollama/embedding status.]"
             )
-        return "No results found."
-    return format_and_truncate_results(results, semantic_status=semantic_status)
+            return wrap_untrusted_text("Engram memory search results", msg)
+        return wrap_untrusted_text("Engram memory search results", "No results found.")
+    return format_and_truncate_results(
+        results,
+        semantic_status=semantic_status,
+        semantic_available=semantic_available,
+    )
 
 
 def handle_memory_recent(args: McpToolArgs) -> str:
@@ -178,65 +229,61 @@ def handle_memory_add(args: McpToolArgs) -> str:
 
 
 def handle_memory_add_mistake(args: McpToolArgs) -> str:
+    content = (
+        f"{args['context']} | {args['mistake']} | {args.get('root_cause', '')} | {args['fix']}"
+    )
+    blocked = _dedup_gate(args, content, "mistake")
+    if blocked:
+        return blocked
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO mistakes (date, context, mistake, root_cause, fix, prevention, conversation_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                args["date"],
-                args["context"],
-                args["mistake"],
-                args.get("root_cause"),
-                args["fix"],
-                args.get("prevention"),
-                args.get("conversation_id"),
-            ),
+        mid = create_mistake(
+            conn,
+            date=args["date"],
+            context=args["context"],
+            mistake=args["mistake"],
+            fix=args["fix"],
+            root_cause=args.get("root_cause"),
+            prevention=args.get("prevention"),
+            conversation_id=args.get("conversation_id"),
+            tags=args.get("tags", ""),
         )
-        mid = cursor.lastrowid
-        tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
-        link_tags(conn, "mistake", mid, tags)
-        content = (
-            f"{args['context']} | {args['mistake']} | {args.get('root_cause', '')} | {args['fix']}"
-        )
-        index_in_fts(conn, "mistake", mid, args["mistake"][:80], content, tags)
     return f"Mistake #{mid} logged successfully."
 
 
 def handle_memory_add_pattern(args: McpToolArgs) -> str:
+    content = f"{args['symptoms']} | {args['root_cause']} | {args['standard_fix']}"
+    blocked = _dedup_gate(args, content, "pattern", name=args["name"])
+    if blocked:
+        return blocked
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO patterns (name, symptoms, root_cause, standard_fix)
-               VALUES (?, ?, ?, ?)""",
-            (args["name"], args["symptoms"], args["root_cause"], args["standard_fix"]),
+        pid = create_pattern(
+            conn,
+            name=args["name"],
+            symptoms=args["symptoms"],
+            root_cause=args["root_cause"],
+            standard_fix=args["standard_fix"],
+            tags=args.get("tags", ""),
         )
-        pid = cursor.lastrowid
-        tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
-        link_tags(conn, "pattern", pid, tags)
-        content = f"{args['symptoms']} | {args['root_cause']} | {args['standard_fix']}"
-        index_in_fts(conn, "pattern", pid, args["name"], content, tags)
     return f"Pattern #{pid} '{args['name']}' logged successfully."
 
 
 def handle_memory_add_skill(args: McpToolArgs) -> str:
+    content = f"{args['trigger']} | {args['workflow']} | {args.get('pitfalls', '')}"
+    blocked = _dedup_gate(args, content, "skill", name=args["name"])
+    if blocked:
+        return blocked
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                args["name"],
-                args["domain"],
-                args["trigger"],
-                args["workflow"],
-                args.get("pitfalls"),
-                args.get("key_files"),
-                args.get("dependencies"),
-            ),
+        sid = create_skill(
+            conn,
+            name=args["name"],
+            domain=args["domain"],
+            trigger=args["trigger"],
+            workflow=args["workflow"],
+            pitfalls=args.get("pitfalls"),
+            key_files=args.get("key_files"),
+            dependencies=args.get("dependencies"),
+            tags=args.get("tags", ""),
         )
-        sid = cursor.lastrowid
-        tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
-        link_tags(conn, "skill", sid, tags)
-        content = f"{args['trigger']} | {args['workflow']} | {args.get('pitfalls', '')}"
-        index_in_fts(conn, "skill", sid, args["name"], content, tags)
     return f"Skill #{sid} '{args['name']}' logged successfully."
 
 
@@ -271,47 +318,33 @@ def handle_memory_consolidate_skills(args: McpToolArgs) -> str:
 
 def handle_memory_add_conversation(args: McpToolArgs) -> str:
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO conversations (conversation_id, title, date, domain, tasks_completed, key_decisions, mistakes_summary, skills_extracted)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                args["conversation_id"],
-                args["title"],
-                args["date"],
-                args["domain"],
-                args.get("tasks_completed"),
-                args.get("key_decisions"),
-                args.get("mistakes_summary"),
-                args.get("skills_extracted"),
-            ),
+        cid = create_conversation(
+            conn,
+            conversation_id=args["conversation_id"],
+            title=args["title"],
+            date=args["date"],
+            domain=args["domain"],
+            tasks_completed=args.get("tasks_completed"),
+            key_decisions=args.get("key_decisions"),
+            mistakes_summary=args.get("mistakes_summary"),
+            skills_extracted=args.get("skills_extracted"),
+            tags=args.get("tags", ""),
         )
-        cid = cursor.lastrowid
-        tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
-        link_tags(conn, "conversation", cid, tags)
-        content = f"{args.get('tasks_completed', '')} | {args.get('key_decisions', '')}"
-        index_in_fts(conn, "conversation", cid, args["title"], content, tags)
     return f"Conversation #{cid} '{args['title']}' logged successfully."
 
 
 def handle_memory_add_prompt(args: McpToolArgs) -> str:
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO prompts (name, role, domain, description, prompt_text, best_for)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (
-                args["name"],
-                args["role"],
-                args["domain"],
-                args["description"],
-                args["prompt_text"],
-                args.get("best_for"),
-            ),
+        pid = create_prompt(
+            conn,
+            name=args["name"],
+            role=args["role"],
+            domain=args["domain"],
+            description=args["description"],
+            prompt_text=args.get("prompt_text"),
+            best_for=args.get("best_for"),
+            tags=args.get("tags", ""),
         )
-        pid = cursor.lastrowid
-        tags = [t.strip() for t in args.get("tags", "").split(",") if t.strip()]
-        link_tags(conn, "prompt", pid, tags)
-        content = f"{args['role']} | {args['description']} | {args.get('best_for', '')} | {args['prompt_text'][:500]}"
-        index_in_fts(conn, "prompt", pid, args["name"], content, tags)
     return f"Prompt #{pid} '{args['name']}' stored successfully."
 
 
@@ -349,14 +382,14 @@ def handle_memory_init_session(args: McpToolArgs) -> str:
     workflow_used = args.get("workflow_used")
 
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO sessions (session_id, title, date, domain, workflow_used)
-               VALUES (?, ?, ?, ?, ?)""",
-            (session_id, args["title"], args["date"], args["domain"], workflow_used),
+        create_session(
+            conn,
+            session_id=session_id,
+            title=args["title"],
+            date=args["date"],
+            domain=args["domain"],
+            workflow_used=workflow_used,
         )
-        sid = cursor.lastrowid
-        content = f"{args['title']} | {workflow_used or ''}"
-        index_in_fts(conn, "session", sid, session_id, content, [])
 
     # Initialize workflow state machine for this session
     state = init_session_state(session_id, workflow_name=workflow_used)
@@ -372,10 +405,11 @@ def handle_memory_add_transcript(args: McpToolArgs) -> str:
     session_id = args["session_id"]
     role = args["role"]
     with get_connection() as conn:
-        conn.execute(
-            """INSERT INTO session_transcripts (session_id, role, content)
-               VALUES (?, ?, ?)""",
-            (session_id, role, args["content"]),
+        create_transcript(
+            conn,
+            session_id=session_id,
+            role=role,
+            content=args["content"],
         )
     # Update workflow state for this role's contribution
     state = record_role_contribution(session_id, role)
@@ -398,11 +432,7 @@ def handle_memory_add_decision(args: McpToolArgs) -> str:
         return f"WorkflowViolation: {e}"
 
     with get_connection() as conn:
-        conn.execute(
-            """UPDATE sessions SET key_decisions = IFNULL(key_decisions, '') || char(10) || ?
-               WHERE session_id = ?""",
-            (args["decision"], session_id),
-        )
+        add_decision(conn, session_id=session_id, decision=args["decision"])
     return f"Decision added to session '{session_id}'."
 
 
@@ -761,15 +791,25 @@ def handle_memory_health(args: McpToolArgs) -> str:
 def handle_memory_suggest_consolidations(args: McpToolArgs) -> str:
     threshold = float(args.get("threshold", 0.80))
     item_type = args.get("item_type")
-    clusters = find_consolidation_candidates(
+    force_rescan = bool(args.get("force_rescan", False))
+    clusters, skip_reason = find_consolidation_candidates(
         threshold=threshold,
         item_types=[item_type] if item_type else None,
+        force_rescan=force_rescan,
     )
+    if skip_reason == "unchanged":
+        return (
+            "No changes since last consolidation scan (fingerprint unchanged). "
+            "Set force_rescan=true to rescan."
+        )
     if not clusters:
         return f"No consolidation candidates found at similarity threshold {threshold}."
     lines = [f"Found {len(clusters)} consolidation candidate(s) (threshold: {threshold}):\n"]
     for i, cluster in enumerate(clusters[:20], 1):
-        lines.append(f"Cluster {i} — {cluster['item_type']} (similarity: {cluster['similarity']})")
+        lines.append(
+            f"Cluster {i} — {cluster['item_type']} "
+            f"(avg similarity: {cluster['avg_similarity']}, size: {cluster['cluster_size']})"
+        )
         for item in cluster["items"]:
             lines.append(f"  ID:{item['item_id']}  {item['title']}")
     return "\n".join(lines)
@@ -779,6 +819,8 @@ def handle_memory_gc(args: McpToolArgs) -> str:
     mode = args.get("mode", "dry-run")
     days = int(args.get("days_unused", 180))
     result = run_gc(mode=mode, days_unused=days)
+    if result.get("blocked"):
+        return f"GC blocked: {result.get('reason', 'safety guardrail triggered')}"
     candidates = result["candidates"]
     if not candidates:
         return f"No GC candidates found (threshold: unused for {days}+ days)."
@@ -789,6 +831,73 @@ def handle_memory_gc(args: McpToolArgs) -> str:
         lines.append("\nCall with mode='archive' to soft-delete these items.")
     else:
         lines.append(f"\nArchived {result['processed']} items.")
+    return "\n".join(lines)
+
+
+def handle_memory_pin(args: McpToolArgs) -> str:
+    item_type = args.get("item_type")
+    item_id = args.get("item_id")
+    if not item_type or not item_id:
+        return "Error: item_type and item_id are required."
+    if pin_item(item_type, int(item_id)):
+        return f"Pinned {item_type} ID {item_id}. It will always appear at the top of memory_search results."
+    return f"Error: could not pin {item_type} ID {item_id} (item not found)."
+
+
+def handle_memory_unpin(args: McpToolArgs) -> str:
+    item_type = args.get("item_type")
+    item_id = args.get("item_id")
+    if not item_type or not item_id:
+        return "Error: item_type and item_id are required."
+    if unpin_item(item_type, int(item_id)):
+        return f"Unpinned {item_type} ID {item_id}."
+    return f"Error: {item_type} ID {item_id} was not pinned."
+
+
+def handle_memory_list_pinned(args: McpToolArgs) -> str:
+    item_type = args.get("item_type")
+    limit = int(args.get("limit", 20))
+    pinned = get_pinned_items(item_type=item_type, limit=limit)
+    if not pinned:
+        return "No pinned memories."
+    return format_and_truncate_results(pinned)
+
+
+def handle_memory_auto_extract(args: McpToolArgs) -> str:
+    from src.auto_extract import (
+        extract_from_messages,
+        extract_from_task,
+        format_auto_extract_result,
+    )
+
+    messages_raw = args.get("messages")
+    if messages_raw:
+        if isinstance(messages_raw, str):
+            try:
+                messages = json.loads(messages_raw)
+            except json.JSONDecodeError:
+                return "Error: messages must be valid JSON array."
+        else:
+            messages = messages_raw
+        if not isinstance(messages, list):
+            return "Error: messages must be a JSON array of {role, content} objects."
+        result = extract_from_messages(messages)
+        return format_auto_extract_result(result)
+
+    task_description = args.get("task_description", "")
+    outcome = args.get("outcome", "")
+    if not task_description or not outcome:
+        return "Error: provide messages (JSON) or both task_description and outcome."
+
+    combined = extract_from_task(
+        task_description=task_description,
+        outcome=outcome,
+        errors_encountered=args.get("errors_encountered", ""),
+        files_changed=args.get("files_changed") or [],
+    )
+    lines = [format_auto_extract_result(combined["auto_extract"]), "", "Engineering capture suggestion:"]
+    from src.capture import format_capture_suggestion
+    lines.append(format_capture_suggestion(combined["capture_suggestion"]))
     return "\n".join(lines)
 
 
@@ -928,6 +1037,38 @@ def handle_memory_suggest_capture(args: McpToolArgs) -> str:
     return format_capture_suggestion(suggestion)
 
 
+def handle_memory_llm_status(_args: McpToolArgs) -> str:
+    from src.llm import get_llm_status
+
+    status = get_llm_status()
+    return json.dumps(status, indent=2)
+
+
+def handle_memory_invalidate(args: McpToolArgs) -> str:
+    item_type = args.get("item_type")
+    item_id = args.get("item_id")
+    if not item_type or item_id is None:
+        return "Error: item_type and item_id are required."
+    ok = invalidate_memory(
+        item_type,
+        int(item_id),
+        superseded_by=args.get("superseded_by"),
+        reason=args.get("reason"),
+    )
+    if not ok:
+        return f"Error: could not invalidate {item_type} ID {item_id}."
+    return f"Invalidated {item_type} ID {item_id}."
+
+
+def handle_memory_sleep(args: McpToolArgs) -> str:
+    summary = run_sleep(
+        threshold=float(args.get("threshold", 0.85)),
+        days_unused=int(args.get("days_unused", 30)),
+        dry_run=bool(args.get("dry_run", False)),
+    )
+    return json.dumps(summary, indent=2)
+
+
 TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_add": handle_memory_add,
     "memory_record_usage": handle_memory_record_usage,
@@ -962,4 +1103,11 @@ TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_export_skill": handle_memory_export_skill,
     "memory_sync_skills": handle_memory_sync_skills,
     "memory_suggest_capture": handle_memory_suggest_capture,
+    "memory_pin": handle_memory_pin,
+    "memory_unpin": handle_memory_unpin,
+    "memory_list_pinned": handle_memory_list_pinned,
+    "memory_auto_extract": handle_memory_auto_extract,
+    "memory_llm_status": handle_memory_llm_status,
+    "memory_invalidate": handle_memory_invalidate,
+    "memory_sleep": handle_memory_sleep,
 }

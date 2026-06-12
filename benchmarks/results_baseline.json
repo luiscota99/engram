@@ -1,0 +1,23 @@
+{
+  "description": "Placeholder baseline R@5 per category for seeded regression suite (test_queries.json v1.2). Update after each release benchmark run.",
+  "version": "1.0",
+  "recorded_at": "2026-06-06",
+  "mode": "hybrid",
+  "n_queries": 100,
+  "aggregate": {
+    "R@5": 0.0,
+    "MRR": 0.0,
+    "avg_latency_ms": 0.0
+  },
+  "by_category": {
+    "exact_error": { "n": 15, "R@5": 0.0 },
+    "semantic_similar": { "n": 19, "R@5": 0.0 },
+    "tag_filter": { "n": 13, "R@5": 0.0 },
+    "type_inference": { "n": 13, "R@5": 0.0 },
+    "multi_hop": { "n": 12, "R@5": 0.0 },
+    "conversation": { "n": 10, "R@5": 0.0 },
+    "prompt": { "n": 8, "R@5": 0.0 },
+    "abstention": { "n": 10, "R@5": 0.0 }
+  },
+  "notes": "Run: python benchmarks/engram_retrieval_bench.py --output benchmarks/results_baseline.json then copy aggregate/by_category R@5 values here."
+}

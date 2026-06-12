@@ -281,6 +281,39 @@ MIGRATIONS = {
            SELECT rowid, item_type, CAST(item_id AS INTEGER), 'stale'
            FROM memory_fts;""",
     ],
+    # v10: Pinned memories + consolidation fingerprint state
+    10: [
+        """CREATE TABLE IF NOT EXISTS item_pins (
+            item_type TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            pinned_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (item_type, item_id)
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_item_pins_type ON item_pins(item_type);",
+        """CREATE TABLE IF NOT EXISTS consolidation_state (
+            key TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );""",
+    ],
+    11: [
+        "ALTER TABLE mistakes ADD COLUMN superseded_by INTEGER;",
+        "ALTER TABLE patterns ADD COLUMN superseded_by INTEGER;",
+        "ALTER TABLE skills ADD COLUMN superseded_by INTEGER;",
+        """CREATE TABLE IF NOT EXISTS memory_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject TEXT NOT NULL,
+            predicate TEXT NOT NULL,
+            object TEXT NOT NULL,
+            valid_from TEXT NOT NULL DEFAULT (date('now')),
+            valid_until TEXT,
+            source_type TEXT,
+            source_id INTEGER
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_memory_facts_subject ON memory_facts(subject);",
+        "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('vec_dimension', '768');",
+        "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('embed_model', 'nomic-embed-text');",
+    ],
 }
 
 
@@ -290,6 +323,13 @@ MIGRATIONS = {
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    11: [
+        "DROP TABLE IF EXISTS memory_facts;",
+    ],
+    10: [
+        "DROP TABLE IF EXISTS consolidation_state;",
+        "DROP TABLE IF EXISTS item_pins;",
+    ],
     9: [
         "DELETE FROM embedding_status;",
     ],

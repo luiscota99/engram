@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from datetime import datetime, timezone
 
 from ...database import (
+    check_duplicate_before_add,
     delete_item,
     get_connection,
     get_db_path,
@@ -15,8 +17,44 @@ from ...database import (
     link_tags,
 )
 from ...maintenance import find_consolidation_candidates
+from ...memory_ops import (
+    add_decision,
+    create_conversation,
+    create_mistake,
+    create_pattern,
+    create_prompt,
+    create_session,
+    create_skill,
+    create_transcript,
+)
 from ...search import get_recent, get_stats, search, semantic_search
+from ...workflow import (
+    WorkflowViolationError,
+    check_decision_allowed,
+    init_session_state,
+    record_role_contribution,
+)
 from ..fmt import fmt_bold, fmt_dim, fmt_header, fmt_type
+
+logger = logging.getLogger(__name__)
+
+
+def _cli_dedup_gate(args, content: str, item_type: str, *, name: str | None = None) -> bool:
+    """Return True if insert should proceed; False if blocked."""
+    if getattr(args, "force", False):
+        return True
+    dedup = check_duplicate_before_add(content, item_type, name=name)
+    if not dedup["duplicates"]:
+        return True
+    print("Near-duplicate detected — insert blocked. Use --force to add anyway.\n")
+    for d in dedup["duplicates"]:
+        sim = d.get("similarity", "?")
+        kind = d.get("match_kind", "similar")
+        print(
+            f"  [{d['item_type'].upper()} ID:{d['item_id']}] {d.get('title', '')} "
+            f"(similarity: {sim}, {kind})"
+        )
+    return False
 
 
 def cmd_search(args):
@@ -35,6 +73,7 @@ def cmd_search(args):
         args.limit,
         project_path=project_path,
         audit_source="cli",
+        include_superseded=getattr(args, "include_superseded", False),
     )
     if not results:
         print("No results found.")
@@ -87,91 +126,118 @@ def cmd_add(args):
 
 
 def _add_mistake(args):
+    content = (
+        f"{args.context} | {args.mistake} | {args.root_cause or ''} | {args.fix} | {args.prevention or ''}"
+    )
+    if not _cli_dedup_gate(args, content, "mistake"):
+        sys.exit(1)
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO mistakes (date, context, mistake, root_cause, fix, prevention, conversation_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (args.date, args.context, args.mistake, args.root_cause, args.fix, args.prevention, args.conversation),
+        mid = create_mistake(
+            conn,
+            date=args.date,
+            context=args.context,
+            mistake=args.mistake,
+            fix=args.fix,
+            root_cause=args.root_cause,
+            prevention=args.prevention,
+            conversation_id=args.conversation,
+            tags=args.tags,
         )
-        mid = cursor.lastrowid
-        tags = args.tags.split(",") if args.tags else []
-        link_tags(conn, "mistake", mid, tags)
-        content = f"{args.context} | {args.mistake} | {args.root_cause or ''} | {args.fix} | {args.prevention or ''}"
-        index_in_fts(conn, "mistake", mid, args.mistake[:80], content, tags)
     print(f"✓ Mistake #{mid} logged.")
 
 
 def _add_pattern(args):
+    content = f"{args.symptoms} | {args.root_cause} | {args.fix}"
+    if not _cli_dedup_gate(args, content, "pattern", name=args.name):
+        sys.exit(1)
     with get_connection() as conn:
-        cursor = conn.execute(
-            "INSERT INTO patterns (name, symptoms, root_cause, standard_fix) VALUES (?, ?, ?, ?)",
-            (args.name, args.symptoms, args.root_cause, args.fix),
+        pid = create_pattern(
+            conn,
+            name=args.name,
+            symptoms=args.symptoms,
+            root_cause=args.root_cause,
+            standard_fix=args.fix,
+            tags=args.tags,
         )
-        pid = cursor.lastrowid
-        tags = args.tags.split(",") if args.tags else []
-        link_tags(conn, "pattern", pid, tags)
-        content = f"{args.symptoms} | {args.root_cause} | {args.fix}"
-        index_in_fts(conn, "pattern", pid, args.name, content, tags)
     print(f"✓ Pattern #{pid} '{args.name}' logged.")
 
 
 def _add_skill(args):
+    content = f"{args.trigger} | {args.workflow} | {args.pitfalls or ''}"
+    if not _cli_dedup_gate(args, content, "skill", name=args.name):
+        sys.exit(1)
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (args.name, args.domain, args.trigger, args.workflow, args.pitfalls, args.files, args.dependencies),
+        sid = create_skill(
+            conn,
+            name=args.name,
+            domain=args.domain,
+            trigger=args.trigger,
+            workflow=args.workflow,
+            pitfalls=args.pitfalls,
+            key_files=args.files,
+            dependencies=args.dependencies,
+            tags=args.tags,
         )
-        sid = cursor.lastrowid
-        tags = args.tags.split(",") if args.tags else []
-        link_tags(conn, "skill", sid, tags)
-        content = f"{args.trigger} | {args.workflow} | {args.pitfalls or ''}"
-        index_in_fts(conn, "skill", sid, args.name, content, tags)
     print(f"✓ Skill #{sid} '{args.name}' logged.")
 
 
 def _add_conversation(args):
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO conversations (conversation_id, title, date, domain, tasks_completed,
-               key_decisions, mistakes_summary, skills_extracted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (args.id, args.title, args.date, args.domain, args.tasks, args.decisions, args.mistakes, args.skills),
+        cid = create_conversation(
+            conn,
+            conversation_id=args.id,
+            title=args.title,
+            date=args.date,
+            domain=args.domain,
+            tasks_completed=args.tasks,
+            key_decisions=args.decisions,
+            mistakes_summary=args.mistakes,
+            skills_extracted=args.skills,
+            tags=args.tags,
         )
-        cid = cursor.lastrowid
-        tags = args.tags.split(",") if args.tags else []
-        link_tags(conn, "conversation", cid, tags)
-        content = f"{args.tasks or ''} | {args.decisions or ''} | {args.mistakes or ''}"
-        index_in_fts(conn, "conversation", cid, args.title, content, tags)
     print(f"✓ Conversation #{cid} '{args.title}' logged.")
 
 
 def _add_session(args):
     with get_connection() as conn:
-        cursor = conn.execute(
-            "INSERT INTO sessions (session_id, title, date, domain, workflow_used) VALUES (?, ?, ?, ?, ?)",
-            (args.id, args.title, args.date, args.domain, args.workflow_used),
+        create_session(
+            conn,
+            session_id=args.id,
+            title=args.title,
+            date=args.date,
+            domain=args.domain,
+            workflow_used=args.workflow_used,
         )
-        sid = cursor.lastrowid
-        content = f"{args.title} | {args.workflow_used or ''}"
-        index_in_fts(conn, "session", sid, args.id, content, [])
+    init_session_state(args.id, workflow_name=args.workflow_used)
     print(f"✓ Session '{args.id}' initialized.")
 
 
 def _add_transcript(args):
     with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO session_transcripts (session_id, role, content) VALUES (?, ?, ?)",
-            (args.session_id, args.role, args.content),
+        create_transcript(
+            conn,
+            session_id=args.session_id,
+            role=args.role,
+            content=args.content,
         )
+    record_role_contribution(args.session_id, args.role)
     print(f"✓ Transcript entry for '{args.role}' added to session '{args.session_id}'.")
 
 
 def cmd_add_decision(args):
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE sessions SET key_decisions = IFNULL(key_decisions, '') || char(10) || ? WHERE session_id = ?",
-            (args.decision, args.session_id),
+    if not getattr(args, "force_bypass", False):
+        try:
+            check_decision_allowed(args.session_id)
+        except WorkflowViolationError as e:
+            print(f"WorkflowViolation: {e}")
+            sys.exit(1)
+    else:
+        logger.warning(
+            "Workflow gate bypassed for session %s (--force-bypass)",
+            args.session_id,
         )
+    with get_connection() as conn:
+        add_decision(conn, session_id=args.session_id, decision=args.decision)
     print(f"✓ Decision added to session '{args.session_id}'.")
 
 
@@ -181,16 +247,17 @@ def _add_prompt(args):
         with open(args.file, "r") as f:
             prompt_text = f.read()
     with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO prompts (name, role, domain, description, prompt_text, source_path, best_for)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (args.name, args.role, args.domain, args.description, prompt_text, args.file, args.best_for),
+        pid = create_prompt(
+            conn,
+            name=args.name,
+            role=args.role,
+            domain=args.domain,
+            description=args.description,
+            prompt_text=prompt_text,
+            source_path=args.file,
+            best_for=args.best_for,
+            tags=args.tags,
         )
-        pid = cursor.lastrowid
-        tags = [t.strip() for t in args.tags.split(",")] if args.tags else []
-        link_tags(conn, "prompt", pid, tags)
-        content = f"{args.role} | {args.description} | {args.best_for or ''} | {prompt_text[:500]}"
-        index_in_fts(conn, "prompt", pid, args.name, content, tags)
     print(f"✓ Prompt #{pid} '{args.name}' stored.")
 
 

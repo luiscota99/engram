@@ -18,6 +18,11 @@ def use_id_grading(q: dict) -> bool:
     return q.get("expected_item_id") is not None and bool(q.get("expected_type"))
 
 
+def expects_abstention(q: dict) -> bool:
+    """Query should retrieve no relevant hit (negative / abstention label)."""
+    return bool(q.get("expect_abstention"))
+
+
 def row_matches_expected(r: dict, q: dict) -> bool:
     """Return True if this result row is the labeled correct hit."""
     if use_id_grading(q):
@@ -32,7 +37,28 @@ def row_matches_expected(r: dict, q: dict) -> bool:
 
 def relevances_from_results(results: list[dict], q: dict) -> list[float]:
     """Binary relevance (0/1) per rank position for the full result list."""
+    if expects_abstention(q):
+        return [0.0 for _ in results]
     return [1.0 if row_matches_expected(r, q) else 0.0 for r in results]
+
+
+def abstention_success(results: list[dict], q: dict, k: int = 5) -> bool:
+    """Abstention passes when top-k is empty or all hits score below threshold."""
+    if not expects_abstention(q):
+        return False
+    top = results[:k]
+    if not top:
+        return True
+    deny = q.get("deny_items") or []
+    for r in top:
+        for d in deny:
+            if (
+                r.get("item_type") == d.get("type")
+                and normalize_item_id(r.get("item_id")) == normalize_item_id(d.get("item_id"))
+            ):
+                return False
+    threshold = float(q.get("abstention_max_score", 0.35))
+    return all(float(r.get("utility_score", 1.0)) < threshold for r in top)
 
 
 def dcg(relevances: list[float], k: int) -> float:
@@ -54,6 +80,14 @@ def ndcg_at_k_from_relevances(relevances: list[float], k: int) -> float:
 
 def recall_at_k_from_relevances(relevances: list[float], k: int) -> float:
     return 1.0 if any(relevances[:k]) else 0.0
+
+
+def recall_at_k(results: list[dict], q: dict, k: int) -> float:
+    """Recall@k with abstention-aware scoring."""
+    if expects_abstention(q):
+        return 1.0 if abstention_success(results, q, k) else 0.0
+    rel = relevances_from_results(results, q)
+    return recall_at_k_from_relevances(rel, k)
 
 
 def mrr_from_relevances(relevances: list[float]) -> float:

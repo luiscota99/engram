@@ -8,9 +8,7 @@ preserves insights from both originals.
 
 from __future__ import annotations
 
-import json
-import os
-import urllib.request
+from .llm import call_ollama_generate, is_llm_available, parse_json_from_llm
 
 MERGE_PROMPT_TEMPLATE = """You are an expert knowledge curator. You have two similar memory entries that were found to be near-duplicates. Your task is to synthesize them into a single, more robust entry.
 
@@ -28,27 +26,6 @@ Produce a merged entry as a JSON object with the same fields as the originals. T
 - Keep the same JSON structure/keys as the input entries
 
 Output ONLY valid JSON, no explanation."""
-
-
-def _call_ollama_generate(prompt: str, model: str | None = None) -> str | None:
-    """Call Ollama generate endpoint and return the response text."""
-    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    ollama_model = model or os.environ.get("ENGRAM_LLM_MODEL", "llama3.2")
-    url = f"{base_url}/api/generate"
-    payload = json.dumps({
-        "model": ollama_model,
-        "prompt": prompt,
-        "stream": False,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=payload, headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode())
-            return result.get("response", "").strip()
-    except Exception:
-        return None
 
 
 def _entry_to_text(entry: dict) -> str:
@@ -70,34 +47,20 @@ def merge_entries(entry_a: dict, entry_b: dict, model: str | None = None) -> dic
     text_b = _entry_to_text(entry_b)
     prompt = MERGE_PROMPT_TEMPLATE.format(entry_a=text_a, entry_b=text_b)
 
-    raw_response = _call_ollama_generate(prompt, model=model)
+    raw_response = call_ollama_generate(prompt, model=model, task="merge")
     if not raw_response:
         return None
 
-    # Extract JSON from response (LLM may wrap it in markdown fences)
-    json_str = raw_response
-    if "```json" in json_str:
-        json_str = json_str.split("```json")[1].split("```")[0].strip()
-    elif "```" in json_str:
-        json_str = json_str.split("```")[1].split("```")[0].strip()
-
-    try:
-        merged = json.loads(json_str)
-        # Preserve original item_type if LLM accidentally dropped it
-        if "item_type" not in merged and "item_type" in entry_a:
-            merged["item_type"] = entry_a["item_type"]
-        # Strip id — the merged entry will get a new one on insert
-        merged.pop("id", None)
-        return merged
-    except (json.JSONDecodeError, ValueError):
+    merged = parse_json_from_llm(raw_response)
+    if not isinstance(merged, dict):
         return None
+
+    if "item_type" not in merged and "item_type" in entry_a:
+        merged["item_type"] = entry_a["item_type"]
+    merged.pop("id", None)
+    return merged
 
 
 def merge_available() -> bool:
     """Return True if Ollama is reachable and can perform merges."""
-    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    try:
-        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2) as r:
-            return r.status == 200
-    except Exception:
-        return False
+    return is_llm_available()

@@ -11,6 +11,7 @@ from .commands.codebase import (
     cmd_index_project,
     cmd_query_codebase,
 )
+from .commands.llm import cmd_llm
 from .commands.maintenance import (
     cmd_backup,
     cmd_doctor,
@@ -18,7 +19,9 @@ from .commands.maintenance import (
     cmd_health,
     cmd_merge_projects,
     cmd_migrate,
+    cmd_migrate_embeddings,
     cmd_reembed,
+    cmd_sleep,
 )
 from .commands.memory import (
     cmd_add,
@@ -79,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable project-scoped affinity (search global memory only)",
     )
+    p_search.add_argument(
+        "--include-superseded",
+        action="store_true",
+        help="Include superseded/invalidated memories in results",
+    )
     p_search.set_defaults(func=cmd_search)
 
     p_recent = sub.add_parser("recent", help="Show recent entries")
@@ -98,6 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_am.add_argument("--prevention")
     p_am.add_argument("--conversation")
     p_am.add_argument("--tags")
+    p_am.add_argument("--force", action="store_true", help="Skip duplicate check")
 
     p_ap = add_sub.add_parser("pattern", help="Log a pattern")
     p_ap.add_argument("--name", required=True)
@@ -105,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ap.add_argument("--root-cause", required=True)
     p_ap.add_argument("--fix", required=True)
     p_ap.add_argument("--tags")
+    p_ap.add_argument("--force", action="store_true", help="Skip duplicate check")
 
     p_as = add_sub.add_parser("skill", help="Log a skill")
     p_as.add_argument("--name", required=True)
@@ -115,6 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_as.add_argument("--files")
     p_as.add_argument("--dependencies")
     p_as.add_argument("--tags")
+    p_as.add_argument("--force", action="store_true", help="Skip duplicate check")
 
     p_ac = add_sub.add_parser("conversation", help="Log a conversation")
     p_ac.add_argument("--id", required=True)
@@ -142,6 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ad = add_sub.add_parser("decision", help="Add decision to session")
     p_ad.add_argument("--session-id", required=True)
     p_ad.add_argument("--decision", required=True)
+    p_ad.add_argument(
+        "--force-bypass",
+        action="store_true",
+        help="Bypass committee workflow gate (logged)",
+    )
 
     p_apr = add_sub.add_parser("prompt", help="Store an LLM prompt")
     p_apr.add_argument("--name", required=True)
@@ -328,6 +344,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_gc.add_argument("--days", type=int, default=180)
     p_gc.set_defaults(func=cmd_gc)
 
+    p_llm = sub.add_parser("llm", help="LLM status, consolidation audit, and assisted GC")
+    p_llm.set_defaults(func=cmd_llm)
+    llm_sub = p_llm.add_subparsers(dest="llm_command", help="LLM subcommands")
+
+    p_llm_status = llm_sub.add_parser("status", help="Show LLM provider, models, and reachability")
+    p_llm_status.set_defaults(llm_command="status")
+
+    p_llm_audit = llm_sub.add_parser("audit", help="Run LLM consolidation audit (dry-run by default)")
+    p_llm_audit.add_argument("--threshold", type=float, default=0.80)
+    p_llm_audit.add_argument("--execute", action="store_true", help="Apply auto_merge decisions")
+    p_llm_audit.add_argument("--force-rescan", action="store_true", help="Ignore consolidation fingerprint")
+    p_llm_audit.set_defaults(llm_command="audit")
+
+    p_llm_gc = llm_sub.add_parser("gc", help="Run LLM-assisted GC scoring (dry-run by default)")
+    p_llm_gc.add_argument("--days", type=int, default=180)
+    p_llm_gc.add_argument("--archive", action="store_true", help="Archive LLM-confirmed discards")
+    p_llm_gc.set_defaults(llm_command="gc")
+
     p_health = sub.add_parser("health", help="Show a health report for the memory database")
     p_health.set_defaults(func=cmd_health)
 
@@ -364,6 +398,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_migrate.add_argument("--rollback", action="store_true")
     p_migrate.add_argument("--mark-stale", action="store_true")
     p_migrate.set_defaults(func=cmd_migrate)
+
+    p_migrate_emb = sub.add_parser(
+        "migrate-embeddings",
+        help="Switch embedding model: mark stale, update schema_meta, reembed",
+    )
+    p_migrate_emb.add_argument("--target-model", required=True, help="Ollama embedding model name")
+    p_migrate_emb.set_defaults(func=cmd_migrate_embeddings)
+
+    p_sleep = sub.add_parser(
+        "sleep",
+        help="Sleep-time consolidation: merge duplicates, archive stale memories",
+    )
+    p_sleep.add_argument("--threshold", type=float, default=0.85)
+    p_sleep.add_argument("--days", type=int, default=30, help="Archive unused items older than N days")
+    p_sleep.add_argument("--dry-run", action="store_true")
+    p_sleep.add_argument("--quiet", action="store_true", help="No stdout (for hooks)")
+    p_sleep.set_defaults(func=cmd_sleep)
 
     # ── Session ──────────────────────────────────────────────────────
     p_session = sub.add_parser("get-session", help="Get full details of a session")
@@ -455,5 +506,12 @@ def main() -> None:
 
     if args.command not in ("init",):
         init_db()
+        if args.command not in ("migrate", "migrate-embeddings", "doctor", "backup"):
+            from ..database import verify_embedding_schema_match
+
+            dim_err = verify_embedding_schema_match()
+            if dim_err:
+                import sys
+                print(f"Warning: {dim_err}", file=sys.stderr)
 
     args.func(args)

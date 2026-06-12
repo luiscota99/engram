@@ -2,14 +2,23 @@
 from __future__ import annotations
 
 from ...backup import run_backup
-from ...database import get_embedding_stats, mark_embeddings_stale, reembed_stale
+from ...database import (
+    get_embedding_stats,
+    mark_embeddings_stale,
+    migrate_embeddings_to_model,
+    reembed_stale,
+)
 from ...doctor import run_diagnostics
-from ...maintenance import merge_projects, run_gc, run_health_check
+from ...maintenance import merge_projects, run_gc, run_health_check, run_sleep
 from ..fmt import fmt_bold, fmt_dim, fmt_header, fmt_type
 
 
 def cmd_gc(args):
     result = run_gc(mode=args.mode, days_unused=args.days, db_path=None)
+    if result.get("blocked"):
+        print(fmt_header("GC blocked by safety guardrail"))
+        print(result.get("reason", ""))
+        return
     candidates = result["candidates"]
     if not candidates:
         print(fmt_header("No GC candidates found."))
@@ -189,3 +198,32 @@ def cmd_migrate(args):
         return
 
     print("Use --rollback to restore from backup, or --mark-stale after changing embedding model.")
+
+
+def cmd_migrate_embeddings(args):
+    result = migrate_embeddings_to_model(args.target_model)
+    if not result.get("ok"):
+        print(f"Error: {result.get('error', 'migration failed')}")
+        import sys
+        sys.exit(1)
+    print(f"✓ Migrated embeddings to {result['target_model']}")
+    print(f"  Marked stale: {result.get('marked_stale', 0)}")
+    reembed = result.get("reembed") or {}
+    print(f"  Re-embedded: {reembed.get('succeeded', 0)} succeeded, {reembed.get('failed', 0)} failed")
+
+
+def cmd_sleep(args):
+    summary = run_sleep(
+        threshold=args.threshold,
+        days_unused=args.days,
+        dry_run=args.dry_run,
+    )
+    if args.quiet:
+        return
+    print(fmt_header("Engram Sleep — consolidation report\n"))
+    print(f"  Clusters found:     {summary.get('clusters_found', 0)}")
+    print(f"  Items invalidated:  {summary.get('items_invalidated', 0)}")
+    print(f"  Items archived:     {summary.get('items_archived', 0)}")
+    if summary.get("dry_run"):
+        print(fmt_dim(f"  GC candidates:      {summary.get('gc_candidates', 0)} (dry-run)"))
+    print()

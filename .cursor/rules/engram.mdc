@@ -92,7 +92,7 @@ The session-capture hook is **non-blocking and non-intrusive** — it only print
 
 ## Measuring impact & explicit disclosure
 
-- **`memory_session_review`** and **`suggest-capture`** include an **Engram influence (0–3)** self-report prompt at the end — answer briefly when the user is doing a retrospective (see repo `docs/MEASURING_FIT_AND_HELP.md`).
+- **`memory_session_review`** and **`suggest-capture`** include an **Engram influence (0–3)** self-report prompt at the end — answer briefly when the user is doing a retrospective (see Engram repo `docs/MEASURING_FIT_AND_HELP.md`).
 - **Optional:** `engram session-help --score N --note "…"` logs scores locally.
 - **When you act on a memory** (follow a skill, avoid a logged mistake), you may add **one line** — not for every search:
   - Private repo: `Engram-Refs: skill:12` or `Engram: applied skill "Name" (skill id 12)` is OK.

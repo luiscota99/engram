@@ -257,10 +257,13 @@ See **[docs/MEASURING_FIT_AND_HELP.md](docs/MEASURING_FIT_AND_HELP.md)** — lab
 
 | Command | Description |
 |---------|-------------|
-| `engram retrieval-benchmark` | R@k, MRR, NDCG on a curated 20-query set (see [benchmarks/BENCHMARKS.md](benchmarks/BENCHMARKS.md)) |
+| `engram retrieval-benchmark` | R@k, MRR, NDCG on curated query set (100 queries; see [benchmarks/BENCHMARKS.md](benchmarks/BENCHMARKS.md)) |
+| `python benchmarks/longmemeval_bench.py` | LongMemEval adapter (R@5 retrieval; honest comparison vs Mem0/MemPal — see metric footnote in output) |
 | `engram benchmark` | External LLM API latency/token probe (optional API keys) |
 
-- **Regression:** `engram retrieval-benchmark` on the seeded/curated suite (CI uses a short run).
+- **Regression:** `engram retrieval-benchmark --fail-under-r5 0.90` on seeded DB (CI gates full 100-query set).
+- **LongMemEval:** `python benchmarks/longmemeval_bench.py --offline` for local smoke; full eval requires dataset download.
+- **Metric note:** Engram publishes **R@5 retrieval** (is the correct memory in top-5?). Mem0/Mastra publish **QA accuracy** (can the model answer from memory?). These are not directly comparable — see [evals/RESULTS.md](evals/RESULTS.md).
 - **Stress (local):** `python benchmarks/inject_noise.py` — [benchmarks/BENCHMARKS.md](benchmarks/BENCHMARKS.md) for flags and how to read scores.
 - **Labeled real-DB eval (optional):** [evals/README.md](evals/README.md) (frozen DB + `real_queries.json`).
 

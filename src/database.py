@@ -27,13 +27,14 @@ from .embeddings import (
     embedding_matches_vec_schema,
     resolve_embedding_model_name,
 )
+from .item_registry import dedup_table_map, rebuild_specs, table_for
 from .migrations import backup_before_migration, run_migrations
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 11
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -292,6 +293,22 @@ CREATE INDEX IF NOT EXISTS idx_archived_memories_type ON archived_memories(item_
 CREATE INDEX IF NOT EXISTS idx_file_relationships_project ON file_relationships(project_id);
 CREATE INDEX IF NOT EXISTS idx_file_relationships_source ON file_relationships(project_id, source_file);
 CREATE INDEX IF NOT EXISTS idx_file_relationships_target ON file_relationships(project_id, target_file);
+
+-- Pinned items: always prepended to search results (core facts)
+CREATE TABLE IF NOT EXISTS item_pins (
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    pinned_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (item_type, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_item_pins_type ON item_pins(item_type);
+
+-- Fingerprint cache to skip redundant consolidation scans
+CREATE TABLE IF NOT EXISTS consolidation_state (
+    key TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -496,40 +513,8 @@ def rebuild_fts(conn):
     conn.execute("DELETE FROM memory_fts")
     conn.execute("DELETE FROM vec_memory")
 
-    rebuild_specs = [
-        (
-            "mistake", "mistakes",
-            "mistake",
-            "context || ' | ' || mistake || ' | ' || COALESCE(root_cause,'') || ' | ' || fix",
-        ),
-        (
-            "pattern", "patterns",
-            "name",
-            "symptoms || ' | ' || root_cause || ' | ' || standard_fix",
-        ),
-        (
-            "skill", "skills",
-            "name",
-            "trigger_desc || ' | ' || workflow || ' | ' || COALESCE(pitfalls,'')",
-        ),
-        (
-            "conversation", "conversations",
-            "title",
-            "COALESCE(tasks_completed,'') || ' | ' || COALESCE(key_decisions,'')",
-        ),
-        (
-            "prompt", "prompts",
-            "name",
-            "role || ' | ' || description || ' | ' || COALESCE(best_for,'')",
-        ),
-        (
-            "session", "sessions",
-            "session_id",
-            "title || ' | ' || COALESCE(workflow_used,'')",
-        ),
-    ]
-
-    for item_type, table, title_col, content_expr in rebuild_specs:
+    rebuild_specs_list = rebuild_specs()
+    for item_type, table, title_col, content_expr in rebuild_specs_list:
         rows = conn.execute(
             f"""SELECT id, {title_col} as title, {content_expr} as content
                 FROM {table}"""
@@ -550,17 +535,7 @@ def rebuild_fts(conn):
 
 def get_item(item_type, item_id, db_path=None):
     """Fetch the full structured data for a specific item, including its tags."""
-    table_map = {
-        "mistake": "mistakes",
-        "pattern": "patterns",
-        "skill": "skills",
-        "conversation": "conversations",
-        "session": "sessions",
-        "role": "roles",
-        "workflow": "workflows",
-        "prompt": "prompts",
-    }
-    table = table_map.get(item_type)
+    table = table_for(item_type)
     if not table:
         return None
 
@@ -601,17 +576,7 @@ def get_session_details(session_id, db_path=None):
 
 def record_usage(item_type, item_id, success=True, db_path=None):
     """Increment usage count for a memory item."""
-    table_map = {
-        "mistake": "mistakes",
-        "pattern": "patterns",
-        "skill": "skills",
-        "conversation": "conversations",
-        "session": "sessions",
-        "role": "roles",
-        "workflow": "workflows",
-        "prompt": "prompts",
-    }
-    table = table_map.get(item_type)
+    table = table_for(item_type)
     if not table:
         return False
 
@@ -875,18 +840,7 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
 
 def delete_item(conn, item_type, item_id):
     """Deeply delete an item from its core table, tags, FTS, and vector index."""
-    # 1. Delete from core table
-    tables = {
-        "mistake": "mistakes",
-        "pattern": "patterns",
-        "skill": "skills",
-        "conversation": "conversations",
-        "session": "sessions",
-        "role": "roles",
-        "workflow": "workflows",
-        "prompt": "prompts",
-    }
-    table = tables.get(item_type)
+    table = table_for(item_type)
     if not table:
         raise ValueError(f"Unknown item type: {item_type}")
 
@@ -906,3 +860,277 @@ def delete_item(conn, item_type, item_id):
         if sqlite_vec is not None:
             conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rowid,))
         conn.execute("DELETE FROM embedding_status WHERE fts_rowid = ?", (rowid,))
+
+
+PINNABLE_TYPES = frozenset({"mistake", "pattern", "skill", "conversation", "prompt"})
+DEDUP_VECTOR_THRESHOLD = 0.72
+
+
+def pin_item(item_type: str, item_id: int, db_path=None) -> bool:
+    """Pin a memory item so it is always prepended to search results."""
+    if item_type not in PINNABLE_TYPES:
+        raise ValueError(f"Cannot pin item type: {item_type}")
+    if not get_item(item_type, item_id, db_path=db_path):
+        return False
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO item_pins (item_type, item_id, pinned_at) VALUES (?, ?, datetime('now'))",
+            (item_type, int(item_id)),
+        )
+    return True
+
+
+def unpin_item(item_type: str, item_id: int, db_path=None) -> bool:
+    """Remove pin from a memory item."""
+    with get_connection(db_path) as conn:
+        cursor = conn.execute(
+            "DELETE FROM item_pins WHERE item_type = ? AND item_id = ?",
+            (item_type, int(item_id)),
+        )
+        return cursor.rowcount > 0
+
+
+def is_pinned(item_type: str, item_id: int, db_path=None) -> bool:
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM item_pins WHERE item_type = ? AND item_id = ?",
+            (item_type, int(item_id)),
+        ).fetchone()
+        return row is not None
+
+
+def get_pinned_items(item_type: str | None = None, limit: int = 20, db_path=None) -> list[dict]:
+    """Return pinned memory rows joined with FTS metadata."""
+    with get_connection(db_path) as conn:
+        conditions = []
+        params: list = []
+        if item_type:
+            conditions.append("p.item_type = ?")
+            params.append(item_type)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rows = conn.execute(
+            f"""SELECT p.item_type, p.item_id, p.pinned_at,
+                       f.title, f.content AS snippet, f.tags, f.rowid AS fts_rowid
+                FROM item_pins p
+                JOIN memory_fts f
+                  ON f.item_type = p.item_type AND CAST(f.item_id AS INTEGER) = p.item_id
+                {where}
+                ORDER BY p.pinned_at DESC
+                LIMIT ?""",
+            params + [limit],
+        ).fetchall()
+        results = []
+        for row in rows:
+            results.append({
+                "item_type": row["item_type"],
+                "item_id": str(row["item_id"]),
+                "title": row["title"],
+                "snippet": row["snippet"] or "",
+                "tags": row["tags"],
+                "pinned": True,
+                "pinned_at": row["pinned_at"],
+                "rowid": row["fts_rowid"],
+                "is_semantic": False,
+                "utility_score": 9999.0,
+            })
+        return results
+
+
+def _jaccard_similarity(a: str, b: str) -> float:
+    ta = set(a.lower().split())
+    tb = set(b.lower().split())
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def check_duplicate_before_add(
+    content: str,
+    item_type: str,
+    *,
+    name: str | None = None,
+    threshold: float = DEDUP_VECTOR_THRESHOLD,
+    db_path=None,
+) -> dict:
+    """Multi-layer dedup check before insert (vector → exact name → Jaccard).
+
+    Returns dict with keys: duplicates (list), exact_match (bool), fuzzy_match (bool).
+    """
+    result: dict = {"duplicates": [], "exact_match": False, "fuzzy_match": False}
+    if not content and not name:
+        return result
+
+    table_map = dedup_table_map()
+    if name and item_type in table_map:
+        table, col = table_map[item_type]
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                f"SELECT id FROM {table} WHERE lower({col}) = lower(?)",
+                (name.strip(),),
+            ).fetchone()
+            if row:
+                result["exact_match"] = True
+                result["duplicates"].append({
+                    "item_type": item_type,
+                    "item_id": row["id"],
+                    "title": name,
+                    "similarity": 1.0,
+                    "match_kind": "exact_name",
+                })
+                return result
+
+    similar = find_similar(content, item_type=item_type, threshold=threshold, limit=3, db_path=db_path)
+    for hit in similar:
+        hit["match_kind"] = "vector"
+        result["duplicates"].append(hit)
+
+    if not result["duplicates"] and content:
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT item_type, item_id, title, content FROM memory_fts WHERE item_type = ?",
+                (item_type,),
+            ).fetchall()
+            for row in rows:
+                text = f"{row['title']} {row['content'] or ''}"
+                if _jaccard_similarity(content, text) >= 0.6:
+                    result["fuzzy_match"] = True
+                    result["duplicates"].append({
+                        "item_type": row["item_type"],
+                        "item_id": row["item_id"],
+                        "title": row["title"],
+                        "similarity": round(_jaccard_similarity(content, text), 4),
+                        "match_kind": "jaccard",
+                    })
+                    break
+
+    return result
+
+
+def get_consolidation_fingerprint(item_types: list[str] | None = None, db_path=None) -> str:
+    """Stable SHA256 of id+title+type for consolidation fingerprinting."""
+    import hashlib
+
+    types = item_types or ["mistake", "pattern", "skill"]
+    items: list[tuple[str, str, str]] = []
+    with get_connection(db_path) as conn:
+        for itype in types:
+            rows = conn.execute(
+                "SELECT item_id, title FROM memory_fts WHERE item_type = ? ORDER BY item_id",
+                (itype,),
+            ).fetchall()
+            for row in rows:
+                items.append((itype, str(row["item_id"]), row["title"] or ""))
+    items.sort()
+    h = hashlib.sha256()
+    for triple in items:
+        h.update(("\x1f".join(triple) + "\x1e").encode("utf-8"))
+    return h.hexdigest()
+
+
+def get_stored_consolidation_fingerprint(key: str = "default", db_path=None) -> str | None:
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT fingerprint FROM consolidation_state WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return row["fingerprint"] if row else None
+
+
+def save_consolidation_fingerprint(fingerprint: str, key: str = "default", db_path=None) -> None:
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """INSERT INTO consolidation_state (key, fingerprint, updated_at)
+               VALUES (?, ?, datetime('now'))
+               ON CONFLICT(key) DO UPDATE SET
+                 fingerprint = excluded.fingerprint,
+                 updated_at = datetime('now')""",
+            (key, fingerprint),
+        )
+
+
+def get_schema_meta(key: str, db_path=None) -> str | None:
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM schema_meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else None
+
+
+def set_schema_meta(key: str, value: str, db_path=None) -> None:
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """INSERT INTO schema_meta (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (key, value),
+        )
+
+
+def verify_embedding_schema_match(db_path=None) -> str | None:
+    """Return error message if live embedding dim != stored vec_dimension, else None."""
+    from .embeddings import VEC_EMBEDDING_DIMENSION, embed_text, resolve_embedding_model_name
+
+    if os.environ.get("ENGRAM_EMBED_URL", "").strip().lower() == "disabled":
+        return None
+
+    stored = get_schema_meta("vec_dimension", db_path=db_path)
+    if not stored:
+        set_schema_meta("vec_dimension", str(VEC_EMBEDDING_DIMENSION), db_path=db_path)
+        return None
+
+    try:
+        expected = int(stored)
+    except ValueError:
+        return None
+
+    if expected != VEC_EMBEDDING_DIMENSION:
+        return (
+            f"schema_meta.vec_dimension={expected} but vec_memory requires "
+            f"{VEC_EMBEDDING_DIMENSION}. Run: engram migrate-embeddings --target-model <model>"
+        )
+
+    probe = embed_text("dimension probe")
+    if probe is None:
+        return None
+    if len(probe) != expected:
+        model = resolve_embedding_model_name()
+        return (
+            f"Embedding model {model!r} produced {len(probe)}-dim vectors but "
+            f"schema expects {expected}. Run: engram migrate-embeddings --target-model {model}"
+        )
+    return None
+
+
+def migrate_embeddings_to_model(target_model: str, db_path=None) -> dict:
+    """Mark all embeddings stale and update schema_meta after model change."""
+    from .embeddings import VEC_EMBEDDING_DIMENSION, embed_text, expected_dimensions_for_model
+
+    dim = expected_dimensions_for_model(target_model)
+    if dim is not None and dim != VEC_EMBEDDING_DIMENSION:
+        return {
+            "ok": False,
+            "error": (
+                f"Model {target_model!r} uses {dim}-dim vectors; current schema requires "
+                f"{VEC_EMBEDDING_DIMENSION}. Schema migration for new dimensions is not yet supported."
+            ),
+        }
+
+    os.environ["ENGRAM_EMBED_MODEL"] = target_model
+    probe = embed_text("migrate probe", model=target_model)
+    if probe is None:
+        return {"ok": False, "error": "Could not reach Ollama to probe embedding model."}
+    if len(probe) != VEC_EMBEDDING_DIMENSION:
+        return {
+            "ok": False,
+            "error": f"Model produced {len(probe)}-dim vectors; schema requires {VEC_EMBEDDING_DIMENSION}.",
+        }
+
+    stale_count = mark_embeddings_stale(db_path=db_path)
+    set_schema_meta("embed_model", target_model, db_path=db_path)
+    set_schema_meta("vec_dimension", str(len(probe)), db_path=db_path)
+    reembed_result = reembed_stale(db_path=db_path)
+    return {
+        "ok": True,
+        "target_model": target_model,
+        "marked_stale": stale_count,
+        "reembed": reembed_result,
+    }

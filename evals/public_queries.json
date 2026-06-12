@@ -1,0 +1,296 @@
+{
+  "description": "Public held-out labeled queries for Engram eval (seed DB IDs 1-10). Safe to commit; no private snapshots.",
+  "version": "1.0",
+  "categories": {
+    "public": "General public eval query on seed corpus",
+    "exact_error": "Verbatim or near-verbatim match expected",
+    "semantic_similar": "Paraphrase retrieval",
+    "tag_filter": "Tag-driven retrieval",
+    "type_inference": "Type keyword inference",
+    "multi_hop": "Metadata + content combination",
+    "prompt": "Prompt template lookup",
+    "abstention": "Off-topic; no confident hit expected"
+  },
+  "queries": [
+    {
+      "id": "pub-001",
+      "query": "ORM lazy load inside user iteration loop",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "category": "public",
+      "notes": "Public held-out paraphrase"
+    },
+    {
+      "id": "pub-002",
+      "query": "agent replaced whole utility file lost edits",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "category": "public",
+      "notes": "Public overwrite mistake"
+    },
+    {
+      "id": "pub-003",
+      "query": "useEffect ran every render DDOS backend",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "category": "public",
+      "notes": "Public React mistake"
+    },
+    {
+      "id": "pub-004",
+      "query": "rapid clicks show stale UI async bug",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "category": "public",
+      "notes": "Public race pattern"
+    },
+    {
+      "id": "pub-005",
+      "query": "API returned null frontend crashed silently",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "category": "public",
+      "notes": "Public schema drift"
+    },
+    {
+      "id": "pub-006",
+      "query": "production schema change migration checklist",
+      "expected_type": "skill",
+      "expected_item_id": 1,
+      "category": "public",
+      "notes": "Public migration skill"
+    },
+    {
+      "id": "pub-007",
+      "query": "stack trace pasted do not hallucinate fix",
+      "expected_type": "skill",
+      "expected_item_id": 2,
+      "category": "public",
+      "notes": "Public debugging skill"
+    },
+    {
+      "id": "pub-008",
+      "query": "complex task route to committee personas",
+      "expected_type": "skill",
+      "expected_item_id": 3,
+      "category": "public",
+      "notes": "Public committee skill"
+    },
+    {
+      "id": "pub-009",
+      "query": "ultra compressed token saving communication mode",
+      "expected_type": "skill",
+      "expected_item_id": 4,
+      "category": "public",
+      "notes": "Public caveman skill"
+    },
+    {
+      "id": "pub-010",
+      "query": "short conventional commit message generator",
+      "expected_type": "skill",
+      "expected_item_id": 5,
+      "category": "public",
+      "notes": "Public commit skill"
+    },
+    {
+      "id": "pub-011",
+      "query": "terse one-line pull request review format",
+      "expected_type": "skill",
+      "expected_item_id": 6,
+      "category": "public",
+      "notes": "Public review skill"
+    },
+    {
+      "id": "pub-012",
+      "query": "April 2026 backend API performance session",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "category": "public",
+      "notes": "Public conv 1"
+    },
+    {
+      "id": "pub-013",
+      "query": "auth flow Redux migration frontend session",
+      "expected_type": "conversation",
+      "expected_item_id": 2,
+      "category": "public",
+      "notes": "Public conv 2"
+    },
+    {
+      "id": "pub-014",
+      "query": "Caveman Protocol compression system prompt",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "category": "public",
+      "notes": "Public prompt"
+    },
+    {
+      "id": "pub-015",
+      "query": "prefetch related entities batch query fix",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "category": "exact_error",
+      "notes": "Exact fix wording"
+    },
+    {
+      "id": "pub-016",
+      "query": "multi-line replace instead of overwrite entire file",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "category": "exact_error",
+      "notes": "Prevention phrase"
+    },
+    {
+      "id": "pub-017",
+      "query": "empty array dependency mount-only useEffect",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "category": "exact_error",
+      "notes": "Fix phrase"
+    },
+    {
+      "id": "pub-018",
+      "query": "AbortController cancel previous fetch request",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "category": "exact_error",
+      "notes": "Standard fix text"
+    },
+    {
+      "id": "pub-019",
+      "query": "Zod strict validation API boundary",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "category": "exact_error",
+      "notes": "Standard fix tools"
+    },
+    {
+      "id": "pub-020",
+      "query": "deploy migration before dependent application code",
+      "expected_type": "skill",
+      "expected_item_id": 1,
+      "category": "exact_error",
+      "notes": "Workflow step 4"
+    },
+    {
+      "id": "pub-021",
+      "query": "prefetching ORM list endpoints performance",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "category": "semantic_similar",
+      "notes": "Semantic N+1"
+    },
+    {
+      "id": "pub-022",
+      "query": "concurrent git changes lost to AI rewrite",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "category": "semantic_similar",
+      "notes": "Semantic overwrite"
+    },
+    {
+      "id": "pub-023",
+      "query": "component mount effect missing deps array",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "category": "semantic_similar",
+      "notes": "Semantic hooks"
+    },
+    {
+      "id": "pub-024",
+      "query": "out-of-order HTTP responses wrong state",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "category": "semantic_similar",
+      "notes": "Semantic race"
+    },
+    {
+      "id": "pub-025",
+      "query": "contract violation blank UI no console error",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "category": "semantic_similar",
+      "notes": "Semantic drift"
+    },
+    {
+      "id": "pub-026",
+      "query": "staging dry-run before production DDL",
+      "expected_type": "skill",
+      "expected_item_id": 1,
+      "category": "semantic_similar",
+      "notes": "Semantic migration"
+    },
+    {
+      "id": "pub-027",
+      "query": "read 50 lines context before proposing bug fix",
+      "expected_type": "skill",
+      "expected_item_id": 2,
+      "category": "semantic_similar",
+      "notes": "Semantic debug"
+    },
+    {
+      "id": "pub-028",
+      "query": "Facilitator summary after virtual committee roles",
+      "expected_type": "skill",
+      "expected_item_id": 3,
+      "category": "semantic_similar",
+      "notes": "Semantic committee"
+    },
+    {
+      "id": "pub-029",
+      "query": "performance n-plus-one tag database",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "category": "tag_filter",
+      "notes": "Tag query"
+    },
+    {
+      "id": "pub-030",
+      "query": "react frontend hooks infinite-loop tag",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "category": "tag_filter",
+      "notes": "Tag query"
+    },
+    {
+      "id": "pub-031",
+      "query": "how to safely alter production tables",
+      "expected_type": "skill",
+      "expected_item_id": 1,
+      "category": "type_inference",
+      "notes": "Type inference skill"
+    },
+    {
+      "id": "pub-032",
+      "query": "recurring async race frontend pattern fix",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "category": "type_inference",
+      "notes": "Type inference pattern"
+    },
+    {
+      "id": "pub-033",
+      "query": "conv-perf-opt-001 load test batching outcome",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "category": "multi_hop",
+      "notes": "Multi-hop conv+mistake"
+    },
+    {
+      "id": "pub-034",
+      "query": "expert-compressor lite full ultra prompt levels",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "category": "prompt",
+      "notes": "Prompt variant"
+    },
+    {
+      "id": "pub-035",
+      "query": "macroeconomics inflation monetary policy 2025",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "Off-topic abstention",
+      "abstention_max_score": 0.35
+    }
+  ]
+}

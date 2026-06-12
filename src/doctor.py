@@ -171,6 +171,33 @@ def run_diagnostics(repair=False):
         else:
             print("✓ Embedding Status: No orphaned entries found.")
 
+        # 8. LLM Engine Health (chat/completion backend)
+        from .llm import get_llm_status, is_llm_available
+
+        llm_status = get_llm_status()
+        llm_base = llm_status["base_url"]
+        llm_model = llm_status["model"]
+        if is_llm_available():
+            print(
+                f"✓ LLM Engine: {llm_base} reachable "
+                f"(model: {llm_model}, audit: {llm_status['audit_model']}, "
+                f"extract: {llm_status['extract_model']})"
+            )
+        else:
+            issues_found += 1
+            print(
+                fmt_error(
+                    f"LLM Engine: {llm_base} not reachable. "
+                    "Consolidation audit, GC scoring, and auto-extract LLM paths are degraded."
+                )
+            )
+            print(
+                fmt_dim(
+                    f"  Configured: {llm_base} (model: {llm_model}). "
+                    "Set ENGRAM_LLM_BASE_URL / ENGRAM_LLM_API_KEY to enable."
+                )
+            )
+
         # 7. Dynamic Index Suggestions (Anti-Bloat/Performance)
         for table in ["mistakes", "patterns", "skills", "conversations", "prompts", "sessions"]:
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]

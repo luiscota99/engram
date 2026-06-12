@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import urllib.request
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,59 @@ SUPPORTED_MODELS: dict[str, dict] = {
 
 _DEFAULT_MODEL = "nomic-embed-text"
 _EMBED_TIMEOUT = 30  # seconds
+
+# Dead-host cooldown: avoid hammering a down Ollama instance after repeated failures.
+DEAD_HOST_COOLDOWN = 20.0
+_HOST_FAIL_THRESHOLD = 2
+_dead_hosts: dict[str, float] = {}
+_host_fails: dict[str, int] = {}
+_last_embed_failure_reason: str | None = None
+
+
+def _host_key(base_url: str) -> str:
+    return base_url.rstrip("/")
+
+
+def _is_host_in_cooldown(base_url: str) -> bool:
+    key = _host_key(base_url)
+    until = _dead_hosts.get(key)
+    if until is None:
+        return False
+    if time.time() >= until:
+        _dead_hosts.pop(key, None)
+        return False
+    return True
+
+
+def _mark_host_failure(base_url: str) -> None:
+    global _last_embed_failure_reason
+    key = _host_key(base_url)
+    n = _host_fails.get(key, 0) + 1
+    _host_fails[key] = n
+    if n >= _HOST_FAIL_THRESHOLD:
+        _dead_hosts[key] = time.time() + DEAD_HOST_COOLDOWN
+        _last_embed_failure_reason = f"ollama_host_cooldown ({DEAD_HOST_COOLDOWN}s)"
+        logger.warning("Embedding host %s marked dead for %.0fs after %d failures", key, DEAD_HOST_COOLDOWN, n)
+
+
+def _mark_host_success(base_url: str) -> None:
+    key = _host_key(base_url)
+    _host_fails.pop(key, None)
+    _dead_hosts.pop(key, None)
+
+
+def is_embedding_host_available() -> bool:
+    """Return True if the embedding host is not in dead-host cooldown."""
+    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    return not _is_host_in_cooldown(base_url)
+
+
+def get_embedding_degradation_reason() -> str | None:
+    """Human-readable reason when semantic embeddings are unavailable."""
+    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    if _is_host_in_cooldown(base_url):
+        return _last_embed_failure_reason or "ollama_host_cooldown"
+    return _last_embed_failure_reason
 
 
 def resolve_embedding_model_name() -> str:
@@ -154,6 +208,8 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
 
     Returns the embedding vector, or ``None`` if Ollama is unavailable.
     """
+    global _last_embed_failure_reason
+
     if not text:
         return None
 
@@ -164,14 +220,24 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
         text = text[:max_chars]
 
     base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    url = f"{base_url}/api/embeddings"
+    if _is_host_in_cooldown(base_url):
+        _last_embed_failure_reason = "ollama_host_cooldown"
+        return None
+
+    url = f"{base_url.rstrip('/')}/api/embeddings"
     data = json.dumps({"model": active_model, "prompt": text}).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=_EMBED_TIMEOUT) as response:
             result = json.loads(response.read().decode())
-            return result.get("embedding")
+            embedding = result.get("embedding")
+            if embedding:
+                _mark_host_success(base_url)
+                _last_embed_failure_reason = None
+            return embedding
     except Exception:
+        _mark_host_failure(base_url)
+        _last_embed_failure_reason = "ollama_request_failed"
         logger.exception(
             "Ollama embedding request failed (model=%s, url=%s)",
             active_model,

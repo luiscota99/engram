@@ -1,12 +1,15 @@
 {
-  "description": "Engram retrieval benchmark — ground-truth query set for measuring R@k and NDCG. Grading prefers (expected_type, expected_item_id) when set; expected_title_contains is kept for readability and title-only fallbacks.",
-  "version": "1.1",
+  "description": "Engram retrieval benchmark \u2014 ground-truth query set for measuring R@k and NDCG. Grading prefers (expected_type, expected_item_id) when set; expected_title_contains is kept for readability and title-only fallbacks.",
+  "version": "1.2",
   "categories": {
     "exact_error": "Query contains exact or near-exact error text; FTS5 should dominate.",
     "semantic_similar": "Query is semantically related but uses different vocabulary; semantic search should dominate.",
     "tag_filter": "Query names a technology; tag matching should boost relevant results.",
     "type_inference": "Query implies a memory type via keywords (mistake/pattern/skill).",
-    "multi_hop": "Correct result requires combining context from the query and entry metadata."
+    "multi_hop": "Correct result requires combining context from the query and entry metadata.",
+    "conversation": "Query targets a stored conversation summary or session log.",
+    "prompt": "Query targets a stored system/user prompt template.",
+    "abstention": "Query should not retrieve a confident seed hit (off-topic or absent memory)."
   },
   "queries": [
     {
@@ -16,7 +19,7 @@
       "expected_item_id": 1,
       "expected_title_contains": "loop",
       "category": "semantic_similar",
-      "notes": "N+1 query — different words, same concept"
+      "notes": "N+1 query \u2014 different words, same concept"
     },
     {
       "id": "q002",
@@ -34,7 +37,7 @@
       "expected_item_id": 3,
       "expected_title_contains": "useEffect",
       "category": "exact_error",
-      "notes": "React hook mistake — exact terms"
+      "notes": "React hook mistake \u2014 exact terms"
     },
     {
       "id": "q004",
@@ -52,7 +55,7 @@
       "expected_item_id": 2,
       "expected_title_contains": "entire file",
       "category": "semantic_similar",
-      "notes": "Indexed mistake title = first 80 chars of text; 'overwriting' may be past the cut — use 'entire file'."
+      "notes": "Indexed mistake title = first 80 chars of text; 'overwriting' may be past the cut \u2014 use 'entire file'."
     },
     {
       "id": "q006",
@@ -70,7 +73,7 @@
       "expected_item_id": 1,
       "expected_title_contains": "Race",
       "category": "tag_filter",
-      "notes": "Race condition pattern — tags include async, frontend"
+      "notes": "Race condition pattern \u2014 tags include async, frontend"
     },
     {
       "id": "q008",
@@ -79,7 +82,7 @@
       "expected_item_id": 1,
       "expected_title_contains": "Race",
       "category": "semantic_similar",
-      "notes": "Symptom description — should match race condition pattern"
+      "notes": "Symptom description \u2014 should match race condition pattern"
     },
     {
       "id": "q009",
@@ -88,7 +91,7 @@
       "expected_item_id": 2,
       "expected_title_contains": "Schema Drift",
       "category": "semantic_similar",
-      "notes": "Silent failure pattern — described by symptom"
+      "notes": "Silent failure pattern \u2014 described by symptom"
     },
     {
       "id": "q010",
@@ -106,7 +109,7 @@
       "expected_item_id": 1,
       "expected_title_contains": "Migration",
       "category": "type_inference",
-      "notes": "'how to' → type_inference should detect skill"
+      "notes": "'how to' \u2192 type_inference should detect skill"
     },
     {
       "id": "q012",
@@ -124,7 +127,7 @@
       "expected_item_id": 2,
       "expected_title_contains": "Debugging",
       "category": "type_inference",
-      "notes": "'debugging' → type_inference + skill keyword match"
+      "notes": "'debugging' \u2192 type_inference + skill keyword match"
     },
     {
       "id": "q014",
@@ -187,7 +190,717 @@
       "expected_item_id": 4,
       "expected_title_contains": "Caveman",
       "category": "semantic_similar",
-      "notes": "Caveman skill — paraphrased"
+      "notes": "Caveman skill \u2014 paraphrased"
+    },
+    {
+      "id": "q021",
+      "query": "lazy-loaded relationships loop prefetch ORM",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "expected_title_contains": "loop",
+      "category": "exact_error",
+      "notes": "Verbatim ORM terms from mistake 1"
+    },
+    {
+      "id": "q022",
+      "query": "full-file overwrite tool concurrent changes",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "expected_title_contains": "entire file",
+      "category": "exact_error",
+      "notes": "Agent overwrite mistake"
+    },
+    {
+      "id": "q023",
+      "query": "exhaustive-deps ESLint missing dependency array",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "expected_title_contains": "useEffect",
+      "category": "exact_error",
+      "notes": "Prevention text in mistake 3"
+    },
+    {
+      "id": "q024",
+      "query": "IN statement batch fetch roles one query",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "expected_title_contains": "loop",
+      "category": "exact_error",
+      "notes": "Fix text from mistake 1"
+    },
+    {
+      "id": "q025",
+      "query": "AST-based edits restore from git history",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "expected_title_contains": "entire file",
+      "category": "exact_error",
+      "notes": "Fix for agent overwrite"
+    },
+    {
+      "id": "q026",
+      "query": "unhandled asynchronous state out of order responses",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "expected_title_contains": "Race",
+      "category": "exact_error",
+      "notes": "Pattern name terms"
+    },
+    {
+      "id": "q027",
+      "query": "blank components string methods on null",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "expected_title_contains": "Schema Drift",
+      "category": "exact_error",
+      "notes": "Schema drift symptoms"
+    },
+    {
+      "id": "q028",
+      "query": "Alembic Flyway up down migration scripts",
+      "expected_type": "skill",
+      "expected_item_id": 1,
+      "expected_title_contains": "Migration",
+      "category": "exact_error",
+      "notes": "Migration skill dependencies"
+    },
+    {
+      "id": "q029",
+      "query": "grep_search view_file surrounding 50 lines",
+      "expected_type": "skill",
+      "expected_item_id": 2,
+      "expected_title_contains": "Debugging",
+      "category": "exact_error",
+      "notes": "Debugging skill workflow"
+    },
+    {
+      "id": "q030",
+      "query": "Conventional Commits terse why over what",
+      "expected_type": "skill",
+      "expected_item_id": 5,
+      "expected_title_contains": "Commit",
+      "category": "exact_error",
+      "notes": "Caveman commit workflow"
+    },
+    {
+      "id": "q031",
+      "query": "database CPU spike list endpoint slow",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "expected_title_contains": "loop",
+      "category": "semantic_similar",
+      "notes": "Symptom of N+1"
+    },
+    {
+      "id": "q032",
+      "query": "agent clobbered concurrent edits large file",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "expected_title_contains": "entire file",
+      "category": "semantic_similar",
+      "notes": "Paraphrase overwrite"
+    },
+    {
+      "id": "q033",
+      "query": "backend DDOS from component mount hook",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "expected_title_contains": "useEffect",
+      "category": "semantic_similar",
+      "notes": "DDOS wording from mistake 3"
+    },
+    {
+      "id": "q034",
+      "query": "debouncing search input stale response",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "expected_title_contains": "Race",
+      "category": "semantic_similar",
+      "notes": "From pattern occurrence notes"
+    },
+    {
+      "id": "q035",
+      "query": "user profile middle_name field dropped API",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "expected_title_contains": "Schema Drift",
+      "category": "semantic_similar",
+      "notes": "Occurrence notes schema drift"
+    },
+    {
+      "id": "q036",
+      "query": "alter schema production zero downtime deploy",
+      "expected_type": "skill",
+      "expected_item_id": 1,
+      "expected_title_contains": "Migration",
+      "category": "semantic_similar",
+      "notes": "Migration trigger paraphrase"
+    },
+    {
+      "id": "q037",
+      "query": "do not guess fix read git blame first",
+      "expected_type": "skill",
+      "expected_item_id": 2,
+      "expected_title_contains": "Debugging",
+      "category": "semantic_similar",
+      "notes": "Debugging pitfall inverse"
+    },
+    {
+      "id": "q038",
+      "query": "virtual personas Analyst Skeptic Archivist",
+      "expected_type": "skill",
+      "expected_item_id": 3,
+      "expected_title_contains": "Committee",
+      "category": "semantic_similar",
+      "notes": "Committee roles"
+    },
+    {
+      "id": "q039",
+      "query": "one line PR finding L42 format",
+      "expected_type": "skill",
+      "expected_item_id": 6,
+      "expected_title_contains": "Review",
+      "category": "semantic_similar",
+      "notes": "Caveman review style"
+    },
+    {
+      "id": "q040",
+      "query": "drop articles filler words token savings",
+      "expected_type": "skill",
+      "expected_item_id": 4,
+      "expected_title_contains": "Caveman",
+      "category": "semantic_similar",
+      "notes": "Caveman mode workflow"
+    },
+    {
+      "id": "q041",
+      "query": "n-plus-one ORM performance database",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "expected_title_contains": "loop",
+      "category": "tag_filter",
+      "notes": "Tags: n-plus-one, orm, database"
+    },
+    {
+      "id": "q042",
+      "query": "ai-assistant tool-usage git refactoring",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "expected_title_contains": "entire file",
+      "category": "tag_filter",
+      "notes": "Tags on mistake 2"
+    },
+    {
+      "id": "q043",
+      "query": "react hooks infinite-loop frontend",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "expected_title_contains": "useEffect",
+      "category": "tag_filter",
+      "notes": "React hook tags"
+    },
+    {
+      "id": "q044",
+      "query": "async race-condition state-management frontend",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "expected_title_contains": "Race",
+      "category": "tag_filter",
+      "notes": "Pattern tags"
+    },
+    {
+      "id": "q045",
+      "query": "api validation silent-failure schema",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "expected_title_contains": "Schema Drift",
+      "category": "tag_filter",
+      "notes": "Pattern 2 tags"
+    },
+    {
+      "id": "q046",
+      "query": "database migrations deployment safety",
+      "expected_type": "skill",
+      "expected_item_id": 1,
+      "expected_title_contains": "Migration",
+      "category": "tag_filter",
+      "notes": "Skill 1 tags"
+    },
+    {
+      "id": "q047",
+      "query": "debugging workflow ai-assistant investigation",
+      "expected_type": "skill",
+      "expected_item_id": 2,
+      "expected_title_contains": "Debugging",
+      "category": "tag_filter",
+      "notes": "Skill 2 tags"
+    },
+    {
+      "id": "q048",
+      "query": "committee workflow mcp architecture",
+      "expected_type": "skill",
+      "expected_item_id": 3,
+      "expected_title_contains": "Committee",
+      "category": "tag_filter",
+      "notes": "Skill 3 tags"
+    },
+    {
+      "id": "q049",
+      "query": "git commit terse caveman",
+      "expected_type": "skill",
+      "expected_item_id": 5,
+      "expected_title_contains": "Commit",
+      "category": "tag_filter",
+      "notes": "Skill 5 tags"
+    },
+    {
+      "id": "q050",
+      "query": "code-review terse caveman",
+      "expected_type": "skill",
+      "expected_item_id": 6,
+      "expected_title_contains": "Review",
+      "category": "tag_filter",
+      "notes": "Skill 6 tags"
+    },
+    {
+      "id": "q051",
+      "query": "what mistake did we make with ORM loops",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "expected_title_contains": "loop",
+      "category": "type_inference",
+      "notes": "mistake keyword"
+    },
+    {
+      "id": "q052",
+      "query": "recurring bug pattern async UI wrong data",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "expected_title_contains": "Race",
+      "category": "type_inference",
+      "notes": "pattern keyword"
+    },
+    {
+      "id": "q053",
+      "query": "how to migrate database schema safely",
+      "expected_type": "skill",
+      "expected_item_id": 1,
+      "expected_title_contains": "Migration",
+      "category": "type_inference",
+      "notes": "how to \u2192 skill"
+    },
+    {
+      "id": "q054",
+      "query": "workflow for investigating production errors",
+      "expected_type": "skill",
+      "expected_item_id": 2,
+      "expected_title_contains": "Debugging",
+      "category": "type_inference",
+      "notes": "workflow keyword"
+    },
+    {
+      "id": "q055",
+      "query": "prevent agent from destroying files again",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "expected_title_contains": "entire file",
+      "category": "type_inference",
+      "notes": "prevention framing"
+    },
+    {
+      "id": "q056",
+      "query": "standard fix for API contract changes",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "expected_title_contains": "Schema Drift",
+      "category": "type_inference",
+      "notes": "standard fix phrase"
+    },
+    {
+      "id": "q057",
+      "query": "skill for complex architectural tasks committee",
+      "expected_type": "skill",
+      "expected_item_id": 3,
+      "expected_title_contains": "Committee",
+      "category": "type_inference",
+      "notes": "skill + architecture"
+    },
+    {
+      "id": "q058",
+      "query": "mistake infinite render React mount",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "expected_title_contains": "useEffect",
+      "category": "type_inference",
+      "notes": "explicit mistake type"
+    },
+    {
+      "id": "q059",
+      "query": "pattern for silent frontend failures",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "expected_title_contains": "Schema Drift",
+      "category": "type_inference",
+      "notes": "pattern + silent"
+    },
+    {
+      "id": "q060",
+      "query": "proven workflow terse git messages",
+      "expected_type": "skill",
+      "expected_item_id": 5,
+      "expected_title_contains": "Commit",
+      "category": "type_inference",
+      "notes": "proven workflow"
+    },
+    {
+      "id": "q061",
+      "query": "conv-perf-opt-001 unbatched database queries fix",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "expected_title_contains": "loop",
+      "category": "multi_hop",
+      "notes": "Conversation ID + mistake link"
+    },
+    {
+      "id": "q062",
+      "query": "Optimizing API Performance APM tracing prefetch",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "expected_title_contains": "Optimizing",
+      "category": "multi_hop",
+      "notes": "Conversation title + decisions"
+    },
+    {
+      "id": "q063",
+      "query": "search endpoint users roles batch IN query",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "expected_title_contains": "loop",
+      "category": "multi_hop",
+      "notes": "Context from mistake 1 + conv 1"
+    },
+    {
+      "id": "q064",
+      "query": "conv-ui-debug-003 missing dependency array Redux auth",
+      "expected_type": "mistake",
+      "expected_item_id": 3,
+      "expected_title_contains": "useEffect",
+      "category": "multi_hop",
+      "notes": "Conv 2 mistakes summary"
+    },
+    {
+      "id": "q065",
+      "query": "Refactoring User Authentication Flow AbortController login",
+      "expected_type": "conversation",
+      "expected_item_id": 2,
+      "expected_title_contains": "Authentication",
+      "category": "multi_hop",
+      "notes": "Conv 2 title + decisions"
+    },
+    {
+      "id": "q066",
+      "query": "race condition search debouncing conv-ui-debug",
+      "expected_type": "pattern",
+      "expected_item_id": 1,
+      "expected_title_contains": "Race",
+      "category": "multi_hop",
+      "notes": "Pattern occurrence ties conv"
+    },
+    {
+      "id": "q067",
+      "query": "user profile payload schema drift conv-schema-drift",
+      "expected_type": "pattern",
+      "expected_item_id": 2,
+      "expected_title_contains": "Schema Drift",
+      "category": "multi_hop",
+      "notes": "Pattern occurrence conv id"
+    },
+    {
+      "id": "q068",
+      "query": "list endpoint performance test after N+1 fix",
+      "expected_type": "mistake",
+      "expected_item_id": 1,
+      "expected_title_contains": "loop",
+      "category": "multi_hop",
+      "notes": "Prevention + perf context"
+    },
+    {
+      "id": "q069",
+      "query": "engram add session committee personas decision log",
+      "expected_type": "skill",
+      "expected_item_id": 3,
+      "expected_title_contains": "Committee",
+      "category": "multi_hop",
+      "notes": "Committee workflow steps"
+    },
+    {
+      "id": "q070",
+      "query": "targeted replace vs full file agent conv-agent-tools",
+      "expected_type": "mistake",
+      "expected_item_id": 2,
+      "expected_title_contains": "entire file",
+      "category": "multi_hop",
+      "notes": "Mistake 2 conversation_id"
+    },
+    {
+      "id": "q071",
+      "query": "ESLint hooks rules authentication fetch cancel",
+      "expected_type": "conversation",
+      "expected_item_id": 2,
+      "expected_title_contains": "Authentication",
+      "category": "multi_hop",
+      "notes": "Conv decisions + mistake prevention"
+    },
+    {
+      "id": "q072",
+      "query": "performance mistake April 2026 backend optimization",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "expected_title_contains": "Optimizing",
+      "category": "multi_hop",
+      "notes": "Date + domain metadata"
+    },
+    {
+      "id": "q073",
+      "query": "Optimizing API Performance conversation summary",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "expected_title_contains": "Optimizing",
+      "category": "conversation",
+      "notes": "Direct conv 1 lookup"
+    },
+    {
+      "id": "q074",
+      "query": "key decisions explicit prefetching list endpoints",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "expected_title_contains": "Optimizing",
+      "category": "conversation",
+      "notes": "key_decisions field conv 1"
+    },
+    {
+      "id": "q075",
+      "query": "tasks completed load test ORM batching",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "expected_title_contains": "Optimizing",
+      "category": "conversation",
+      "notes": "tasks_completed conv 1"
+    },
+    {
+      "id": "q076",
+      "query": "Refactoring User Authentication Flow session",
+      "expected_type": "conversation",
+      "expected_item_id": 2,
+      "expected_title_contains": "Authentication",
+      "category": "conversation",
+      "notes": "Direct conv 2 lookup"
+    },
+    {
+      "id": "q077",
+      "query": "Redux auth context infinite render loops fixed",
+      "expected_type": "conversation",
+      "expected_item_id": 2,
+      "expected_title_contains": "Authentication",
+      "category": "conversation",
+      "notes": "tasks_completed conv 2"
+    },
+    {
+      "id": "q078",
+      "query": "strict ESLint hooks rules auth conversation",
+      "expected_type": "conversation",
+      "expected_item_id": 2,
+      "expected_title_contains": "Authentication",
+      "category": "conversation",
+      "notes": "key_decisions conv 2"
+    },
+    {
+      "id": "q079",
+      "query": "backend performance optimization April 2026",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "expected_title_contains": "Optimizing",
+      "category": "conversation",
+      "notes": "domain+date conv 1"
+    },
+    {
+      "id": "q080",
+      "query": "frontend authentication refactoring April 2026",
+      "expected_type": "conversation",
+      "expected_item_id": 2,
+      "expected_title_contains": "Authentication",
+      "category": "conversation",
+      "notes": "domain+date conv 2"
+    },
+    {
+      "id": "q081",
+      "query": "unbatched database queries conversation mistake summary",
+      "expected_type": "conversation",
+      "expected_item_id": 1,
+      "expected_title_contains": "Optimizing",
+      "category": "conversation",
+      "notes": "mistakes_summary conv 1"
+    },
+    {
+      "id": "q082",
+      "query": "missing dependency array useEffect conversation log",
+      "expected_type": "conversation",
+      "expected_item_id": 2,
+      "expected_title_contains": "Authentication",
+      "category": "conversation",
+      "notes": "mistakes_summary conv 2"
+    },
+    {
+      "id": "q083",
+      "query": "Caveman Protocol system prompt terse",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "expected_title_contains": "Caveman",
+      "category": "prompt",
+      "notes": "Prompt 1 name"
+    },
+    {
+      "id": "q084",
+      "query": "expert-compressor ultra-terse token efficient prompt",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "expected_title_contains": "Caveman",
+      "category": "prompt",
+      "notes": "Prompt role field"
+    },
+    {
+      "id": "q085",
+      "query": "respond terse smart caveman fluff die",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "expected_title_contains": "Caveman",
+      "category": "prompt",
+      "notes": "prompt_text excerpt"
+    },
+    {
+      "id": "q086",
+      "query": "system prompt saving tokens long chat sessions",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "expected_title_contains": "Caveman",
+      "category": "prompt",
+      "notes": "best_for field"
+    },
+    {
+      "id": "q087",
+      "query": "communication domain caveman system-prompt efficiency",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "expected_title_contains": "Caveman",
+      "category": "prompt",
+      "notes": "prompt tags"
+    },
+    {
+      "id": "q088",
+      "query": "intensity levels lite full ultra compression",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "expected_title_contains": "Caveman",
+      "category": "prompt",
+      "notes": "prompt_text intensity"
+    },
+    {
+      "id": "q089",
+      "query": "drop articles filler hedging prompt template",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "expected_title_contains": "Caveman",
+      "category": "prompt",
+      "notes": "prompt rules text"
+    },
+    {
+      "id": "q090",
+      "query": "token-efficient communication prompt engram",
+      "expected_type": "prompt",
+      "expected_item_id": 1,
+      "expected_title_contains": "Caveman",
+      "category": "prompt",
+      "notes": "Semantic prompt lookup"
+    },
+    {
+      "id": "q091",
+      "query": "best pasta carbonara recipe ingredients",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "Off-topic culinary",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q092",
+      "query": "NBA finals 2024 game seven score",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "Sports \u2014 absent from seed",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q093",
+      "query": "capital of France geography trivia",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "General knowledge",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q094",
+      "query": "kubernetes pod restart policy CrashLoopBackOff",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "DevOps topic not in seed",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q095",
+      "query": "pytorch transformer training learning rate schedule",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "ML topic not in seed",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q096",
+      "query": "sonnet 18 shakespeare literary analysis",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "Literature \u2014 absent",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q097",
+      "query": "terraform remote state locking S3 backend",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "IaC not in seed",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q098",
+      "query": "dental hygiene flossing technique recommendation",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "Health \u2014 absent",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q099",
+      "query": "vintage wine pairing steak sommelier guide",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "Food/wine \u2014 absent",
+      "abstention_max_score": 0.35
+    },
+    {
+      "id": "q100",
+      "query": "quantum chromodynamics lattice gauge simulation",
+      "expect_abstention": true,
+      "category": "abstention",
+      "notes": "Physics \u2014 absent",
+      "abstention_max_score": 0.35
     }
   ]
 }

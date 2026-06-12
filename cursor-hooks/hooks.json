@@ -22,6 +22,11 @@
         "command": "node ./cursor-hooks/session-capture.js",
         "timeout": 10,
         "failClosed": false
+      },
+      {
+        "command": "engram sleep --quiet",
+        "timeout": 30,
+        "failClosed": false
       }
     ]
   }

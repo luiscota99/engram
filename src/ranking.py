@@ -35,6 +35,15 @@ AFFINITY_BOOSTS = {
 # Boost applied when the query explicitly targets this item type
 TYPE_MATCH_BOOST = 15.0
 
+# Multiplicative boost when query intent matches result type
+INTENT_TYPE_MULTIPLIERS: dict[str, float] = {
+    "mistake": 1.25,
+    "pattern": 1.30,
+    "skill": 1.20,
+    "conversation": 1.15,
+    "prompt": 1.35,
+}
+
 # Boost applied per matched auto-detected tag
 TAG_MATCH_BOOST = 15.0
 
@@ -280,7 +289,7 @@ def calculate_utility_score(
     # Project affinity boost
     affinity_boost = AFFINITY_BOOSTS.get(affinity or "", 0.0)
 
-    # Type-match boost
+    # Type-match boost (additive) + intent multiplier for category-aware retrieval
     type_boost = TYPE_MATCH_BOOST if (
         inferred_type and inferred_type == result.get("item_type")
     ) else 0.0
@@ -291,7 +300,10 @@ def calculate_utility_score(
     # Stale embedding penalty
     stale_penalty = STALE_EMBEDDING_PENALTY if embedding_is_stale else 0.0
 
-    return decayed_base + usage + affinity_boost + type_boost + tag_boost - stale_penalty
+    score = decayed_base + usage + affinity_boost + type_boost + tag_boost - stale_penalty
+    if inferred_type and inferred_type == result.get("item_type"):
+        score *= INTENT_TYPE_MULTIPLIERS.get(inferred_type, 1.0)
+    return score
 
 
 def _query_implies_ide_or_rules_prompt(query_lower: str) -> bool:

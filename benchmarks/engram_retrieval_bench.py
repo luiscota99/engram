@@ -42,8 +42,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from benchmarks.grading import (  # noqa: E402
+    abstention_success,
+    expects_abstention,
     mrr_from_relevances,
     ndcg_at_k_from_relevances,
+    recall_at_k,
     recall_at_k_from_relevances,
     relevances_from_results,
     row_matches_expected,
@@ -143,9 +146,14 @@ def run_benchmark(
         total_latency_ms += elapsed_ms
 
         rel = relevances_from_results(results, q)
-        recall_scores = {k: recall_at_k_from_relevances(rel, k) for k in k_values}
-        ndcg_scores = {k: ndcg_at_k_from_relevances(rel, k) for k in k_values}
-        mrr = mrr_from_relevances(rel)
+        if expects_abstention(q):
+            recall_scores = {k: recall_at_k(results, q, k) for k in k_values}
+            mrr = 1.0 if abstention_success(results, q, kmax) else 0.0
+            ndcg_scores = {k: recall_scores[k] for k in k_values}
+        else:
+            recall_scores = {k: recall_at_k_from_relevances(rel, k) for k in k_values}
+            ndcg_scores = {k: ndcg_at_k_from_relevances(rel, k) for k in k_values}
+            mrr = mrr_from_relevances(rel)
 
         retrieved_titles = [r.get("title", "") for r in results]
 
@@ -374,6 +382,13 @@ def main() -> None:
     parser.add_argument("--output", help="Write JSON results to this file")
     parser.add_argument("--no-seed", action="store_true",
                         help="Skip auto-seeding (use existing DB)")
+    parser.add_argument(
+        "--fail-under-r5",
+        type=float,
+        default=None,
+        metavar="SCORE",
+        help="Exit with code 1 if aggregate R@5 is below SCORE (e.g. 0.90)",
+    )
     args = parser.parse_args()
 
     db_path = os.environ.get("ENGRAM_DB_PATH")
@@ -404,6 +419,15 @@ def main() -> None:
             with open(args.output, "w") as f:
                 json.dump(results, f, indent=2)
             print(f"  Results written to {args.output}")
+        if args.fail_under_r5 is not None:
+            r5 = results["aggregate"].get("R@5", 0.0)
+            if r5 < args.fail_under_r5:
+                print(
+                    f"  FAIL: R@5={r5:.4f} below threshold {args.fail_under_r5:.4f}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            print(f"  PASS: R@5={r5:.4f} >= {args.fail_under_r5:.4f}")
 
 
 if __name__ == "__main__":

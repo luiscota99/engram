@@ -17,7 +17,7 @@ description: >
 
 Engram engagement is **adaptive**: minimal by default, escalating to the full Committee workflow only when the task warrants it. This prevents every trivial fix from becoming a multi-step committee session.
 
-> **Interface**: Antigravity uses the Engram **CLI** (`engram ...` on your `PATH`), not MCP tools. Global memory lives in `~/.engram/memory.db`. Install the CLI with `pipx install` / `uv tool install` / `pip install -e` from a clone (see Engram README). **Developers** running from a git clone can also use `cd /path/to/engram && engram` (repo root) or `PYTHONPATH=.` so `import src` resolves.
+> **Interface**: Antigravity uses the Engram **CLI** (`engram` on your `PATH`), not MCP tools. All commands work from the **current project directory**; global memory is `~/.engram/memory.db`. Install with `pipx` / `uv tool install` / `pip install -e .` (see Engram README). **Developers** without a global install can run from the Engram **repo root** only: `python3 -m src.cli …` (not from arbitrary project trees).
 
 ---
 
@@ -26,14 +26,14 @@ Engram engagement is **adaptive**: minimal by default, escalating to the full Co
 | Level | What happens | When |
 |-------|-------------|------|
 | **OFF** | No Engram CLI calls | Trivial questions, user says "quick question" or "no engram" |
-| **LIGHT** | One `search` at start; **at most one** `suggest-capture` at **session end** only if **significance** holds (see below). No session init, no committee, no transcripts | Default for most tasks |
-| **FULL** | Session init + Committee workflow + transcripts + decisions; **mandatory** `suggest-capture` before persisting memory at retrospective | Complex tasks (see escalation triggers) |
+| **LIGHT** | One `engram search` at start, no session/transcripts | Default for most tasks |
+| **FULL** | Session init + Committee workflow + transcripts + decisions | Complex tasks (see escalation triggers) |
 
 ---
 
 ## Default Behavior: LIGHT Mode
 
-For most tasks, at the **start** of the session:
+For most tasks, at the start of the session:
 
 ```bash
 engram search "keywords from task" -n 3
@@ -42,30 +42,9 @@ engram search "keywords from task" -n 3
 1. Extract 2-4 keywords from the user's request
 2. Run the search above
 3. If a relevant **skill** or **pattern** is returned, mention it briefly before proceeding
-4. Proceed with the task normally — **no** session init, **no** transcripts, **no** committee
+4. Proceed with the task normally — **no** session init, **no** transcripts, **no** retrospective
 
 If no relevant result is found, proceed silently without mentioning Engram.
-
-### LIGHT — optional end-of-session capture (proactive, bounded)
-
-**Do not** run capture after every message. **Do not** use bare closings (`thanks`, `done`, `bye`, `ok`) *alone* as triggers—that causes noise.
-
-At **natural session end** (user signals they are done **and** you have finished substantive work), you **may** run **at most one** capture check if **significance** is met:
-
-- The session was **escalated to FULL** at any point, **or**
-- The task touched **multiple files** or many turns, **or**
-- A **non-trivial** fix or investigation was completed (refactor, debug, architecture, migration, etc.), **or**
-- The combined **task + outcome** plausibly merits a mistake, pattern, or skill
-
-If uncertain, run `suggest-capture` **once** and **only** surface the result to the user if the suggestion is **non-empty** (see `suggested_types` in `--json` output) **or** the default (non-JSON) text is not the "no strong signals" message. If the heuristic would produce nothing to save, skip the prompt or a single short "Nothing to capture—ok to close?"
-
-**Command (same heuristics as Cursor `session-capture` hooks):**
-
-```bash
-engram suggest-capture --task "one-line task summary" --outcome "what was delivered or learned" --json
-```
-
-Use `--errors "..."` and `--files "a.py,b.py"` when applicable. Get **explicit user approval** before any `add mistake` / `add pattern` / `add skill` commands.
 
 ---
 
@@ -73,28 +52,29 @@ Use `--errors "..."` and `--files "a.py,b.py"` when applicable. Get **explicit u
 
 Escalate if **any** of the following are true:
 
-### Signal 1: Complexity Keywords
+### Signal 1: Error / Retry Pattern
+3 or more failed attempts, or the user saying "that's still broken", "try again", "that didn't work", "it keeps failing"
+
+### Signal 2: Complexity Keywords
 Request contains any of:
 - `debug`, `investigate`, `why is`, `how does this work`, `trace`
 - `refactor`, `architecture`, `redesign`, `migrate`, `migration`
 - `performance`, `slow`, `bottleneck`, `optimize`
-- `security`, `vulnerability`, `audit`, `review`
+- `security vulnerability`, `vulnerability`, `security audit`, `audit the codebase`, `architecture review`, `full review`
 - `this keeps happening`, `intermittent`, `not sure why`
 
-### Signal 2: Scope Signal
-- Task spans multiple files, modules, or systems
-- User says "across the codebase", "project-wide", "all modules", "everywhere"
+Note: bare `review`, `audit`, or `security` alone do **not** trigger escalation — context matters.
 
-### Signal 3: Uncertainty / Repetition
-- User expresses uncertainty: "I'm not sure why", "it keeps failing", "something's off"
-- Same issue has appeared more than once in the conversation
+### Signal 3: Scope Signal
+- Task spans 5 or more files
+- User says "across the codebase", "project-wide", "all modules", "everywhere"
 
 ### Signal 4: Multi-session Work
 - Task is too large to complete in one session
 - User says "continue from where we left off"
 
 ### Signal 5: Explicit Request
-- User says: "use engram", "check memory", "full workflow", "use committee"
+- User says: "use engram", "check memory", "search memory", "full workflow", "use committee", "what did we learn"
 
 ---
 
@@ -167,30 +147,36 @@ Present the final output in this format:
 - **Risks & Mitigations**
 - **Next Steps**
 
-### Step 7: End-of-Session Retrospective (capture-first; FULL mode)
+### Step 7: End-of-Session Retrospective (FULL mode only)
 
-After significant work, **do not** hand-draft long `add` blocks as the primary path. **Always start** with the heuristic engine (same as Cursor `suggest-capture` / `memory_suggest_capture`):
-
-```bash
-engram suggest-capture \
-  --task "Concise task description" \
-  --outcome "What was completed and key learnings" \
-  --errors "Optional: errors, stack traces, wrong turns" \
-  --files "optional,comma,separated,paths" \
-  --json
-```
-
-1. Run the command above (use `--json` for structured review, or omit `--json` for human-readable output).
-2. Present the result to the user. **Get explicit approval** before writing to memory.
-3. **After approval**, run the appropriate `add` subcommands with the approved fields, for example:
+After completing significant work, propose the following for user approval:
 
 ```bash
-engram add mistake --date "YYYY-MM-DD" --context "..." --mistake "..." --root-cause "..." --fix "..." --prevention "..."
-engram add pattern --name "..." --symptoms "..." --root-cause "..." --fix "..."
-engram add skill --name "..." --domain "engineering" --trigger "..." --workflow "..."
+# Log a mistake if one occurred
+engram add mistake \
+  --date "YYYY-MM-DD" \
+  --context "What we were doing" \
+  --mistake "What went wrong" \
+  --root-cause "Why it happened" \
+  --fix "How it was resolved" \
+  --prevention "How to avoid next time"
+
+# Log a pattern if a recurring issue was identified
+engram add pattern \
+  --name "Pattern Name" \
+  --symptoms "What it looks like" \
+  --root-cause "Why it happens" \
+  --fix "Standard resolution"
+
+# Log a skill if a repeatable workflow was used
+engram add skill \
+  --name "Skill Name" \
+  --domain "engineering" \
+  --trigger "When to use this" \
+  --workflow "Step-by-step instructions"
 ```
 
-**Escape hatch:** If the heuristics miss something important, the user can ask for a **manual** `add` for a specific type; fill fields carefully and still ask for approval.
+**Always draft these in a markdown block and ask the user for approval before running.**
 
 ---
 
@@ -198,13 +184,13 @@ engram add skill --name "..." --domain "engineering" --trigger "..." --workflow 
 
 When the session context is getting long or a major milestone is complete:
 
-1. **First:** run the **capture check** (LIGHT optional rules or FULL Step 7): `suggest-capture` → user approval (if any entries) → `add` commands as needed. If there is **nothing to save**, proceed without blocking.
-2. If in FULL: log a final **decision** summarizing next steps (when a session is active)
-3. **Then** issue the context reset alert (below)
+1. Run the retrospective (Step 7 above)
+2. Log a final decision summarizing next steps
+3. Issue this alert:
 
 > [!WARNING]
 > **SYSTEM ALERT: CONTEXT RESET REQUIRED**
-> Capture has been **attempted**; approved items are saved to Engram memory. If there was nothing to capture, you may still reset.
+> All progress, patterns, and decisions have been saved to Engram memory.
 >
 > **Action Required:**
 > 1. Open a new terminal/chat session.
@@ -221,33 +207,14 @@ When the session context is getting long or a major milestone is complete:
 | User says | Action |
 |-----------|--------|
 | "quick question" / "no engram" | OFF mode — skip all Engram calls |
-| "use engram" / "check memory" | FULL mode — run search + init session if needed |
+| "use engram" / "check memory" / "search memory" / "use committee" / "what did we learn" | FULL mode — run search + init session if needed |
 | "simple fix" | Stay in LIGHT mode |
-| "continue from last session" | FULL mode — start with `get-session` |
+| "continue from last session" | FULL mode — start with `engram get-session --id '<id>'` |
 
 ---
-
-## Measuring impact & explicit disclosure
-
-- **`suggest-capture`** output ends with **Engram influence (0–3)** — have the model answer briefly after non-trivial work. In FULL / committee flows, the same idea applies when using session review patterns. See Engram repo **`docs/MEASURING_FIT_AND_HELP.md`**.
-- **Optional:** `engram session-help --score 0-3 --note "..."` appends to `~/.engram/session-help.jsonl` (override with `ENGRAM_SESSION_HELP_LOG`).
-- **When acting on Engram memory**, one short line is enough (not every `search`). **Public repos:** use titles/slugs only in commits — **no numeric IDs**. **Private:** `Engram-Refs: skill:12` is OK. Set `ENGRAM_DISCLOSURE=public` when unsure.
-
----
-
-### Step 8: Optional — persist a written session summary (Memory sync)
-
-If the project uses a `session_summary.md` (or similar) in the **current working directory**, run this **before** the session fully ends so the text is available for global search in other workspaces:
-
-```bash
-engram import-session-summary --file session_summary.md
-```
-
-Optional YAML front matter is supported (between `---` lines): `title`, `date`, `domain`, `tags`, `conversation_id`. The same content ingested twice is skipped (dedupe by `conversation_id` / content hash) unless you pass `--force`. Use `--project` to override the project directory used for linking (default: current working directory).
 
 ## Dependencies
 
-- Engram CLI: `engram` on `PATH` (see Engram README: `pipx`, `uv tool install`, or `pip install -e .` from a clone)
+- Engram CLI: `engram` (installed via `pip install -e /path/to/engram`)
 - Python 3.9+
-- `~/.engram/memory.db` — single global DB for all projects unless you intentionally set `ENGRAM_DB_PATH` per environment
-- **Developers (no install):** from the Engram repo root, `python3 -m src.cli` still works; do not use that from unrelated project directories without `pip install -e` or a global `engram` command
+- `~/.engram/memory.db` must exist (run `engram init` if not)

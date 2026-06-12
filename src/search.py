@@ -9,8 +9,14 @@ import json
 import logging
 import re
 
-from .database import get_connection, get_or_create_project, get_project_affinities
-from .embeddings import embed_text
+from .database import (
+    get_connection,
+    get_or_create_project,
+    get_pinned_items,
+    get_project_affinities,
+)
+from .embeddings import embed_text, get_embedding_degradation_reason, is_embedding_host_available
+from .item_registry import table_for, usage_ranked_types
 from .query_analyzer import detect_query_tags
 from .ranking import rank_results, reciprocal_rank_scores, rerank_with_bm25, result_key
 from .search_audit import append_search_audit
@@ -19,8 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 class SearchResults(list):
-    """A list subclass that carries a ``semantic_status`` attribute."""
+    """A list subclass that carries search health metadata."""
+
     semantic_status: str = "ok"
+    semantic_available: bool = True
 
 
 def _fts_query_terms(query: str) -> list[str]:
@@ -77,6 +85,11 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
     """
     embedding = embed_text(query)
     if not embedding:
+        if not is_embedding_host_available():
+            return [], "unavailable"
+        reason = get_embedding_degradation_reason()
+        if reason:
+            logger.debug("semantic_search unavailable: %s", reason)
         return [], "unavailable"
 
     with get_connection(db_path) as conn:
@@ -135,6 +148,7 @@ def search(
     *,
     skip_audit=False,
     audit_source="search",
+    include_superseded=False,
 ):
     """Hybrid Search: FTS5 lexical + KNN semantic, ranked by multi-factor utility score.
 
@@ -156,6 +170,7 @@ def search(
     """
     results: list[dict] = []
     semantic_status = "ok"
+    semantic_available = is_embedding_host_available()
 
     # 0. Auto-detect tags for score boosting only; optional caller tags filter results
     detected_tags: list[str] = []
@@ -171,6 +186,7 @@ def search(
         sem_results, semantic_status = semantic_search(
             query, item_type, filter_tags, limit=limit, db_path=db_path
         )
+        semantic_available = semantic_status == "ok"
 
     # 2. Lexical FTS5 Search
     with get_connection(db_path) as conn:
@@ -238,18 +254,14 @@ def search(
             results.append(lex_map[kk])
 
     # 3. Batch-fetch usage_count and last_used_at per type (avoids N+1 queries)
-    table_map = {
-        "mistake": "mistakes",
-        "pattern": "patterns",
-        "skill": "skills",
-        "conversation": "conversations",
-        "prompt": "prompts",
-    }
     usage_counts = {}
     last_used_map = {}
 
     with get_connection(db_path) as conn:
-        for itype, table in table_map.items():
+        for itype in usage_ranked_types():
+            table = table_for(itype)
+            if not table:
+                continue
             ids = [int(r["item_id"]) for r in results if r["item_type"] == itype]
             if ids:
                 placeholders = ",".join("?" * len(ids))
@@ -287,8 +299,27 @@ def search(
     if query and query.strip():
         results = rerank_with_bm25(results, query)
 
+    # 7. Prepend pinned items (always-injected core context)
+    pinned = get_pinned_items(item_type=item_type, limit=limit, db_path=db_path)
+    if pinned:
+        if filter_tags:
+            pinned = [
+                p for p in pinned
+                if all(t.lower() in (p.get("tags") or "").lower() for t in filter_tags)
+            ]
+        pinned_keys = {result_key(p) for p in pinned}
+        results = [r for r in results if result_key(r) not in pinned_keys]
+        results = pinned + results
+
+    if not include_superseded:
+        results = [
+            r for r in results
+            if not str(r.get("title", "")).startswith("[SUPERSEDED]")
+        ]
+
     final = SearchResults(results[:limit])
     final.semantic_status = semantic_status
+    final.semantic_available = semantic_available
     if not skip_audit:
         append_search_audit(
             query=query or "",
