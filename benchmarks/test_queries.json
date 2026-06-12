@@ -828,7 +828,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "Off-topic culinary",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q092",
@@ -836,7 +836,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "Sports \u2014 absent from seed",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q093",
@@ -844,7 +844,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "General knowledge",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q094",
@@ -852,7 +852,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "DevOps topic not in seed",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q095",
@@ -860,7 +860,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "ML topic not in seed",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q096",
@@ -868,7 +868,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "Literature \u2014 absent",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q097",
@@ -876,7 +876,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "IaC not in seed",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q098",
@@ -884,7 +884,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "Health \u2014 absent",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q099",
@@ -892,7 +892,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "Food/wine \u2014 absent",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     },
     {
       "id": "q100",
@@ -900,7 +900,7 @@
       "expect_abstention": true,
       "category": "abstention",
       "notes": "Physics \u2014 absent",
-      "abstention_max_score": 0.35
+      "abstention_min_overlap": 0.25
     }
   ]
 }

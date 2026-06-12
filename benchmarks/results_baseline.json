@@ -1,23 +1,27 @@
 {
-  "description": "Placeholder baseline R@5 per category for seeded regression suite (test_queries.json v1.2). Update after each release benchmark run.",
-  "version": "1.0",
-  "recorded_at": "2026-06-06",
+  "description": "Baseline R@5 per category for seeded regression suite (test_queries.json v1.2). Recorded after abstention grading fix (overlap-based).",
+  "version": "1.1",
+  "recorded_at": "2026-06-12",
+  "commit_note": "grading.py uses abstention_min_overlap (default 0.25) instead of utility_score",
   "mode": "hybrid",
   "n_queries": 100,
   "aggregate": {
-    "R@5": 0.0,
-    "MRR": 0.0,
-    "avg_latency_ms": 0.0
+    "R@5": 1.0,
+    "R@3": 0.98,
+    "R@1": 0.82,
+    "MRR": 0.8995,
+    "NDCG@5": 0.9252,
+    "avg_latency_ms": 49.7
   },
   "by_category": {
-    "exact_error": { "n": 15, "R@5": 0.0 },
-    "semantic_similar": { "n": 19, "R@5": 0.0 },
-    "tag_filter": { "n": 13, "R@5": 0.0 },
-    "type_inference": { "n": 13, "R@5": 0.0 },
-    "multi_hop": { "n": 12, "R@5": 0.0 },
-    "conversation": { "n": 10, "R@5": 0.0 },
-    "prompt": { "n": 8, "R@5": 0.0 },
-    "abstention": { "n": 10, "R@5": 0.0 }
+    "exact_error": { "n": 15, "R@5": 1.0 },
+    "semantic_similar": { "n": 19, "R@5": 1.0 },
+    "tag_filter": { "n": 13, "R@5": 1.0 },
+    "type_inference": { "n": 13, "R@5": 1.0 },
+    "multi_hop": { "n": 12, "R@5": 1.0 },
+    "conversation": { "n": 10, "R@5": 1.0 },
+    "prompt": { "n": 8, "R@5": 1.0 },
+    "abstention": { "n": 10, "R@5": 1.0 }
   },
-  "notes": "Run: python benchmarks/engram_retrieval_bench.py --output benchmarks/results_baseline.json then copy aggregate/by_category R@5 values here."
+  "notes": "Re-run: python benchmarks/engram_retrieval_bench.py --output benchmarks/results_baseline.json"
 }

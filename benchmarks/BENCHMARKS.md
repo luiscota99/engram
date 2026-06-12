@@ -8,20 +8,23 @@ Measures search quality of Engram's hybrid retrieval (FTS5 + `sqlite-vec` semant
 
 ### Query Dataset
 
-`test_queries.json` contains 20 curated queries across four difficulty categories:
+`test_queries.json` contains **100** curated queries across eight difficulty categories:
 
 | Category | Description | Expected winner |
 |---|---|---|
 | `exact_error` | Query uses verbatim terms from the stored entry | FTS5 |
 | `semantic_similar` | Query paraphrases the entry (different vocabulary, same concept) | Semantic |
 | `tag_filter` | Query names a technology that appears in tags | Tag boost |
-| `type_inference` | Query uses type-hint keywords (`how to`, `mistake`, …). IDE cues (`.mdc`, `cursor rules`, `.cursorrules`, …) infer **prompt** before generic `how to` → **skill**. | Type-inference boost (`TYPE_MATCH_BOOST` in `src/ranking.py`) |
+| `type_inference` | Query uses type-hint keywords (`how to`, `mistake`, …). IDE cues (`.mdc`, `cursor rules`, …) infer **prompt** before generic `how to` → **skill**. | Type-inference boost |
+| `multi_hop` | Correct result requires combining query context with entry metadata | Hybrid |
+| `conversation` | Query targets a stored conversation summary | Hybrid / FTS |
+| `prompt` | Query targets a stored prompt template | Hybrid / FTS |
+| `abstention` | Off-topic query; no seed entry should match confidently | Overlap &lt; `abstention_min_overlap` (default 0.25) |
 
 Each query specifies:
 - **`expected_type` + `expected_item_id`** (preferred): stable ground truth for the row in the seed (id from the underlying `mistakes` / `patterns` / `skills` table). The runner matches `item_type` + `item_id` from search results.
 - **`expected_title_contains`** (fallback): substring in the **FTS `title` field** when ids are unknown. For mistakes, the title is the first ~80 characters of the mistake text.
-- `category`: difficulty category
-- `notes`: rationale
+- **`abstention_min_overlap`** (abstention only): max fraction of query terms that may appear in a top-k hit's title+snippet before the query is treated as a confident match (default **0.25**). Do not use `utility_score` for abstention — utility bases (50–100+) ignore topical relevance.
 
 ### Interpreting two different numbers
 
@@ -74,7 +77,7 @@ Use `--mode compare` to run all three in one pass and compare.
 ## Running the Benchmark
 
 ```bash
-# Standard run (hybrid, all 20 queries):
+# Standard run (hybrid, all 100 queries):
 cd /path/to/engram
 python benchmarks/engram_retrieval_bench.py
 
@@ -99,7 +102,7 @@ engram retrieval-benchmark -- --mode compare --output /tmp/out.json
 
 The benchmark auto-seeds the database with sample data if it is empty, so it works without a real Engram history.
 
-**Regression test:** `pytest tests/test_retrieval_benchmark.py` asserts hybrid **R@5 ≥ 0.85** on the full 20-query set (seeded DB).
+**Regression test:** CI runs the full 100-query set with `--fail-under-r5 0.90` (hybrid) and `--mode fts_only --fail-under-r5 0.50` (degraded). `pytest tests/test_benchmark_grading.py` covers abstention grading.
 
 ---
 
@@ -112,7 +115,7 @@ The benchmark auto-seeds the database with sample data if it is empty, so it wor
 | 0.50–0.69 | Fair — noticeable gaps; investigate failures |
 | < 0.50 | Poor — ranking or retrieval has a structural issue |
 
-Run before and after any ranking changes to validate improvements. A 5% R@5 lift on 20 queries = 1 additional query fixed, so focus on queries with zero overlap across categories.
+Run before and after any ranking changes to validate improvements. On 100 queries, each 1% R@5 lift ≈ one additional query fixed.
 
 ---
 
@@ -120,11 +123,13 @@ Run before and after any ranking changes to validate improvements. A 5% R@5 lift
 
 _Run after any significant change to `src/ranking.py`, `src/search.py`, `src/query_analyzer.py`, or the embedding model._
 
-Example (hybrid, 20 queries, seeded DB, **local** run — semantic leg may vary slightly if Ollama/model differ):
+Recorded baseline (hybrid, 100 queries, seeded DB, Ollama + `nomic-embed-text`, 2026-06-12):
 
 | Mode | R@1 | R@3 | R@5 | MRR | NDCG@5 |
 |------|-----|-----|-----|-----|--------|
-| hybrid | ~0.80 | ~1.00 | ~1.00 | ~0.88 | ~0.91 |
+| hybrid | 0.82 | 0.98 | **1.00** | 0.90 | 0.93 |
+
+See [`results_baseline.json`](results_baseline.json) for per-category breakdown.
 
 ### Implementation notes (2026)
 
@@ -135,10 +140,11 @@ Example (hybrid, 20 queries, seeded DB, **local** run — semantic leg may vary 
 
 ## Roadmap
 
-- [ ] Expand to 50–100 queries covering edge cases (multi-hop, temporal, abstention)
-- [ ] Add LongMemEval-style "should return no result" (abstention) queries
-- [ ] Optional: PR comments with R@5 / MRR delta vs `main`
-- [ ] Add recall for `conversation` and `prompt` item types
+- [x] Expand to 100 queries (multi-hop, conversation, prompt, abstention)
+- [x] Abstention queries with overlap-based grading
+- [x] CI gates full query set (R@5 ≥ 0.90 hybrid, ≥ 0.50 FTS-only)
+- [ ] Optional: PR comments with R@5 / MRR delta vs `results_baseline.json`
+- [ ] Full LongMemEval dataset run and published score
 
 ## Shared modules
 

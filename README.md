@@ -20,6 +20,16 @@ AI assistants are brilliant but stateless. They forget every lesson learned as s
 - **Skills** — "There's already a proven workflow for this. Follow steps 1-5 instead of figuring it out again."
 - **Codebase Knowledge** — "I've mapped this project. Here are the key file summaries without re-reading everything."
 
+**Recent capabilities:**
+
+- **Pinned memories** — pin critical entries so they always surface at the top of search (`memory_pin`, `memory_list_pinned`).
+- **Write-time dedup** — `memory_add` blocks near-duplicate inserts unless you pass `force=true`.
+- **Auto-extract** — draft memories from chat or task/outcome pairs (`memory_auto_extract`; LLM + regex fallback).
+- **LLM maintenance** — consolidation audit and assisted GC (`engram llm audit`, `engram llm gc`); check status with `memory_llm_status` or `engram llm status`.
+- **Temporal facts** — supersede stale entries and track time-bounded facts (schema v11; `memory_invalidate`).
+
+Architecture decisions are documented in [`docs/decisions/`](docs/decisions/).
+
 ## Architecture
 
 Engram uses a hybrid search engine combining **SQLite FTS5** (lexical) and **sqlite-vec** (semantic) to retrieve relevant context.
@@ -37,6 +47,8 @@ graph TD
         SE --> DB_Int[Database_interface]
     end
     SE -- Embeddings --> Ollama[(Local_Ollama)]
+    SE -- LLM_tasks --> LLM[LLM_layer_optional]
+    LLM --> Ollama
     subgraph storage [Storage]
         DB_Int --> SQLite[(memory.db_SQLite)]
         SQLite --- FTS[FTS5_lexical]
@@ -44,7 +56,7 @@ graph TD
     end
 ```
 
-**How clients connect:** **Cursor** (and other MCP-capable IDEs) call Engram through the **MCP server** (`memory_search`, `memory_add_*`, etc.). **Antigravity** has no Engram MCP in the default flow—the agent runs the same operations via the **`engram` CLI** on your `PATH` (see bootstrapped `.antigravity/instructions.md`). Both paths hit the same search engine and database at `~/.engram/memory.db` by default.
+**How clients connect:** **Cursor** (and other MCP-capable IDEs) call Engram through the **MCP server** (`memory_search`, `memory_add`, `memory_auto_extract`, `memory_llm_status`, etc.). **Antigravity** has no Engram MCP in the default flow—the agent runs the same operations via the **`engram` CLI** on your `PATH` (see bootstrapped `.antigravity/instructions.md`). Both paths hit the same search engine and database at `~/.engram/memory.db` by default. LLM-powered features (audit, GC scoring, extract, merge) are optional and degrade gracefully when no backend is reachable.
 
 ## Global CLI (PATH)
 
@@ -63,7 +75,7 @@ Use the **same** memory database from every project directory:
 The easiest way to get started is using the unified setup script:
 
 ```bash
-git clone https://github.com/luismiguelcota/engram.git
+git clone https://github.com/luiscota99/engram.git
 cd engram
 bash scripts/setup.sh
 ```
@@ -87,7 +99,7 @@ Chats **do not** automatically surface everything Engram knows on every turn. Wh
 | | **Cursor** | **Antigravity** |
 |---|------------|-----------------|
 | **How Engram is wired** | `.cursor/rules/engram.mdc` + optional [Cursor hooks](cursor-hooks/session-capture.js) | `.antigravity/instructions.md` (from `engram bootstrap`) |
-| **Primary interface** | **MCP tools** (`memory_search`, `memory_suggest_capture`, `memory_add`, …) | **CLI** (`engram …` on `PATH`; CWD is used for project affinity) |
+| **Primary interface** | **MCP tools** (`memory_search`, `memory_suggest_capture`, `memory_add`, `memory_auto_extract`, `memory_llm_status`, `memory_pin`, …) | **CLI** (`engram …` on `PATH`; CWD is used for project affinity) |
 | **Session capture** | Hooks can call `suggest-capture` on stop / session end | Agent runs `suggest-capture` per instructions (heuristic, same engine) |
 | **Skill import/export** | Yes (`engram import-cursor-skills`, `export-skills`) | Use CLI / memory search; no separate Antigravity skill sync |
 
@@ -219,6 +231,7 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 | `engram add pattern` | Log a recurring problem pattern |
 | `engram add skill` | Log a proven, reusable workflow |
 | `engram list skills` | List all stored skills |
+| `engram suggest-consolidate` | Find near-duplicate memory clusters (vector similarity) |
 | `engram suggest-capture --task "…" --outcome "…"` | Heuristic drafts for capture (see [docs/MEASURING_FIT_AND_HELP.md](docs/MEASURING_FIT_AND_HELP.md)) |
 | `engram session-help --score 0-3` | Append Session Help Score to `~/.engram/session-help.jsonl` (optional) |
 | `engram stats` | Memory database statistics |
@@ -249,9 +262,27 @@ See **[docs/MEASURING_FIT_AND_HELP.md](docs/MEASURING_FIT_AND_HELP.md)** — lab
 | Command | Description |
 |---------|-------------|
 | `engram bootstrap [--mode adaptive\|full\|minimal]` | Set up agent rules for a project |
-| `engram doctor` | Run diagnostics and fix database issues |
-| `engram gc` | Garbage collect unused memories |
+| `engram doctor [--repair]` | Diagnostics: FTS/vector drift, embeddings, Ollama, **LLM engine** |
+| `engram gc [--mode dry-run\|archive\|delete]` | Garbage collect unused memories (time-based) |
+| `engram reembed` | Regenerate stale or pending embeddings |
+| `engram merge-projects --from ID --into ID` | Merge duplicate project rows after renames |
 | `engram backup` | Export database to JSON |
+
+### LLM (optional)
+
+Engram does **not** run an LLM process itself—it calls a configured OpenAI-compatible endpoint (local Ollama by default). If unreachable, LLM features are skipped; everything else works unchanged.
+
+| Command | Description |
+|---------|-------------|
+| `engram llm status` | Show provider URL, models, reachability, enabled tasks |
+| `engram llm audit` | LLM consolidation audit (dry-run; scores near-duplicates) |
+| `engram llm audit --execute` | Apply safe `auto_merge` decisions (2-item clusters only) |
+| `engram llm gc` | LLM-assisted GC scoring (dry-run) |
+| `engram llm gc --archive` | Archive items the LLM marks as discard |
+
+**MCP equivalent:** `memory_llm_status` — agents can call this before suggesting `engram llm audit`.
+
+See [LLM configuration](#llm-configuration-optional) below for env vars.
 
 ### Benchmarks
 
@@ -297,7 +328,34 @@ export ENGRAM_EMBED_MODEL=nomic-embed-text
 
 **Recommendation:** Use **`nomic-embed-text`** for semantic + hybrid behavior. Engram's hybrid FTS5 + semantic search still helps when vectors are unavailable (lexical-only path).
 
-> **Note:** Changing models invalidates existing embeddings for ranking consistency. Run `engram doctor --repair` after switching compatible models.
+> **Note:** Changing models invalidates existing embeddings for ranking consistency. Run `engram doctor --repair` then `engram reembed` after switching compatible models.
+
+## LLM Configuration (optional)
+
+LLM features power consolidation audit, assisted GC, auto-extract, and entry merge. They use a separate model config from embeddings.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ENGRAM_LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible chat API (Ollama, Groq, OpenRouter, …) |
+| `ENGRAM_LLM_MODEL` | `llama3.2` | Default chat model |
+| `ENGRAM_LLM_EXTRACT_MODEL` | *(falls back to `ENGRAM_LLM_MODEL`)* | Override for `memory_auto_extract` |
+| `ENGRAM_LLM_AUDIT_MODEL` | *(falls back to `ENGRAM_LLM_MODEL`)* | Override for consolidation audit and GC scoring |
+| `ENGRAM_LLM_API_KEY` | *(unset)* | Bearer token for cloud providers |
+
+```bash
+# Local Ollama (default) — zero cloud cost
+engram llm status
+
+# Cloud example (Groq) — no local GPU/RAM used
+export ENGRAM_LLM_BASE_URL=https://api.groq.com/openai/v1
+export ENGRAM_LLM_API_KEY=gsk_...
+export ENGRAM_LLM_MODEL=llama-3.3-70b-versatile
+export ENGRAM_LLM_EXTRACT_MODEL=llama-3.1-8b-instant   # fast extraction
+export ENGRAM_LLM_AUDIT_MODEL=llama-3.3-70b-versatile  # precise audit
+engram llm status
+```
+
+**Cost note:** With Ollama, the model loads on demand and only runs when you invoke LLM features (audit, GC, extract, merge)—not on every search. Pointing at a cloud API offloads compute entirely.
 
 ## Troubleshooting
 
@@ -305,7 +363,7 @@ If things aren't working as expected, run the built-in diagnostic tool:
 ```bash
 engram doctor --repair
 ```
-It will check for database drift, orphaned tags, and semantic engine connectivity.
+It checks FTS/vector index drift, orphaned tags and embedding status, **Ollama connectivity** (embeddings), and **LLM engine reachability** (consolidation audit, GC scoring, auto-extract). Run `engram llm status` separately to see which LLM tasks are enabled.
 
 ## License
 

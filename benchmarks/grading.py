@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 
@@ -35,20 +36,43 @@ def row_matches_expected(r: dict, q: dict) -> bool:
     return bool(needle) and needle in title
 
 
-def relevances_from_results(results: list[dict], q: dict) -> list[float]:
-    """Binary relevance (0/1) per rank position for the full result list."""
-    if expects_abstention(q):
-        return [0.0 for _ in results]
-    return [1.0 if row_matches_expected(r, q) else 0.0 for r in results]
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+
+def query_term_overlap(query: str, result: dict) -> float:
+    """Fraction of query terms found in title + snippet (0.0–1.0)."""
+    qterms = _tokenize(query)
+    if not qterms:
+        return 0.0
+    doc = f"{result.get('title', '')} {result.get('snippet', '')}".lower()
+    hits = sum(1 for term in qterms if term in doc)
+    return hits / len(qterms)
+
+
+def abstention_min_overlap(q: dict) -> float:
+    """Minimum overlap in top-k that counts as a confident (non-abstaining) hit."""
+    if q.get("abstention_min_overlap") is not None:
+        return float(q["abstention_min_overlap"])
+    # Legacy field named abstention_max_score was incorrectly compared to utility_score.
+    legacy = q.get("abstention_max_score")
+    if legacy is not None and float(legacy) <= 1.0:
+        return 0.25
+    return 0.25
 
 
 def abstention_success(results: list[dict], q: dict, k: int = 5) -> bool:
-    """Abstention passes when top-k is empty or all hits score below threshold."""
+    """Abstention passes when top-k is empty or no hit has strong query overlap.
+
+    Uses lexical overlap rather than ``utility_score`` because utility bases (50–100+)
+    are dominated by recency/usage and do not reflect off-topic queries.
+    """
     if not expects_abstention(q):
         return False
     top = results[:k]
     if not top:
         return True
+
     deny = q.get("deny_items") or []
     for r in top:
         for d in deny:
@@ -57,8 +81,18 @@ def abstention_success(results: list[dict], q: dict, k: int = 5) -> bool:
                 and normalize_item_id(r.get("item_id")) == normalize_item_id(d.get("item_id"))
             ):
                 return False
-    threshold = float(q.get("abstention_max_score", 0.35))
-    return all(float(r.get("utility_score", 1.0)) < threshold for r in top)
+
+    query = q.get("query", "")
+    threshold = abstention_min_overlap(q)
+    max_overlap = max(query_term_overlap(query, r) for r in top)
+    return max_overlap < threshold
+
+
+def relevances_from_results(results: list[dict], q: dict) -> list[float]:
+    """Binary relevance (0/1) per rank position for the full result list."""
+    if expects_abstention(q):
+        return [0.0 for _ in results]
+    return [1.0 if row_matches_expected(r, q) else 0.0 for r in results]
 
 
 def dcg(relevances: list[float], k: int) -> float:
