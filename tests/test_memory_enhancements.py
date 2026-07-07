@@ -18,8 +18,8 @@ from src.ranking import calculate_utility_score
 from src.search import search
 
 
-def test_schema_version_is_10():
-    assert SCHEMA_VERSION == 11
+def test_schema_version_is_current():
+    assert SCHEMA_VERSION == 12
 
 
 def test_pin_and_search_prepend(test_db):

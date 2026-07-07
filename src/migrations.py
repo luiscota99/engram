@@ -314,7 +314,46 @@ MIGRATIONS = {
         "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('vec_dimension', '768');",
         "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('embed_model', 'nomic-embed-text');",
     ],
+    12: [
+        # L2-normalize all stored vectors in place. Ollama's legacy
+        # /api/embeddings returned unnormalized vectors; the newer /api/embed
+        # (used by batched sweeps) returns unit vectors. Mixed norms under
+        # euclidean KNN silently partition the index — see src/embeddings.py
+        # l2_normalize. Pure rescaling: no re-embedding required.
+        lambda conn: _normalize_vec_memory(conn),
+    ],
 }
+
+
+def _normalize_vec_memory(conn) -> None:
+    import json as _json
+    import math as _math
+    import struct as _struct
+
+    try:
+        rows = conn.execute("SELECT rowid, embedding FROM vec_memory").fetchall()
+    except Exception:
+        return  # vec extension unavailable; nothing to normalize
+    fixed = 0
+    for row in rows:
+        raw = row["embedding"]
+        if isinstance(raw, (bytes, bytearray)):
+            vec = list(_struct.unpack(f"{len(raw) // 4}f", raw))
+        else:
+            vec = _json.loads(raw)
+        norm = _math.sqrt(sum(x * x for x in vec))
+        if norm <= 0 or abs(norm - 1.0) < 1e-3:
+            continue  # empty or already unit length
+        normed = [x / norm for x in vec]
+        # vec0 virtual tables don't support UPDATE reliably (<0.1.10): delete+insert
+        conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (row["rowid"],))
+        conn.execute(
+            "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
+            (row["rowid"], _json.dumps(normed)),
+        )
+        fixed += 1
+    if fixed:
+        print(f"  ✓ Normalized {fixed} stored vectors to unit length.")
 
 
 # ── Downgrade definitions ────────────────────────────────────────────
@@ -323,6 +362,10 @@ MIGRATIONS = {
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    12: [
+        # Normalization is not reversible (original norms were discarded), and
+        # doesn't need to be: unit vectors rank identically for cosine use.
+    ],
     11: [
         "DROP TABLE IF EXISTS memory_facts;",
     ],
@@ -357,8 +400,11 @@ def run_migrations(conn, current_version: int, target_version: int) -> bool:
         if version not in MIGRATIONS:
             continue
         print(f"→ Running database migration v{version}...")
-        for query in MIGRATIONS[version]:
-            conn.execute(query)
+        for step in MIGRATIONS[version]:
+            if callable(step):
+                step(conn)
+            else:
+                conn.execute(step)
 
         if version == 6:
             print("→ v6: Rebuilding FTS index to resolve existing drift...")

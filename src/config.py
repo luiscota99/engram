@@ -79,5 +79,12 @@ def max_context_chars() -> int:
         return DEFAULT_MAX_CONTEXT_CHARS
 
 
+def defer_embed() -> bool:
+    """When true (ENGRAM_DEFER_EMBED=1), writes skip inline embedding and mark the
+    row pending; a batched ``engram reembed`` sweep generates vectors later.
+    Use for bulk ingest — turns ~5s/doc into sub-second writes."""
+    return os.environ.get("ENGRAM_DEFER_EMBED", "").strip().lower() in ("1", "true", "yes")
+
+
 def claw_path() -> str | None:
     return os.environ.get("CLAW_PATH") or None

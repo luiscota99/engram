@@ -77,3 +77,48 @@ def test_get_vec_dimension_default(test_db):
     from src.database import get_vec_dimension
 
     assert get_vec_dimension(db_path=test_db["path"]) == 768
+
+
+def test_deferred_embedding_marks_pending(test_db, monkeypatch):
+    """ENGRAM_DEFER_EMBED=1 skips inline embedding; row lands as pending."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("ENGRAM_DEFER_EMBED", "1")
+    conn = test_db["conn"]
+    conn.execute(
+        "INSERT INTO skills (name, domain, trigger_desc, workflow) VALUES ('d', 'x', 't', 'w')"
+    )
+    with patch("src.database.embed_text") as embed:
+        index_in_fts(conn, "skill", 1, "d", "t w", [])
+    embed.assert_not_called()
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT status FROM embedding_status WHERE item_type='skill' AND item_id=1"
+    ).fetchone()
+    assert row["status"] == "pending"
+
+
+def test_reembed_stale_uses_batch(test_db, monkeypatch):
+    from unittest.mock import patch
+
+    from src.database import reembed_stale
+
+    monkeypatch.setenv("ENGRAM_DEFER_EMBED", "1")
+    conn = test_db["conn"]
+    for i in range(1, 4):
+        conn.execute(
+            "INSERT INTO skills (name, domain, trigger_desc, workflow) VALUES (?, 'x', 't', 'w')",
+            (f"s{i}",),
+        )
+        index_in_fts(conn, "skill", i, f"s{i}", "t w", [])
+    conn.commit()
+    monkeypatch.delenv("ENGRAM_DEFER_EMBED")
+
+    with patch("src.database.embed_batch", return_value=[[0.1] * 768] * 3) as batch:
+        result = reembed_stale(db_path=test_db["path"], batch_size=50)
+
+    assert batch.call_count == 1
+    assert len(batch.call_args[0][0]) == 3
+    assert result["succeeded"] == 3
+    assert result["remaining"] == 0

@@ -22,7 +22,9 @@ try:
 except ImportError:
     sqlite_vec = None
 
+from . import config
 from .embeddings import (
+    embed_batch,
     embed_text,
     embedding_matches_vec_schema,
     resolve_embedding_model_name,
@@ -34,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -482,9 +484,10 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
     )
     rowid = cursor.lastrowid
 
-    # Generate and store embedding
+    # Generate and store embedding (skipped in deferred mode → row goes to
+    # 'pending' below and a batched `engram reembed` sweep picks it up)
     full_text = f"{title}\n{content}\n{tags_str}"
-    embedding = embed_text(full_text)
+    embedding = None if config.defer_embed() else embed_text(full_text)
 
     if embedding and sqlite_vec is not None:
         ok_vec, vec_err = embedding_matches_vec_schema(
@@ -793,14 +796,16 @@ def mark_embeddings_stale(db_path=None) -> int:
         return cursor.rowcount
 
 
+# Documents per batched embedding request during reembed sweeps.
+EMBED_SWEEP_CHUNK = 16
+
+
 def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
     """Re-generate embeddings for all stale/pending items.
 
     Processes up to batch_size items per call.  Returns a progress dict:
       {'processed': N, 'succeeded': N, 'failed': N, 'remaining': N}
     """
-    from .embeddings import embed_text as _embed
-
     if sqlite_vec is None:
         return {"processed": 0, "succeeded": 0, "failed": 0, "remaining": 0, "error": "sqlite_vec not available"}
 
@@ -814,6 +819,11 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
             (batch_size,)
         ).fetchall()
 
+        # Resolve texts first, then embed in small sub-batches — one HTTP
+        # round-trip per sub-batch instead of one per document. 16 keeps each
+        # request short enough that a saturated local Ollama can't wedge a
+        # whole sweep behind one giant call.
+        embeddable: list[tuple] = []  # (row, full_text)
         for row in rows:
             fts_row = conn.execute(
                 "SELECT title, content, tags FROM memory_fts WHERE rowid = ?",
@@ -827,10 +837,15 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
                 )
                 failed += 1
                 continue
-
             full_text = f"{fts_row['title']}\n{fts_row['content']}\n{fts_row['tags'] or ''}"
-            embedding = _embed(full_text, model=embedding_model)
+            embeddable.append((row, full_text))
 
+        embeddings: list = []
+        for start in range(0, len(embeddable), EMBED_SWEEP_CHUNK):
+            chunk = embeddable[start:start + EMBED_SWEEP_CHUNK]
+            embeddings.extend(embed_batch([t for _r, t in chunk], model=embedding_model))
+
+        for (row, _full_text), embedding in zip(embeddable, embeddings):
             if embedding:
                 ok_vec, vec_err = embedding_matches_vec_schema(
                     embedding, embedding_model, expected_dim=get_vec_dimension(conn=conn)

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 import urllib.request
@@ -92,6 +93,21 @@ _HOST_FAIL_THRESHOLD = 2
 _dead_hosts: dict[str, float] = {}
 _host_fails: dict[str, int] = {}
 _last_embed_failure_reason: str | None = None
+
+
+def l2_normalize(vec: list[float]) -> list[float]:
+    """Scale *vec* to unit length.
+
+    Ollama's legacy ``/api/embeddings`` returns unnormalized vectors while the
+    newer ``/api/embed`` returns unit vectors. Mixing them under euclidean KNN
+    silently partitions the index (unnormalized queries only ever match
+    unnormalized docs). Normalizing everything in code makes L2 ordering
+    equivalent to cosine regardless of which endpoint produced the vector.
+    """
+    norm = math.sqrt(sum(x * x for x in vec))
+    if norm <= 0:
+        return vec
+    return [x / norm for x in vec]
 
 
 def _host_key(base_url: str) -> str:
@@ -305,6 +321,7 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
             if embedding:
                 _mark_host_success(base_url)
                 _last_embed_failure_reason = None
+                embedding = l2_normalize(embedding)
                 _embed_cache[cache_key] = list(embedding)
                 _embed_cache.move_to_end(cache_key)
                 while len(_embed_cache) > EMBED_CACHE_MAX:
@@ -320,6 +337,101 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
             url,
         )
         return None
+
+
+def embed_batch(texts: list[str], model: str | None = None) -> list[list[float] | None]:
+    """Embed many texts in one request; returns one vector (or None) per input.
+
+    Uses Ollama's ``/api/embed`` (array input) or the OpenAI-compatible
+    ``/v1/embeddings`` array form. One HTTP round-trip per batch instead of one
+    per document — the difference between ~5s/doc and ~0.1s/doc on bulk ingest.
+    Falls back to per-item ``embed_text`` if the batch endpoint fails (e.g. an
+    older Ollama build). Results are cached like single embeds.
+    """
+    global _last_embed_failure_reason
+
+    if not texts:
+        return []
+
+    kind, base_url = resolve_embed_backend()
+    if kind == "disabled":
+        _last_embed_failure_reason = "embeddings_disabled"
+        return [None] * len(texts)
+
+    active_model = model or _get_model()
+    max_chars = _MODEL_CONTEXT.get(active_model, 2000)
+    prepared = [(t or "")[:max_chars] for t in texts]
+
+    # Serve what we can from cache; batch only the misses.
+    out: list[list[float] | None] = [None] * len(texts)
+    miss_idx: list[int] = []
+    for i, t in enumerate(prepared):
+        if not t:
+            continue
+        cached = _embed_cache.get((active_model, t))
+        if cached is not None:
+            _embed_cache.move_to_end((active_model, t))
+            out[i] = list(cached)
+        else:
+            miss_idx.append(i)
+    if not miss_idx:
+        return out
+
+    if _is_host_in_cooldown(base_url):
+        _last_embed_failure_reason = "ollama_host_cooldown"
+        return out
+
+    headers = {"Content-Type": "application/json"}
+    inputs = [prepared[i] for i in miss_idx]
+    if kind == "openai":
+        url = _openai_embeddings_endpoint(base_url)
+        api_key = os.environ.get(EMBED_API_KEY_ENV, "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        url = f"{base_url.rstrip('/')}/api/embed"
+    data = json.dumps({"model": active_model, "input": inputs}).encode("utf-8")
+
+    req = urllib.request.Request(url, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=_EMBED_TIMEOUT * 4) as response:
+            result = json.loads(response.read().decode())
+            if kind == "openai":
+                vectors = [item.get("embedding") for item in (result.get("data") or [])]
+            else:
+                vectors = result.get("embeddings") or []
+    except Exception:
+        logger.warning(
+            "Batch embedding failed (backend=%s, n=%d); falling back to per-item requests",
+            kind,
+            len(inputs),
+            exc_info=True,
+        )
+        for i in miss_idx:
+            out[i] = embed_text(prepared[i], model=active_model)
+        return out
+
+    if len(vectors) != len(inputs):
+        logger.warning(
+            "Batch embed returned %d vectors for %d inputs; falling back per-item",
+            len(vectors),
+            len(inputs),
+        )
+        for i in miss_idx:
+            out[i] = embed_text(prepared[i], model=active_model)
+        return out
+
+    _mark_host_success(base_url)
+    _last_embed_failure_reason = None
+    for i, vec in zip(miss_idx, vectors):
+        if vec:
+            vec = l2_normalize(vec)
+            out[i] = vec
+            _embed_cache[(active_model, prepared[i])] = list(vec)
+            _embed_cache.move_to_end((active_model, prepared[i]))
+    while len(_embed_cache) > EMBED_CACHE_MAX:
+        _embed_cache.popitem(last=False)
+    return out
 
 
 def clear_embedding_cache() -> None:

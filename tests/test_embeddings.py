@@ -24,6 +24,13 @@ def reset_embed_host_state():
     emb.clear_embedding_cache()
 
 
+def _unit(v):
+    import math
+
+    n = math.sqrt(sum(x * x for x in v))
+    return [x / n for x in v]
+
+
 def test_embed_text_success_returns_embedding_vector():
     fake_embedding = [0.1] * emb.VEC_EMBEDDING_DIMENSION
     payload = json.dumps({"embedding": fake_embedding}).encode("utf-8")
@@ -35,7 +42,7 @@ def test_embed_text_success_returns_embedding_vector():
     with patch("urllib.request.urlopen", return_value=mock_response):
         result = emb.embed_text("hello world")
 
-    assert result == fake_embedding
+    assert result == _unit(fake_embedding)
 
 
 def test_embed_text_failure_returns_none():
@@ -69,8 +76,8 @@ def test_embed_text_caches_repeated_queries():
         first = emb.embed_text("hello world")
         second = emb.embed_text("hello world")
 
-    assert first == fake_embedding
-    assert second == fake_embedding
+    assert first == _unit(fake_embedding)
+    assert second == _unit(fake_embedding)
     assert mock_open.call_count == 1, "second identical call must be served from cache"
 
 
@@ -83,7 +90,7 @@ def test_embed_text_failure_is_not_cached():
     with patch("urllib.request.urlopen", return_value=_mock_response(fake_embedding)) as mock_open:
         result = emb.embed_text("hello world")
 
-    assert result == fake_embedding
+    assert result == _unit(fake_embedding)
     assert mock_open.call_count == 1, "failed embed must retry, not serve a cached None"
 
 
@@ -135,7 +142,7 @@ def test_embed_openai_compatible_backend(monkeypatch):
     with patch("urllib.request.urlopen", return_value=mock_response) as mock_open:
         result = emb.embed_text("hello world", model="text-embedding-3-small")
 
-    assert result == fake_embedding
+    assert result == _unit(fake_embedding)
     req = mock_open.call_args[0][0]
     assert req.full_url == "https://api.example.com/v1/embeddings"
     assert req.get_header("Authorization") == "Bearer sk-test"
@@ -157,3 +164,86 @@ def test_embedding_matches_vec_schema_respects_expected_dim():
     ok, err = emb.embedding_matches_vec_schema([0.1] * 512, "custom-model", expected_dim=768)
     assert not ok
     assert "512" in err
+
+
+def _batch_response(embeddings):
+    payload = json.dumps({"embeddings": embeddings}).encode("utf-8")
+    mock_response = MagicMock()
+    mock_response.read.return_value = payload
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+    return mock_response
+
+
+def test_embed_batch_single_request(monkeypatch):
+    monkeypatch.delenv("ENGRAM_EMBED_URL", raising=False)
+    vecs = [[0.1] * 768, [0.2] * 768, [0.3] * 768]
+
+    with patch("urllib.request.urlopen", return_value=_batch_response(vecs)) as mock_open:
+        out = emb.embed_batch(["a", "b", "c"])
+
+    assert out == [_unit(v) for v in vecs]
+    assert mock_open.call_count == 1
+    req = mock_open.call_args[0][0]
+    assert req.full_url.endswith("/api/embed")
+    assert json.loads(req.data.decode())["input"] == ["a", "b", "c"]
+
+
+def test_embed_batch_serves_cached_items_without_http(monkeypatch):
+    monkeypatch.delenv("ENGRAM_EMBED_URL", raising=False)
+    vec_a = [0.4] * 768
+
+    with patch("urllib.request.urlopen", return_value=_mock_response(vec_a)):
+        emb.embed_text("a")  # warm cache
+
+    with patch("urllib.request.urlopen", return_value=_batch_response([[0.5] * 768])) as mock_open:
+        out = emb.embed_batch(["a", "b"])
+
+    assert out[0] == _unit(vec_a)
+    assert out[1] == _unit([0.5] * 768)
+    # only the miss ("b") went over the wire
+    assert json.loads(mock_open.call_args[0][0].data.decode())["input"] == ["b"]
+
+
+def test_embed_batch_falls_back_per_item_on_error(monkeypatch):
+    monkeypatch.delenv("ENGRAM_EMBED_URL", raising=False)
+    vec = [0.6] * 768
+    calls = {"n": 0}
+
+    def flaky_urlopen(req, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("batch endpoint missing")
+        return _mock_response(vec)
+
+    with patch("urllib.request.urlopen", side_effect=flaky_urlopen):
+        out = emb.embed_batch(["x", "y"])
+
+    assert out == [_unit(vec), _unit(vec)]
+    assert calls["n"] == 3  # 1 failed batch + 2 per-item fallbacks
+
+
+def test_embed_batch_disabled_backend(monkeypatch):
+    monkeypatch.setenv("ENGRAM_EMBED_URL", "disabled")
+    with patch("urllib.request.urlopen") as mock_open:
+        out = emb.embed_batch(["a", "b"])
+    assert out == [None, None]
+    mock_open.assert_not_called()
+
+
+def test_embed_text_returns_unit_vectors():
+    raw = [3.0] * emb.VEC_EMBEDDING_DIMENSION
+    with patch("urllib.request.urlopen", return_value=_mock_response(raw)):
+        out = emb.embed_text("normalize me")
+    import math
+    assert abs(math.sqrt(sum(x * x for x in out)) - 1.0) < 1e-9
+
+
+def test_embed_batch_returns_unit_vectors(monkeypatch):
+    monkeypatch.delenv("ENGRAM_EMBED_URL", raising=False)
+    raw = [[2.0] * 768, [5.0] * 768]
+    with patch("urllib.request.urlopen", return_value=_batch_response(raw)):
+        out = emb.embed_batch(["a", "b"])
+    import math
+    for v in out:
+        assert abs(math.sqrt(sum(x * x for x in v)) - 1.0) < 1e-9

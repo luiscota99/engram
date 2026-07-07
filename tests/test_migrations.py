@@ -224,3 +224,29 @@ def test_fresh_schema_matches_migrated_schema(migration_db, tmp_path):
     for table, cols in migrated.items():
         missing_cols = cols - fresh[table]
         assert not missing_cols, f"Fresh DB table {table!r} is missing columns: {missing_cols}"
+
+
+def test_v12_normalizes_stored_vectors(tmp_path):
+    """Migration v12 rescales legacy unnormalized vectors to unit length."""
+    import json
+    import math
+
+    from src.database import get_connection, init_db
+
+    db = str(tmp_path / "norm.db")
+    init_db(db)
+    with get_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO vec_memory(rowid, embedding) VALUES (1, ?)",
+            (json.dumps([3.0] * 768),),  # norm far from 1
+        )
+        conn.execute(
+            "UPDATE schema_meta SET value = '11' WHERE key = 'version'"
+        )
+
+    with get_connection(db) as conn:  # reopening triggers migration to v12
+        raw = conn.execute("SELECT embedding FROM vec_memory WHERE rowid = 1").fetchone()[0]
+        import struct
+        vec = list(struct.unpack(f"{len(raw)//4}f", raw)) if isinstance(raw, (bytes, bytearray)) else json.loads(raw)
+        norm = math.sqrt(sum(x * x for x in vec))
+        assert abs(norm - 1.0) < 1e-3
