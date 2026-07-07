@@ -34,6 +34,9 @@ from .migrations import backup_before_migration, run_migrations
 
 logger = logging.getLogger(__name__)
 
+# Warn once per process when the vec extension can't load (see get_connection).
+_vec_load_warned = False
+
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
 SCHEMA_VERSION = 15
@@ -383,11 +386,23 @@ def get_connection(db_path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
 
-    # Load vector extension if available
+    # Load vector extension if available. A load failure (e.g. macOS TCC
+    # blocking the dylib after a permissions change) must degrade to
+    # lexical-only search, not kill every connection.
     if sqlite_vec is not None:
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
+        try:
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+        except Exception:
+            global _vec_load_warned
+            if not _vec_load_warned:
+                _vec_load_warned = True
+                logger.warning(
+                    "sqlite-vec extension failed to load — semantic search disabled "
+                    "for this process; lexical search continues",
+                    exc_info=True,
+                )
 
     try:
         # Dynamic Initialization & Migrations

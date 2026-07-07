@@ -122,3 +122,23 @@ def test_reembed_stale_uses_batch(test_db, monkeypatch):
     assert len(batch.call_args[0][0]) == 3
     assert result["succeeded"] == 3
     assert result["remaining"] == 0
+
+
+def test_vec_load_failure_degrades_to_lexical(test_db, monkeypatch):
+    """A vec0 dylib load failure (e.g. macOS TCC) must not kill connections."""
+    from unittest.mock import patch
+
+    import src.database as db
+    from src.search import search
+
+    with patch.object(db.sqlite_vec, "load", side_effect=OSError("dlopen blocked")):
+        conn = test_db["conn"]
+        conn.execute(
+            "INSERT INTO skills (name, domain, trigger_desc, workflow) VALUES ('lex', 'd', 'lexical fallback', 'w')"
+        )
+        index_in_fts(conn, "skill", 1, "lex", "lexical fallback works", [])
+        conn.commit()
+
+        results = search("lexical fallback", db_path=test_db["path"])
+        assert len(results) >= 1
+        assert results[0]["is_semantic"] is False
