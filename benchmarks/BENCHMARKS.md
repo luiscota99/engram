@@ -138,13 +138,72 @@ See [`results_baseline.json`](results_baseline.json) for per-category breakdown.
 
 ---
 
+## LongMemEval (full oracle run, 2026-07-06)
+
+Real session-retrieval evaluation on the **LongMemEval oracle** file (Wu et al.): all
+948 haystack sessions across 500 questions ingested into **one shared corpus** (940
+unique sessions), so every query faces the other questions' sessions as distractors.
+Metric: **session-level Recall@5 / MRR** against `answer_session_ids`. Abstention
+questions (`*_abs`) are excluded from querying; their sessions remain as distractors.
+Stack: fully local — hybrid FTS5 + sqlite-vec with `nomic-embed-text` (274 MB) on
+Ollama, no LLM in the loop, no API calls.
+
+| Metric | Value |
+|--------|-------|
+| **R@5 (session-level)** | **0.538** |
+| MRR | 0.442 |
+| Avg latency / query | 218 ms |
+| Avg context tokens / query | 374 |
+| Corpus | 940 sessions |
+| Queries | 470 |
+
+By question type:
+
+| Category | n | R@5 |
+|----------|--:|----:|
+| single-session-assistant | 56 | 0.821 |
+| multi-session | 121 | 0.653 |
+| knowledge-update | 72 | 0.500 |
+| temporal-reasoning | 127 | 0.449 |
+| single-session-user | 64 | 0.406 |
+| single-session-preference | 30 | 0.300 |
+
+### How to read this honestly
+
+- **Not comparable to vendor headline numbers.** Mem0 (94.4%) and Zep (63.8%) report
+  **end-to-end QA accuracy** — an LLM answering from retrieved context, self-reported,
+  on different variants/configs. The table above is **retrieval-only recall** with a
+  274 MB local embedder and zero LLM assistance. An end-to-end number would require an
+  answering model on top.
+- **Out-of-domain corpus.** LongMemEval is personal-assistant chit-chat; Engram's home
+  domain is structured engineering memory, where its labeled real-corpus eval scores
+  R@5 = 1.00 at 60–120 ms (see `evals/`).
+- **The category spread is the roadmap.** Temporal-reasoning (0.449) and preference
+  (0.300) are exactly where flat retrieval underperforms in the literature; Engram
+  already stores session dates and temporal facts (schema v11) — query-date-aware
+  ranking is the obvious next lever.
+
+Reproduce:
+
+```bash
+curl -L -o /tmp/longmemeval_oracle.json \
+  https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json
+ENGRAM_DB_PATH=/tmp/lme_corpus.db python benchmarks/longmemeval_bench.py \
+  --oracle-file /tmp/longmemeval_oracle.json --output /tmp/lme_results.json
+```
+
+Aggregate + per-category results are tracked in
+[`results_longmemeval_oracle.json`](results_longmemeval_oracle.json).
+
+---
+
 ## Roadmap
 
 - [x] Expand to 100 queries (multi-hop, conversation, prompt, abstention)
 - [x] Abstention queries with overlap-based grading
 - [x] CI gates full query set (R@5 ≥ 0.90 hybrid, ≥ 0.50 FTS-only)
 - [ ] Optional: PR comments with R@5 / MRR delta vs `results_baseline.json`
-- [ ] Full LongMemEval dataset run and published score
+- [x] Full LongMemEval oracle run and published score (see above)
 
 ## Shared modules
 

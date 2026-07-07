@@ -11,6 +11,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `engram bootstrap --omit-project-integration` and sentinel file `.omit-agent-integration` (project root) to skip Cursor rules + Antigravity `instructions.md` while still initializing the database and MCP when applicable.
 - README guidance on explicitly asking for retrieval (Agent Integration).
 - Hybrid search merges semantic vs lexical rankings with reciprocal rank fusion (RRF); FTS query tokenization aligns with BM25/ranking tokenizer; tests in `tests/test_rrf.py`.
+- In-process LRU cache for query embeddings (`src/embeddings.py`, 256 entries) — the Ollama HTTP round-trip dominated search latency (~85% in profiling); repeated queries in a long-lived MCP session now skip it. `clear_embedding_cache()` resets it.
+- Schema parity regression test (`tests/test_migrations.py::test_fresh_schema_matches_migrated_schema`) — fails if `SCHEMA_SQL` and the migration chain diverge.
+
+- **Pluggable embedding backends** — `ENGRAM_EMBED_URL` now selects an OpenAI-compatible `/v1/embeddings` endpoint (with `ENGRAM_EMBED_API_KEY`); unset keeps local Ollama; `disabled` turns embeddings off cleanly (short-circuits before any HTTP).
+- **Flexible embedding dimensions** — `engram migrate-embeddings --target-model <model>` probes the model's real output dimension and rebuilds `vec_memory` at the new width when it differs (vectors are regenerated from FTS content). Write paths validate against the live `schema_meta.vec_dimension` instead of a hardcoded 768.
+- **`src/config.py`** — every environment variable Engram reads, documented and resolved in one module.
+- **MCP elicitation (spec 2025-06-18+)** — destructive tools (`memory_gc` non-dry-run, `memory_sleep`) ask the user for confirmation via `elicitation/create` when the client advertises the capability; clients without it keep the previous behavior.
+- **Tokens-per-query in benchmarks** — `longmemeval_bench` and `engram_retrieval_bench` report `context_tokens` per query and `avg_context_tokens` in the aggregate (the 2026 memory-benchmark comparison axis alongside accuracy).
+- **Claude Code skill** — `engram claude-skill` installs `claude-skills/engram-memory/SKILL.md` into `~/.claude/skills/` so Claude Code searches memory before non-trivial tasks and captures lessons afterward.
+- **`engram install`** — one-shot setup: detects Cursor / Claude Code / Antigravity on the machine and wires all global integrations (Cursor MCP config, Claude skill, `~/.gemini/AGENTS.md` snippet); `--all` forces every integration.
+- **`engram import-claude-memories`** — imports Claude Code's file-based memories (`~/.claude/**/memory/*.md`) into Engram, idempotent by content hash, so native Claude memories become searchable across every tool.
+- **Capture→reuse metric** — `engram health` (and the MCP health tool) now report what share of memories captured 30+ days ago were ever used again, per type and overall, with a recommendation when reuse is low. This is the capture-quality signal.
+- **Real LongMemEval retrieval eval** — `longmemeval_bench.py --oracle-file longmemeval_oracle.json` ingests all haystack sessions into one corpus (~950 sessions) and grades session-level Recall@k/MRR against `answer_session_ids`, per question type, with tokens-per-query. First full run (2026-07-06): session-level R@5 0.538 / MRR 0.442 over 940 sessions, 218 ms and 374 tokens per query, fully local; results and caveats published in `benchmarks/BENCHMARKS.md`.
+- **Leaner MCP search injection** — `memory_search` default limit 10→5 with rank-aware snippets (500 chars for the top hit, 150 below): ~34% fewer context tokens per search on a real corpus (845→560) while the top hit carries 3× more detail; `estimate_context_tokens` in benchmarks now mirrors this injected format instead of raw row sizes.
+- Connection reuse on the search hot path — one connection per search (was 8), plus a `connection_scope` helper for multi-step operations.
+- sqlite-vec pinned to >=0.1.9 (proper DELETE/space reclamation in vec0 tables).
+
+### Fixed
+
+- Fresh databases were missing schema v11 objects (`memory_facts` table, `superseded_by` columns, `codebase_knowledge.file_mtime`) because they were added only in migrations, never in the baseline `SCHEMA_SQL`. `memory_invalidate` with a reason crashed on new installs.
+- `engram suggest-consolidate` and `run_sleep` crashed (or reported `clusters_found == 2` on an empty database) — both treated the `(clusters, skip_reason)` tuple from `find_consolidation_candidates` as the cluster list.
+- Flaky search performance test: the 500ms budget included a live Ollama embedding call (800ms+ on a cold model load); the query embedding is now stubbed so the test measures the SQL/ranking path it was written to guard.
+- `engram doctor --repair` built the orphaned-tags DELETE by string interpolation; now parameterized.
+- Silent `except: pass` handlers in `temporal.py`, `maintenance.py`, and `database.py` now log (one of them had already hidden the fresh-install schema bug).
 
 ## [1.1.0] - 2026-04-21
 

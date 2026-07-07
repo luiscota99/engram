@@ -41,8 +41,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmarks.grading import (  # noqa: E402
+from benchmarks.grading import (
     abstention_success,
+    estimate_context_tokens,  # noqa: E402
     expects_abstention,
     mrr_from_relevances,
     ndcg_at_k_from_relevances,
@@ -170,6 +171,7 @@ def run_benchmark(
             "ndcg": ndcg_scores,
             "mrr": mrr,
             "latency_ms": elapsed_ms,
+            "context_tokens": estimate_context_tokens(results),
             "hit_at_1": recall_scores.get(1, 0.0) == 1.0,
         }
         if include_hit_detail:
@@ -193,6 +195,9 @@ def run_benchmark(
     aggregate = {
         "n_queries": n,
         "avg_latency_ms": round(avg_latency_ms, 1),
+        "avg_context_tokens": round(
+            sum(r["context_tokens"] for r in per_query) / n if n > 0 else 0.0, 1
+        ),
         "MRR": round(mrr_sum / n if n > 0 else 0.0, 4),
     }
     for k in k_values:

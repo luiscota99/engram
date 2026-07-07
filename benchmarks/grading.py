@@ -129,3 +129,21 @@ def mrr_from_relevances(relevances: list[float]) -> float:
         if rel >= 1.0:
             return 1.0 / i
     return 0.0
+
+
+def estimate_context_tokens(results: list[dict]) -> int:
+    """Approximate tokens an agent receives as context from these results.
+
+    Mirrors the MCP ``format_and_truncate_results`` payload — title + rank-aware
+    snippet caps (500 chars for the top hit, 150 below) + tags — at the standard
+    ~4 chars/token heuristic, so the metric reports what agents actually pay
+    rather than raw row sizes. Vendors report accuracy alongside tokens-per-query
+    (e.g. Mem0's LongMemEval runs); Engram benchmarks report the same axis.
+    """
+    chars = 0
+    for rank, r in enumerate(results, start=1):
+        snippet_cap = 500 if rank == 1 else 150
+        chars += len(str(r.get("title") or ""))
+        chars += min(len(str(r.get("snippet") or "")), snippet_cap)
+        chars += len(str(r.get("tags") or ""))
+    return chars // 4

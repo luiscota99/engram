@@ -1,0 +1,45 @@
+{
+  "benchmark": "longmemeval-oracle",
+  "k": 5,
+  "aggregate": {
+    "n_queries": 470,
+    "corpus_sessions": 940,
+    "R@5": 0.5383,
+    "MRR": 0.4422,
+    "avg_latency_ms": 218.2,
+    "avg_context_tokens": 374.4
+  },
+  "by_category": {
+    "temporal-reasoning": {
+      "n": 127,
+      "R@5": 0.4488,
+      "MRR": 0.3361
+    },
+    "multi-session": {
+      "n": 121,
+      "R@5": 0.6529,
+      "MRR": 0.5182
+    },
+    "knowledge-update": {
+      "n": 72,
+      "R@5": 0.5,
+      "MRR": 0.4241
+    },
+    "single-session-preference": {
+      "n": 30,
+      "R@5": 0.3,
+      "MRR": 0.2244
+    },
+    "single-session-assistant": {
+      "n": 56,
+      "R@5": 0.8214,
+      "MRR": 0.7961
+    },
+    "single-session-user": {
+      "n": 64,
+      "R@5": 0.4062,
+      "MRR": 0.3216
+    }
+  },
+  "source": "/private/tmp/claude-501/-Users-luismiguel-Desktop-AI-engram/0ad17d4a-58f0-499b-bfe7-060883f57eec/scratchpad/longmemeval_oracle.json"
+}

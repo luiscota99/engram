@@ -30,6 +30,13 @@ AI assistants are brilliant but stateless. They forget every lesson learned as s
 
 Architecture decisions are documented in [`docs/decisions/`](docs/decisions/).
 
+**Measured, not vibes:** Engram publishes reproducible numbers. On its home domain
+(labeled real-corpus eval): **R@5 = 1.00 at 60–120 ms, ~560 context tokens/query**.
+On the out-of-domain **LongMemEval oracle** (940 chit-chat sessions, retrieval-only,
+fully local 274 MB embedder, no LLM): **session-level R@5 = 0.538 at 218 ms,
+374 tokens/query** — with per-category numbers and honest comparability caveats in
+[`benchmarks/BENCHMARKS.md`](benchmarks/BENCHMARKS.md).
+
 ## Architecture
 
 Engram uses a hybrid search engine combining **SQLite FTS5** (lexical) and **sqlite-vec** (semantic) to retrieve relevant context.
@@ -56,7 +63,9 @@ graph TD
     end
 ```
 
-**How clients connect:** **Cursor** (and other MCP-capable IDEs) call Engram through the **MCP server** (`memory_search`, `memory_add`, `memory_auto_extract`, `memory_llm_status`, etc.). **Antigravity** has no Engram MCP in the default flow—the agent runs the same operations via the **`engram` CLI** on your `PATH` (see bootstrapped `.antigravity/instructions.md`). Both paths hit the same search engine and database at `~/.engram/memory.db` by default. LLM-powered features (audit, GC scoring, extract, merge) are optional and degrade gracefully when no backend is reachable.
+**How clients connect:** **Cursor** (and other MCP-capable IDEs) call Engram through the **MCP server** (`memory_search`, `memory_add`, `memory_auto_extract`, `memory_llm_status`, etc.). **Antigravity** has no Engram MCP in the default flow—the agent runs the same operations via the **`engram` CLI** on your `PATH` (see bootstrapped `.antigravity/instructions.md`). Both paths hit the same search engine and database at `~/.engram/memory.db` by default. **Claude Code** can use either path: run `engram claude-skill` to install a personal skill (`~/.claude/skills/engram-memory/`) that teaches the agent to search before non-trivial tasks and capture lessons afterward, or register the MCP server directly. LLM-powered features (audit, GC scoring, extract, merge) are optional and degrade gracefully when no backend is reachable.
+
+**Embedding backends:** local **Ollama** by default (`OLLAMA_HOST`); set `ENGRAM_EMBED_URL` to any OpenAI-compatible `/v1/embeddings` endpoint (`ENGRAM_EMBED_API_KEY` for auth), or to `disabled` for lexical-only search. Models with a different output dimension are supported — `engram migrate-embeddings --target-model <model>` probes the dimension, rebuilds the vector table if needed, and re-embeds from FTS content. All environment variables are documented in `src/config.py`.
 
 ## Global CLI (PATH)
 
@@ -78,6 +87,15 @@ The easiest way to get started is using the unified setup script:
 git clone https://github.com/luiscota99/engram.git
 cd engram
 bash scripts/setup.sh
+```
+
+Then wire Engram into every agent tool on your machine in one step:
+
+```bash
+engram install        # detects Cursor / Claude Code / Antigravity and configures each
+```
+
+```bash
 ```
 
 This script will:
