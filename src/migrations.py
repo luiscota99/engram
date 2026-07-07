@@ -322,6 +322,23 @@ MIGRATIONS = {
         # l2_normalize. Pure rescaling: no re-embedding required.
         lambda conn: _normalize_vec_memory(conn),
     ],
+    13: [
+        """CREATE TABLE IF NOT EXISTS reflexes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL,
+            script TEXT NOT NULL,
+            interpreter TEXT NOT NULL DEFAULT 'bash',
+            params_schema TEXT,
+            approved_at TEXT,
+            approved_hash TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            run_count INTEGER DEFAULT 0,
+            last_run_at TEXT,
+            last_status TEXT
+        );""",
+    ],
 }
 
 
@@ -362,6 +379,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    13: [
+        "DROP TABLE IF EXISTS reflexes;",
+    ],
     12: [
         # Normalization is not reversible (original norms were discarded), and
         # doesn't need to be: unit vectors rank identically for cosine use.

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -314,6 +314,25 @@ CREATE TABLE IF NOT EXISTS consolidation_state (
     key TEXT PRIMARY KEY,
     fingerprint TEXT NOT NULL,
     updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Reflexes: skills promoted to executable, human-approved scripts (schema v13)
+-- A reflex is a proven workflow compiled to a script: agents invoke it as an
+-- MCP tool instead of re-reasoning through the workflow text each time.
+CREATE TABLE IF NOT EXISTS reflexes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL,
+    script TEXT NOT NULL,
+    interpreter TEXT NOT NULL DEFAULT 'bash',
+    params_schema TEXT,
+    approved_at TEXT,
+    approved_hash TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    run_count INTEGER DEFAULT 0,
+    last_run_at TEXT,
+    last_status TEXT
 );
 
 -- Temporal facts: supersession/invalidation history (schema v11)

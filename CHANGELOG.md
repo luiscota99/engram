@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Reflexes (experimental)** — proven skills can be promoted to executable, human-approved scripts that agents invoke as MCP tools (`reflex_<name>`) instead of re-reasoning through the workflow text each call (~50 tokens vs thousands, deterministic). Lifecycle: `engram promote <skill_id>` drafts a script (LLM-assisted or template), a human reviews and runs `engram reflex approve <id>` (approval pins the script hash — later edits un-approve it), and approved reflexes appear in `tools/list` across every MCP client. Params are passed as `PARAM_<KEY>` env vars, never interpolated into the script; unapproved or tampered scripts refuse to run. Schema v13 adds the `reflexes` table.
 - `engram bootstrap --omit-project-integration` and sentinel file `.omit-agent-integration` (project root) to skip Cursor rules + Antigravity `instructions.md` while still initializing the database and MCP when applicable.
 - README guidance on explicitly asking for retrieval (Agent Integration).
 - Hybrid search merges semantic vs lexical rankings with reciprocal rank fusion (RRF); FTS query tokenization aligns with BM25/ranking tokenizer; tests in `tests/test_rrf.py`.

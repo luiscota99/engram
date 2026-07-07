@@ -19,7 +19,7 @@ from src.search import search
 
 
 def test_schema_version_is_current():
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
 
 
 def test_pin_and_search_prepend(test_db):

@@ -44,6 +44,7 @@ from .commands.memory import (
     cmd_suggest_capture,
     cmd_suggest_consolidate,
 )
+from .commands.reflex import cmd_promote, cmd_reflex
 from .commands.session import (
     cmd_get_role,
     cmd_get_session,
@@ -350,6 +351,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_icm.add_argument("--dir", help="Claude home to scan (default: ~/.claude)")
     p_icm.set_defaults(func=cmd_import_claude_memories)
+
+    # ── Reflexes (proven skills → executable, approved scripts) ──────
+    p_promote = sub.add_parser("promote", help="Draft a reflex script from a proven skill")
+    p_promote.add_argument("skill_id", help="Skill id to promote")
+    p_promote.set_defaults(func=cmd_promote)
+
+    p_reflex = sub.add_parser("reflex", help="Manage reflexes (list / approve / run)")
+    reflex_sub = p_reflex.add_subparsers(dest="action", required=True)
+    reflex_sub.add_parser("list", help="List reflexes and their approval/run state")
+    p_rapp = reflex_sub.add_parser("approve", help="Approve a drafted reflex (pins its hash)")
+    p_rapp.add_argument("id", help="Reflex id")
+    p_rrun = reflex_sub.add_parser("run", help="Run an approved reflex")
+    p_rrun.add_argument("id", help="Reflex id")
+    p_rrun.add_argument("--param", action="append", help="key=value (exported as PARAM_KEY)")
+    p_reflex.set_defaults(func=cmd_reflex)
 
     p_seed = sub.add_parser("seed", help="Seed with historical data")
     p_seed.set_defaults(func=cmd_seed)

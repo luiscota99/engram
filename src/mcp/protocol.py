@@ -134,14 +134,28 @@ def handle_request(msg: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
 
     if method == "tools/list":
-        return make_response(req_id, {"tools": TOOLS})
+        # Static tools plus any approved reflexes, exposed as first-class
+        # `reflex_<name>` tools so agents invoke proven workflows deterministically.
+        tools = list(TOOLS)
+        try:
+            from src.reflex import reflex_tools_for_mcp
+
+            tools.extend(reflex_tools_for_mcp())
+        except Exception:
+            logger.debug("reflex tool listing skipped", exc_info=True)
+        return make_response(req_id, {"tools": tools})
 
     if method == "tools/call":
         tool_name = params.get("name", "")
         tool_args = params.get("arguments", {})
 
         handler = TOOL_HANDLERS.get(tool_name)
-        if not handler:
+        if handler is None and tool_name.startswith("reflex_"):
+            from src.reflex import handle_reflex_call
+
+            handler = lambda a, _n=tool_name: handle_reflex_call(_n, a)  # noqa: E731
+
+        if handler is None:
             return make_error(req_id, -32601, f"Unknown tool: {tool_name}")
 
         try:
