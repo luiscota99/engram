@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from src.database import (
     SCHEMA_VERSION,
     check_duplicate_before_add,
@@ -10,7 +12,7 @@ from src.database import (
     pin_item,
     unpin_item,
 )
-from src.maintenance import find_consolidation_candidates, run_gc
+from src.maintenance import find_consolidation_candidates, run_gc, run_sleep
 from src.prompt_security import wrap_untrusted_text
 from src.ranking import calculate_utility_score
 from src.search import search
@@ -102,3 +104,84 @@ def test_consolidation_fingerprint_skip(test_db):
     clusters2, reason2 = find_consolidation_candidates(db_path=test_db["path"])
     assert reason2 == "unchanged"
     assert clusters2 == []
+
+
+def test_run_sleep_empty_db_reports_zero_clusters(test_db):
+    # Regression: the (clusters, skip_reason) tuple was measured with len(),
+    # so an empty DB reported clusters_found == 2.
+    summary = run_sleep(dry_run=True, db_path=test_db["path"])
+    assert summary["clusters_found"] == 0
+    assert summary["items_invalidated"] == 0
+
+
+def test_run_sleep_consolidates_cluster(test_db):
+    conn = test_db["conn"]
+    conn.execute(
+        "INSERT INTO mistakes (date, context, mistake, fix) VALUES ('2026-01-01', 'ctx', 'dup a', 'fix')"
+    )
+    conn.execute(
+        "INSERT INTO mistakes (date, context, mistake, fix) VALUES ('2026-01-01', 'ctx', 'dup b', 'fix')"
+    )
+    index_in_fts(conn, "mistake", 1, "dup a", "duplicate mistake", [])
+    index_in_fts(conn, "mistake", 2, "dup b", "duplicate mistake", [])
+    conn.commit()
+
+    fake_cluster = {
+        "item_type": "mistake",
+        "cluster_size": 2,
+        "avg_similarity": 0.95,
+        "items": [
+            {"item_type": "mistake", "item_id": 1, "title": "dup a"},
+            {"item_type": "mistake", "item_id": 2, "title": "dup b"},
+        ],
+    }
+    with patch(
+        "src.maintenance.find_consolidation_candidates",
+        return_value=([fake_cluster], None),
+    ):
+        summary = run_sleep(dry_run=False, db_path=test_db["path"])
+
+    assert summary["clusters_found"] == 1
+    assert summary["items_invalidated"] == 1
+
+
+def test_health_report_capture_reuse_metric(test_db):
+    from src.maintenance import run_health_check
+
+    conn = test_db["conn"]
+    # Two old memories: one reused, one never touched; one too-recent memory.
+    conn.execute(
+        "INSERT INTO mistakes (date, context, mistake, fix, usage_count, created_at) "
+        "VALUES ('2026-01-01', 'c', 'reused one', 'f', 3, '2026-01-01')"
+    )
+    conn.execute(
+        "INSERT INTO mistakes (date, context, mistake, fix, usage_count, created_at) "
+        "VALUES ('2026-01-01', 'c', 'never used', 'f', 0, '2026-01-01')"
+    )
+    conn.execute(
+        "INSERT INTO mistakes (date, context, mistake, fix, usage_count, created_at) "
+        "VALUES ('2026-07-01', 'c', 'too recent', 'f', 0, datetime('now'))"
+    )
+    conn.commit()
+
+    report = run_health_check(db_path=test_db["path"])
+    cr = report["capture_reuse"]
+    assert cr["eligible_30d_plus"] == 2
+    assert cr["reused"] == 1
+    assert cr["reuse_rate"] == 0.5
+    assert report["items"]["mistake"]["reuse_rate_30d_plus"] == 0.5
+
+
+def test_health_recommends_on_low_reuse(test_db):
+    from src.maintenance import run_health_check
+
+    conn = test_db["conn"]
+    for i in range(12):
+        conn.execute(
+            "INSERT INTO mistakes (date, context, mistake, fix, usage_count, created_at) "
+            f"VALUES ('2026-01-01', 'c', 'stale {i}', 'f', 0, '2026-01-01')"
+        )
+    conn.commit()
+
+    report = run_health_check(db_path=test_db["path"])
+    assert any("reused" in r for r in report["recommendations"])

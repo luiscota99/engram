@@ -178,3 +178,49 @@ def test_migrations_v1_to_schema_version(migration_db):
         assert "superseded_by" in mistake_cols  # v11
     finally:
         conn.close()
+
+
+def _tables_and_columns(conn) -> dict:
+    """Map of table name -> set of column names (user tables only)."""
+    tables = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        if not row["name"].startswith("sqlite_")
+        and not row["name"].startswith("memory_fts_")   # FTS5 shadow tables
+        and not row["name"].startswith("vec_memory_")   # vec0 shadow tables
+        and row["name"] != "_test_migration_v2"          # migration self-test artifact
+    }
+    return {
+        t: {row["name"] for row in conn.execute(f"PRAGMA table_info({t})").fetchall()}
+        for t in tables
+    }
+
+
+def test_fresh_schema_matches_migrated_schema(migration_db, tmp_path):
+    """Regression: v11 added memory_facts + superseded_by via migration only,
+    so fresh databases crashed on memory_invalidate. Baseline SCHEMA_SQL must
+    stay in lockstep with the migration chain."""
+    from src.database import init_db
+
+    conn = _open_conn(migration_db)
+    try:
+        run_migrations(conn, 1, SCHEMA_VERSION)
+        conn.commit()
+        migrated = _tables_and_columns(conn)
+    finally:
+        conn.close()
+
+    fresh_path = str(tmp_path / "fresh.db")
+    init_db(fresh_path)
+    fresh_conn = _open_conn(fresh_path)
+    try:
+        fresh = _tables_and_columns(fresh_conn)
+    finally:
+        fresh_conn.close()
+
+    missing_tables = set(migrated) - set(fresh)
+    assert not missing_tables, f"Fresh DB is missing tables that migrations create: {missing_tables}"
+
+    for table, cols in migrated.items():
+        missing_cols = cols - fresh[table]
+        assert not missing_cols, f"Fresh DB table {table!r} is missing columns: {missing_cols}"

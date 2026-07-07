@@ -1,11 +1,17 @@
 """
 Performance regression tests for search.
 Ensures search remains fast even with many items (guards against N+1 queries).
+
+The query embedding is stubbed to a fixed vector so the budget measures the
+SQL/ranking path, not Ollama latency (a cold model load can take 800ms+ and
+made this test flaky).
 """
 
 import time
+from unittest.mock import patch
 
 from src.database import index_in_fts, link_tags
+from src.embeddings import VEC_EMBEDDING_DIMENSION
 from src.search import search
 
 
@@ -36,10 +42,12 @@ def test_search_performance_with_many_items(test_db):
     conn.commit()
     assert item_count == 120, f"Expected 120 seeded items, got {item_count}"
 
-    # Time the search
-    start = time.perf_counter()
-    results = search("searchable text", db_path=test_db["path"])
-    elapsed_ms = (time.perf_counter() - start) * 1000
+    # Time the search (embedding stubbed: measure SQL/ranking, not Ollama)
+    fixed_vector = [0.1] * VEC_EMBEDDING_DIMENSION
+    with patch("src.search.embed_text", return_value=fixed_vector):
+        start = time.perf_counter()
+        results = search("searchable text", db_path=test_db["path"])
+        elapsed_ms = (time.perf_counter() - start) * 1000
 
     assert elapsed_ms < 500, f"Search took {elapsed_ms:.0f}ms — exceeds 500ms budget (possible N+1 query)"
     assert len(results) > 0, "Search returned no results"

@@ -10,6 +10,8 @@ data/*.db-wal
 benchmarks/*.db
 benchmarks/*.db-journal
 benchmarks/*.db-wal
+# Generated benchmark run output (results_baseline.json stays tracked)
+benchmarks/longmemeval_results.json
 stress_*.db
 .DS_Store
 *.egg-info/

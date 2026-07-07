@@ -2,10 +2,10 @@
 Database diagnostics and integrity repair tool.
 """
 
-import os
 import urllib.error
 import urllib.request
 
+from . import config
 from .database import get_connection, rebuild_fts
 
 
@@ -38,8 +38,9 @@ def run_diagnostics(repair=False):
             issues_found += len(orphans)
             print(fmt_error(f"Found {len(orphans)} orphaned tags (not linked to any memory)."))
             if repair:
-                ids = [str(r["id"]) for r in orphans]
-                conn.execute(f"DELETE FROM tags WHERE id IN ({','.join(ids)})")
+                ids = [r["id"] for r in orphans]
+                placeholders = ",".join("?" * len(ids))
+                conn.execute(f"DELETE FROM tags WHERE id IN ({placeholders})", ids)
                 issues_fixed += len(orphans)
                 print("  ✓ Repair: Deleted orphaned tags.")
         else:
@@ -107,7 +108,7 @@ def run_diagnostics(repair=False):
             print(fmt_dim("- Vectors: sqlite-vec not active, skipping semantic integrity check."))
 
         # 4. Semantic Engine Health (Ollama)
-        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        ollama_host = config.ollama_host()
         ollama_available = False
         try:
             req = urllib.request.Request(ollama_host, method="GET")

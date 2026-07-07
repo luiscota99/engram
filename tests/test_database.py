@@ -37,3 +37,43 @@ def test_fts_indexing_and_search(test_db):
     assert len(results) == 1
     assert results[0]["title"] == "Testing FTS"
     assert "test-tag" in results[0]["tags"]
+
+
+def test_migrate_embeddings_to_new_dimension(test_db, monkeypatch):
+    """Switching to a model with a different output dim rebuilds vec_memory."""
+    import json
+    from unittest.mock import patch
+
+    from src.database import get_connection, get_vec_dimension, migrate_embeddings_to_model
+
+    monkeypatch.setenv("ENGRAM_EMBED_MODEL", "nomic-embed-text")
+    conn = test_db["conn"]
+    conn.execute(
+        "INSERT INTO skills (name, domain, trigger_desc, workflow) VALUES ('s', 'd', 't', 'w')"
+    )
+    index_in_fts(conn, "skill", 1, "s", "t w", [])
+    conn.commit()
+
+    assert get_vec_dimension(db_path=test_db["path"]) == 768
+
+    with patch("src.embeddings.embed_text", return_value=[0.1] * 512), \
+         patch("src.database.embed_text", return_value=[0.1] * 512):
+        result = migrate_embeddings_to_model("custom-512-model", db_path=test_db["path"])
+
+    assert result["ok"] is True
+    assert result["dimension"] == 512
+    assert result["vec_table_rebuilt"] is True
+    assert get_vec_dimension(db_path=test_db["path"]) == 512
+
+    # The rebuilt table accepts 512-dim vectors
+    with get_connection(test_db["path"]) as c:
+        c.execute(
+            "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
+            (999, json.dumps([0.2] * 512)),
+        )
+
+
+def test_get_vec_dimension_default(test_db):
+    from src.database import get_vec_dimension
+
+    assert get_vec_dimension(db_path=test_db["path"]) == 768

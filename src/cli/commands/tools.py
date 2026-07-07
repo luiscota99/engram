@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 
+from ... import config
 from ...database import get_connection
 from ..fmt import fmt_header
 
@@ -52,7 +53,7 @@ def cmd_retrieval_benchmark(args):
 
 def cmd_run(args):
     prompt_text = " ".join(args.prompt)
-    claw_path = args.claw_path or os.environ.get("CLAW_PATH")
+    claw_path = args.claw_path or config.claw_path()
 
     if not claw_path:
         claw_path = shutil.which("claw")

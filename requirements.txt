@@ -1,2 +1,2 @@
-sqlite-vec>=0.1.6
+sqlite-vec>=0.1.9
 sqlean-py>=3.45.1

@@ -12,6 +12,8 @@ import os
 import time
 import urllib.request
 
+from . import config
+
 SUMMARIZE_PROMPT = """Analyze this source file and return a JSON object with these exact keys:
 - "summary": 1-2 sentence description of what this file does and its role in the project
 - "exports": array of strings listing key functions, classes, or constants exported (max 10)
@@ -44,7 +46,7 @@ def _detect_language(file_path: str) -> str:
 
 def _call_ollama(prompt: str, model: str) -> str | None:
     """Send a prompt to Ollama and return the raw response string."""
-    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    base_url = config.ollama_host()
     url = f"{base_url}/api/generate"
     payload = json.dumps({
         "model": model,
@@ -99,7 +101,7 @@ def summarize_file(
     Returns a dict with keys: summary, exports, dependencies, complexity.
     Returns None on failure (caller should use a fallback placeholder).
     """
-    ollama_model = model or os.environ.get("ENGRAM_LLM_MODEL", "llama3.2")
+    ollama_model = model or config.llm_model()
     language = _detect_language(file_path)
 
     try:
@@ -170,7 +172,7 @@ def summarize_files_batch(
 
 def ollama_available(model: str | None = None) -> bool:
     """Return True if Ollama is reachable."""
-    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    base_url = config.ollama_host()
     try:
         with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2) as r:
             return r.status == 200

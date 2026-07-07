@@ -1,9 +1,12 @@
 """Temporal invalidation — supersede stale memory entries."""
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 from .database import get_connection, index_in_fts, table_for
+
+logger = logging.getLogger(__name__)
 
 INVALIDATABLE_TYPES = frozenset({"mistake", "pattern", "skill"})
 
@@ -34,7 +37,12 @@ def invalidate_memory(
                 (superseded_by, item_id),
             )
         except Exception:
-            pass
+            # Supersession still proceeds via the [SUPERSEDED] title below,
+            # but losing the link is worth surfacing — it hid a missing-column
+            # bug on fresh installs once already.
+            logger.warning(
+                "Failed to set %s.superseded_by for id=%s", table, item_id, exc_info=True
+            )
 
         title_col = {
             "mistake": "mistake",

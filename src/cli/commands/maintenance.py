@@ -50,8 +50,22 @@ def cmd_health(args):
         if total == 0:
             continue
         gc = stats["unused_180_plus_days"]
-        print(f"  {fmt_type(itype):30s} total:{total:4d}  new(30d):{stats['added_last_30_days']:3d}  gc-candidates:{gc:3d}")
+        rr = stats.get("reuse_rate_30d_plus")
+        rr_str = f"  reuse:{rr:.0%}" if rr is not None else ""
+        print(f"  {fmt_type(itype):30s} total:{total:4d}  new(30d):{stats['added_last_30_days']:3d}  gc-candidates:{gc:3d}{rr_str}")
     print()
+
+    cr = report.get("capture_reuse", {})
+    if cr.get("eligible_30d_plus"):
+        rate = cr.get("reuse_rate")
+        rate_str = f"{rate:.0%}" if rate is not None else "n/a"
+        print(fmt_bold("Capture → Reuse:"))
+        print(
+            f"  {cr['reused']}/{cr['eligible_30d_plus']} memories captured 30+ days ago "
+            f"were later used ({rate_str})"
+        )
+        print(fmt_dim("  Reuse is the capture-quality signal: high = you're saving the right things."))
+        print()
 
     emb = report["embeddings"]
     total_emb = emb.get("total", 0)

@@ -20,6 +20,9 @@ import logging
 import os
 import time
 import urllib.request
+from collections import OrderedDict
+
+from . import config
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,14 @@ VEC_EMBEDDING_DIMENSION = 768
 
 PRIMARY_EMBEDDING_MODEL_ENV = "ENGRAM_EMBED_MODEL"
 LEGACY_EMBEDDING_MODEL_ENV = "ENGRAM_EMBEDDING_MODEL"
+
+# Embedding backend selection:
+#   ENGRAM_EMBED_URL unset      → Ollama at OLLAMA_HOST (default)
+#   ENGRAM_EMBED_URL=disabled   → embeddings off (lexical-only search)
+#   ENGRAM_EMBED_URL=<url>      → OpenAI-compatible /v1/embeddings endpoint
+#                                 (auth via ENGRAM_EMBED_API_KEY if set)
+EMBED_URL_ENV = "ENGRAM_EMBED_URL"
+EMBED_API_KEY_ENV = "ENGRAM_EMBED_API_KEY"
 
 # Per-model context window limits (in characters, ~4 chars/token).
 # The truncation guard keeps text well within each model's token limit.
@@ -69,6 +80,12 @@ SUPPORTED_MODELS: dict[str, dict] = {
 _DEFAULT_MODEL = "nomic-embed-text"
 _EMBED_TIMEOUT = 30  # seconds
 
+# In-process LRU cache of (model, text) -> embedding. The HTTP round-trip to
+# Ollama dominates search latency (~85% in profiling), so repeated queries —
+# common in a long-lived MCP server session — must not re-embed.
+EMBED_CACHE_MAX = 256
+_embed_cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
+
 # Dead-host cooldown: avoid hammering a down Ollama instance after repeated failures.
 DEAD_HOST_COOLDOWN = 20.0
 _HOST_FAIL_THRESHOLD = 2
@@ -109,15 +126,42 @@ def _mark_host_success(base_url: str) -> None:
     _dead_hosts.pop(key, None)
 
 
+def resolve_embed_backend() -> tuple[str, str]:
+    """Return ``(kind, base_url)`` where kind is ``ollama``, ``openai``, or ``disabled``.
+
+    Any non-empty ``ENGRAM_EMBED_URL`` other than the literal ``disabled`` selects
+    the OpenAI-compatible backend at that URL.
+    """
+    url = os.environ.get(EMBED_URL_ENV, "").strip()
+    if url.lower() == "disabled":
+        return "disabled", ""
+    if url:
+        return "openai", url.rstrip("/")
+    return "ollama", config.ollama_host()
+
+
+def _openai_embeddings_endpoint(base_url: str) -> str:
+    """Accept a bare host, a ``.../v1`` base, or a full ``.../embeddings`` URL."""
+    if base_url.endswith("/embeddings"):
+        return base_url
+    if base_url.endswith("/v1"):
+        return f"{base_url}/embeddings"
+    return f"{base_url}/v1/embeddings"
+
+
 def is_embedding_host_available() -> bool:
-    """Return True if the embedding host is not in dead-host cooldown."""
-    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    """Return True if embeddings are enabled and the host is not in dead-host cooldown."""
+    kind, base_url = resolve_embed_backend()
+    if kind == "disabled":
+        return False
     return not _is_host_in_cooldown(base_url)
 
 
 def get_embedding_degradation_reason() -> str | None:
     """Human-readable reason when semantic embeddings are unavailable."""
-    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    kind, base_url = resolve_embed_backend()
+    if kind == "disabled":
+        return "embeddings_disabled (ENGRAM_EMBED_URL=disabled)"
     if _is_host_in_cooldown(base_url):
         return _last_embed_failure_reason or "ollama_host_cooldown"
     return _last_embed_failure_reason
@@ -157,21 +201,25 @@ def expected_dimensions_for_model(model: str) -> int | None:
     return int(meta["dimensions"]) if meta else None
 
 
-def embedding_matches_vec_schema(embedding: list[float], model: str) -> tuple[bool, str | None]:
-    """Return whether *embedding* can be stored in vec_memory (fixed dimension).
+def embedding_matches_vec_schema(
+    embedding: list[float], model: str, expected_dim: int | None = None
+) -> tuple[bool, str | None]:
+    """Return whether *embedding* can be stored in vec_memory.
 
-    Unknown models must still produce vectors of length VEC_EMBEDDING_DIMENSION.
-    Known models whose dimension differs from the schema cannot be stored.
+    ``expected_dim`` is the live vec_memory dimension (``schema_meta.vec_dimension``);
+    it defaults to VEC_EMBEDDING_DIMENSION for databases that predate flexible dims.
+    Known models whose advertised dimension differs from the schema cannot be stored.
     """
+    dim = expected_dim if expected_dim is not None else VEC_EMBEDDING_DIMENSION
     exp = expected_dimensions_for_model(model)
-    if exp is not None and exp != VEC_EMBEDDING_DIMENSION:
+    if exp is not None and exp != dim:
         return False, (
             f"model {model!r} produces {exp}-dim vectors; vec_memory requires "
-            f"{VEC_EMBEDDING_DIMENSION}. Use e.g. nomic-embed-text, or migrate the schema."
+            f"{dim}. Run: engram migrate-embeddings --target-model {model}"
         )
-    if len(embedding) != VEC_EMBEDDING_DIMENSION:
+    if len(embedding) != dim:
         return False, (
-            f"embedding length {len(embedding)} != vec_memory dimension {VEC_EMBEDDING_DIMENSION}"
+            f"embedding length {len(embedding)} != vec_memory dimension {dim}"
             + (f" (model {model!r})" if model else "")
         )
     return True, None
@@ -213,37 +261,70 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
     if not text:
         return None
 
+    kind, base_url = resolve_embed_backend()
+    if kind == "disabled":
+        _last_embed_failure_reason = "embeddings_disabled"
+        return None
+
     active_model = model or _get_model()
     max_chars = _MODEL_CONTEXT.get(active_model, 2000)
 
     if len(text) > max_chars:
         text = text[:max_chars]
 
-    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    cache_key = (active_model, text)
+    cached = _embed_cache.get(cache_key)
+    if cached is not None:
+        _embed_cache.move_to_end(cache_key)
+        return list(cached)
+
     if _is_host_in_cooldown(base_url):
         _last_embed_failure_reason = "ollama_host_cooldown"
         return None
 
-    url = f"{base_url.rstrip('/')}/api/embeddings"
-    data = json.dumps({"model": active_model, "prompt": text}).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if kind == "openai":
+        url = _openai_embeddings_endpoint(base_url)
+        data = json.dumps({"model": active_model, "input": text}).encode("utf-8")
+        api_key = os.environ.get(EMBED_API_KEY_ENV, "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        url = f"{base_url.rstrip('/')}/api/embeddings"
+        data = json.dumps({"model": active_model, "prompt": text}).encode("utf-8")
+
+    req = urllib.request.Request(url, data=data, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=_EMBED_TIMEOUT) as response:
             result = json.loads(response.read().decode())
-            embedding = result.get("embedding")
+            if kind == "openai":
+                items = result.get("data") or []
+                embedding = items[0].get("embedding") if items else None
+            else:
+                embedding = result.get("embedding")
             if embedding:
                 _mark_host_success(base_url)
                 _last_embed_failure_reason = None
+                _embed_cache[cache_key] = list(embedding)
+                _embed_cache.move_to_end(cache_key)
+                while len(_embed_cache) > EMBED_CACHE_MAX:
+                    _embed_cache.popitem(last=False)
             return embedding
     except Exception:
         _mark_host_failure(base_url)
-        _last_embed_failure_reason = "ollama_request_failed"
+        _last_embed_failure_reason = "ollama_request_failed" if kind == "ollama" else "embed_request_failed"
         logger.exception(
-            "Ollama embedding request failed (model=%s, url=%s)",
+            "Embedding request failed (backend=%s, model=%s, url=%s)",
+            kind,
             active_model,
             url,
         )
         return None
+
+
+def clear_embedding_cache() -> None:
+    """Drop all cached embeddings (tests; or after switching Ollama model weights)."""
+    _embed_cache.clear()
 
 
 def get_embedding_model() -> str:

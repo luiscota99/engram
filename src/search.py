@@ -10,6 +10,7 @@ import logging
 import re
 
 from .database import (
+    connection_scope,
     get_connection,
     get_or_create_project,
     get_pinned_items,
@@ -74,7 +75,7 @@ def _get_stale_rowids(conn) -> set:
         return set()
 
 
-def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
+def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None, conn=None):
     """Search vec_memory using KNN vector search.
 
     Requires sqlite_vec extension and a running Ollama instance.
@@ -92,7 +93,7 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None):
             logger.debug("semantic_search unavailable: %s", reason)
         return [], "unavailable"
 
-    with get_connection(db_path) as conn:
+    with connection_scope(conn, db_path) as conn:
         try:
             conditions = []
             params = []
@@ -172,24 +173,26 @@ def search(
     semantic_status = "ok"
     semantic_available = is_embedding_host_available()
 
-    # 0. Auto-detect tags for score boosting only; optional caller tags filter results
-    detected_tags: list[str] = []
-    if query and query.strip():
-        detected_tags = detect_query_tags(query, db_path=db_path)
     filter_tags = list(tags) if tags else []
-
     sem_results: list[dict] = []
     lex_results: list[dict] = []
 
-    # 1. Semantic Search
-    if query and query.strip():
-        sem_results, semantic_status = semantic_search(
-            query, item_type, filter_tags, limit=limit, db_path=db_path
-        )
-        semantic_available = semantic_status == "ok"
-
-    # 2. Lexical FTS5 Search
+    # One connection serves the whole search: tag detection, semantic KNN,
+    # lexical FTS, usage batch, affinities, and pinned items.
     with get_connection(db_path) as conn:
+        # 0. Auto-detect tags for score boosting only; optional caller tags filter results
+        detected_tags: list[str] = []
+        if query and query.strip():
+            detected_tags = detect_query_tags(query, conn=conn)
+
+        # 1. Semantic Search
+        if query and query.strip():
+            sem_results, semantic_status = semantic_search(
+                query, item_type, filter_tags, limit=limit, conn=conn
+            )
+            semantic_available = semantic_status == "ok"
+
+        # 2. Lexical FTS5 Search
         conditions = []
         params = []
         if item_type:
@@ -242,22 +245,21 @@ def search(
 
         stale_rowids = _get_stale_rowids(conn)
 
-    # 2b. Hybrid merge — RRF fusion order, semantic row wins on duplicate key
-    rrf_scores = reciprocal_rank_scores(sem_results, lex_results)
-    sem_map = {result_key(r): r for r in sem_results}
-    lex_map = {result_key(r): r for r in lex_results}
-    ordered_keys = sorted(rrf_scores.keys(), key=lambda kk: rrf_scores[kk], reverse=True)
-    for kk in ordered_keys:
-        if kk in sem_map:
-            results.append(sem_map[kk])
-        else:
-            results.append(lex_map[kk])
+        # 2b. Hybrid merge — RRF fusion order, semantic row wins on duplicate key
+        rrf_scores = reciprocal_rank_scores(sem_results, lex_results)
+        sem_map = {result_key(r): r for r in sem_results}
+        lex_map = {result_key(r): r for r in lex_results}
+        ordered_keys = sorted(rrf_scores.keys(), key=lambda kk: rrf_scores[kk], reverse=True)
+        for kk in ordered_keys:
+            if kk in sem_map:
+                results.append(sem_map[kk])
+            else:
+                results.append(lex_map[kk])
 
-    # 3. Batch-fetch usage_count and last_used_at per type (avoids N+1 queries)
-    usage_counts = {}
-    last_used_map = {}
+        # 3. Batch-fetch usage_count and last_used_at per type (avoids N+1 queries)
+        usage_counts = {}
+        last_used_map = {}
 
-    with get_connection(db_path) as conn:
         for itype in usage_ranked_types():
             table = table_for(itype)
             if not table:
@@ -274,14 +276,17 @@ def search(
                     usage_counts[key] = row["usage_count"] or 0
                     last_used_map[key] = row["last_used_at"]
 
-    # 4. Project affinity
-    affinities = {}
-    if project_path:
-        try:
-            project = get_or_create_project(project_path, db_path=db_path)
-            affinities = get_project_affinities(results, project["id"], db_path=db_path)
-        except Exception:
-            logger.exception("get_or_create_project / project affinity failed")
+        # 4. Project affinity
+        affinities = {}
+        if project_path:
+            try:
+                project = get_or_create_project(project_path, conn=conn)
+                affinities = get_project_affinities(results, project["id"], conn=conn)
+            except Exception:
+                logger.exception("get_or_create_project / project affinity failed")
+
+        # 7. (fetched here to reuse the connection; prepended after ranking below)
+        pinned = get_pinned_items(item_type=item_type, limit=limit, conn=conn)
 
     # 5. Rank using multi-factor scoring (+ RRF hybrid boost)
     results = rank_results(
@@ -300,7 +305,6 @@ def search(
         results = rerank_with_bm25(results, query)
 
     # 7. Prepend pinned items (always-injected core context)
-    pinned = get_pinned_items(item_type=item_type, limit=limit, db_path=db_path)
     if pinned:
         if filter_tags:
             pinned = [

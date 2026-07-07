@@ -11,6 +11,7 @@ Commands:
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta
 
 from .database import (
@@ -21,6 +22,8 @@ from .database import (
     save_consolidation_fingerprint,
 )
 from .item_registry import gc_types, table_for
+
+logger = logging.getLogger(__name__)
 
 # ── Safety guardrails for bulk delete/archive operations ─────────────
 
@@ -160,7 +163,9 @@ def run_gc(
                     delete_item(conn, c["item_type"], c["item_id"])
                     processed += 1
                 except Exception:
-                    pass
+                    logger.warning(
+                        "GC delete failed for %s:%s", c["item_type"], c["item_id"], exc_info=True
+                    )
 
     return {"mode": mode, "candidates": candidates, "processed": processed, "blocked": False}
 
@@ -248,7 +253,7 @@ def find_consolidation_candidates(
                 try:
                     embeddings[er["rowid"]] = _json.loads(er["embedding"])
                 except Exception:
-                    pass
+                    logger.debug("Unparseable embedding for fts_rowid=%s", er["rowid"], exc_info=True)
 
             if len(embeddings) < 2:
                 continue
@@ -897,6 +902,8 @@ def run_health_check(db_path=None) -> dict:
         cutoff_30 = (datetime.now() - timedelta(days=30)).isoformat()
         cutoff_180 = (datetime.now() - timedelta(days=180)).isoformat()
 
+        reuse_eligible_total = 0
+        reuse_reused_total = 0
         for itype, spec in REGISTRY.items():
             if not spec.gc_eligible:
                 continue
@@ -912,14 +919,37 @@ def run_health_check(db_path=None) -> dict:
             most_used = conn.execute(
                 f"SELECT id, usage_count FROM {table} ORDER BY usage_count DESC LIMIT 1"
             ).fetchone()
+            # Capture→reuse: of items old enough to have had a chance (30+ days),
+            # how many were ever retrieved-and-used again?
+            reuse_eligible = conn.execute(
+                f"SELECT COUNT(*) as c FROM {table} WHERE created_at < ?", (cutoff_30,)
+            ).fetchone()["c"]
+            reuse_reused = conn.execute(
+                f"SELECT COUNT(*) as c FROM {table} WHERE created_at < ? AND usage_count > 0",
+                (cutoff_30,),
+            ).fetchone()["c"]
+            reuse_eligible_total += reuse_eligible
+            reuse_reused_total += reuse_reused
             type_stats[itype] = {
                 "total": total,
                 "added_last_30_days": recent,
                 "unused_180_plus_days": unused_180,
                 "most_used_id": most_used["id"] if most_used else None,
                 "most_used_count": most_used["usage_count"] if most_used else 0,
+                "reuse_rate_30d_plus": (
+                    round(reuse_reused / reuse_eligible, 3) if reuse_eligible else None
+                ),
             }
         report["items"] = type_stats
+        report["capture_reuse"] = {
+            "eligible_30d_plus": reuse_eligible_total,
+            "reused": reuse_reused_total,
+            "reuse_rate": (
+                round(reuse_reused_total / reuse_eligible_total, 3)
+                if reuse_eligible_total
+                else None
+            ),
+        }
 
         # Orphaned tags (tags with no item_tags references)
         orphaned_tags = conn.execute(
@@ -982,6 +1012,13 @@ def run_health_check(db_path=None) -> dict:
             f"{report['vec_drift']} FTS entries are missing vector embeddings. "
             f"Run `engram doctor --repair`."
         )
+    cr = report["capture_reuse"]
+    if cr["eligible_30d_plus"] >= 10 and cr["reuse_rate"] is not None and cr["reuse_rate"] < 0.2:
+        recommendations.append(
+            f"Only {cr['reuse_rate']:.0%} of memories captured 30+ days ago were ever reused "
+            f"({cr['reused']}/{cr['eligible_30d_plus']}). Capture fewer, higher-signal entries "
+            f"(`engram suggest-capture`) and prune with `engram gc --archive`."
+        )
 
     report["recommendations"] = recommendations
     return report
@@ -1004,10 +1041,10 @@ def run_sleep(
         "dry_run": dry_run,
     }
 
-    clusters = find_consolidation_candidates(threshold=threshold, db_path=db_path)
+    clusters, _skip_reason = find_consolidation_candidates(threshold=threshold, db_path=db_path)
     summary["clusters_found"] = len(clusters)
 
-    if not dry_run and len(clusters) > 1:
+    if not dry_run and clusters:
         for cluster in clusters[:5]:
             items = cluster.get("items", [])
             if len(items) < 2:

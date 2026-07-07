@@ -7,6 +7,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
+from ... import config
 from ...database import (
     check_duplicate_before_add,
     delete_item,
@@ -448,12 +449,15 @@ def cmd_consolidate(args):
 
 
 def cmd_suggest_consolidate(args):
-    clusters = find_consolidation_candidates(
+    clusters, skip_reason = find_consolidation_candidates(
         threshold=args.threshold,
         item_types=[args.type] if args.type else None,
     )
     if not clusters:
-        print(fmt_dim("No consolidation candidates found at this similarity threshold."))
+        if skip_reason == "unchanged":
+            print(fmt_dim("Memory unchanged since last scan — no new candidates."))
+        else:
+            print(fmt_dim("No consolidation candidates found at this similarity threshold."))
         return
     total = sum(c["cluster_size"] for c in clusters[:args.limit])
     print(fmt_header(f"Consolidation Candidates (similarity ≥ {args.threshold}):\n"))
@@ -498,9 +502,7 @@ def cmd_session_help(args):
     if score < 0 or score > 3:
         print("Error: --score must be between 0 and 3.", file=sys.stderr)
         sys.exit(1)
-    log_path = os.path.expanduser(
-        os.environ.get("ENGRAM_SESSION_HELP_LOG", "~/.engram/session-help.jsonl")
-    )
+    log_path = config.session_help_log_path()
     parent = os.path.dirname(os.path.abspath(log_path))
     if parent:
         try:

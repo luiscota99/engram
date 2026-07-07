@@ -11,6 +11,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from . import config
+
 
 def append_search_audit(
     *,
@@ -23,7 +25,7 @@ def append_search_audit(
     limit: int,
     project_path: str | None,
 ) -> None:
-    path = os.environ.get("ENGRAM_AUDIT_LOG")
+    path = config.audit_log_path()
     if not path:
         return
     top = [

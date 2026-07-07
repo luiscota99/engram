@@ -12,6 +12,8 @@ import os
 import urllib.error
 import urllib.request
 
+from . import config
+
 logger = logging.getLogger(__name__)
 
 _LLM_TIMEOUT = 60
@@ -26,12 +28,12 @@ _TASK_MODEL_ENV: dict[str, str] = {
 
 
 def _ollama_base_url() -> str:
-    return os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    return config.ollama_host()
 
 
 def resolve_llm_base_url() -> str:
     """Return the OpenAI-compatible chat API base URL."""
-    return os.environ.get("ENGRAM_LLM_BASE_URL", f"{_ollama_base_url()}/v1").rstrip("/")
+    return config.llm_base_url()
 
 
 def resolve_llm_model(model: str | None = None, task: str | None = None) -> str:
@@ -44,7 +46,7 @@ def resolve_llm_model(model: str | None = None, task: str | None = None) -> str:
             override = os.environ.get(env_key, "").strip()
             if override:
                 return override
-    return os.environ.get("ENGRAM_LLM_MODEL", _DEFAULT_MODEL)
+    return config.llm_model()
 
 
 def _is_ollama_chat_backend(base_url: str) -> bool:
@@ -64,7 +66,7 @@ def is_llm_available(timeout: float = 2.0) -> bool:
         except (urllib.error.URLError, TimeoutError, OSError):
             return False
 
-    api_key = os.environ.get("ENGRAM_LLM_API_KEY", "").strip()
+    api_key = config.llm_api_key()
     for path in ("/models", ""):
         url = f"{base}{path}" if path else base
         req = urllib.request.Request(url, method="GET")
@@ -95,7 +97,7 @@ def get_llm_status() -> dict:
         "extract_model": resolve_llm_model(task="extract"),
         "available": available,
         "tasks_enabled": tasks_enabled,
-        "api_key_set": bool(os.environ.get("ENGRAM_LLM_API_KEY", "").strip()),
+        "api_key_set": bool(config.llm_api_key()),
     }
 
 
@@ -140,7 +142,7 @@ def call_chat_completion(
 ) -> str | None:
     """Call OpenAI-compatible ``/v1/chat/completions`` (Ollama, OpenRouter, etc.)."""
     base = resolve_llm_base_url()
-    api_key = os.environ.get("ENGRAM_LLM_API_KEY", "").strip()
+    api_key = config.llm_api_key()
     chat_model = resolve_llm_model(model, task=task)
     url = f"{base}/chat/completions"
     payload = {

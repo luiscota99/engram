@@ -123,7 +123,9 @@ def extract_tags(query: str) -> list[str]:
     return sorted(detected)
 
 
-def filter_to_existing_tags(candidate_tags: list[str], db_path: str | None = None) -> list[str]:
+def filter_to_existing_tags(
+    candidate_tags: list[str], db_path: str | None = None, conn=None
+) -> list[str]:
     """Filter candidate_tags to only those present in the tags table.
 
     Keeps the detected tag list relevant to the user's actual memory, avoiding
@@ -131,9 +133,9 @@ def filter_to_existing_tags(candidate_tags: list[str], db_path: str | None = Non
     """
     if not candidate_tags:
         return []
-    from .database import get_connection
+    from .database import connection_scope
     try:
-        with get_connection(db_path) as conn:
+        with connection_scope(conn, db_path) as conn:
             placeholders = ",".join("?" * len(candidate_tags))
             rows = conn.execute(
                 f"SELECT LOWER(name) as name FROM tags WHERE LOWER(name) IN ({placeholders})",
@@ -144,11 +146,11 @@ def filter_to_existing_tags(candidate_tags: list[str], db_path: str | None = Non
         return []
 
 
-def detect_query_tags(query: str, db_path: str | None = None) -> list[str]:
+def detect_query_tags(query: str, db_path: str | None = None, conn=None) -> list[str]:
     """Full pipeline: extract candidates from query, then filter to existing DB tags.
 
     This is the main entry point used by ``src/search.py``.
     Returns a list of existing tag names that should boost results.
     """
     candidates = extract_tags(query)
-    return filter_to_existing_tags(candidates, db_path=db_path)
+    return filter_to_existing_tags(candidates, db_path=db_path, conn=conn)

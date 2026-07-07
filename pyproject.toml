@@ -13,7 +13,7 @@ authors = [
     { name = "Luis Miguel Cota" }
 ]
 dependencies = [
-    "sqlite-vec>=0.1.6",
+    "sqlite-vec>=0.1.9",
     "sqlean-py>=3.45.1"
 ]
 
@@ -45,6 +45,7 @@ ignore = ["E501"]
 pythonVersion = "3.9"
 typeCheckingMode = "basic"
 include = [
+    "src/config.py",
     "src/embeddings.py",
     "src/database.py",
     "src/search.py",

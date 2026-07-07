@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS mistakes (
     conversation_id TEXT,
     usage_count INTEGER DEFAULT 0,
     last_used_at TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    superseded_by INTEGER
 );
 
 -- Patterns: recurring issue types with standard solutions
@@ -61,7 +62,8 @@ CREATE TABLE IF NOT EXISTS patterns (
     standard_fix TEXT NOT NULL,
     usage_count INTEGER DEFAULT 0,
     last_used_at TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    superseded_by INTEGER
 );
 
 -- Track where each pattern has been observed
@@ -86,7 +88,8 @@ CREATE TABLE IF NOT EXISTS skills (
     usage_count INTEGER DEFAULT 0,
     last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    superseded_by INTEGER
 );
 
 -- Conversations: structured index of past sessions (Legacy, superseded by sessions)
@@ -232,6 +235,7 @@ CREATE TABLE IF NOT EXISTS codebase_knowledge (
     exports TEXT, -- JSON array of functions/classes
     dependencies TEXT, -- JSON array of imports/dependencies
     last_indexed_at TEXT DEFAULT (datetime('now')),
+    file_mtime REAL,
     UNIQUE(project_id, file_path)
 );
 
@@ -309,6 +313,19 @@ CREATE TABLE IF NOT EXISTS consolidation_state (
     fingerprint TEXT NOT NULL,
     updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Temporal facts: supersession/invalidation history (schema v11)
+CREATE TABLE IF NOT EXISTS memory_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject TEXT NOT NULL,
+    predicate TEXT NOT NULL,
+    object TEXT NOT NULL,
+    valid_from TEXT NOT NULL DEFAULT (date('now')),
+    valid_until TEXT,
+    source_type TEXT,
+    source_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_memory_facts_subject ON memory_facts(subject);
 """
 
 
@@ -369,6 +386,21 @@ def get_connection(db_path=None):
         raise
     finally:
         conn.close()
+
+
+@contextmanager
+def connection_scope(conn=None, db_path=None):
+    """Yield *conn* when the caller already holds one (caller keeps ownership of
+    commit/close), otherwise open a fresh ``get_connection``.
+
+    Lets multi-step operations share a single connection instead of paying the
+    per-connection setup (PRAGMAs, extension load, schema check) several times.
+    """
+    if conn is not None:
+        yield conn
+    else:
+        with get_connection(db_path) as fresh:
+            yield fresh
 
 
 def init_db(db_path=None):
@@ -455,7 +487,9 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
     embedding = embed_text(full_text)
 
     if embedding and sqlite_vec is not None:
-        ok_vec, vec_err = embedding_matches_vec_schema(embedding, embedding_model)
+        ok_vec, vec_err = embedding_matches_vec_schema(
+            embedding, embedding_model, expected_dim=get_vec_dimension(conn=conn)
+        )
         if ok_vec:
             conn.execute(
                 "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
@@ -588,7 +622,7 @@ def record_usage(item_type, item_id, success=True, db_path=None):
     return True
 
 
-def get_or_create_project(project_path, name=None, db_path=None):
+def get_or_create_project(project_path, name=None, db_path=None, conn=None):
     """Get or create a project entry from its filesystem path.
     Uses the git root if available, otherwise the given path.
     """
@@ -606,17 +640,17 @@ def get_or_create_project(project_path, name=None, db_path=None):
         if result.returncode == 0:
             project_path = result.stdout.strip()
     except Exception:
-        pass
+        logger.debug("git root resolution failed for %s; using path as-is", project_path, exc_info=True)
 
     # Derive name from path basename if not provided
     if not name:
         name = os.path.basename(project_path)
 
-    with get_connection(db_path) as conn:
-        row = conn.execute("SELECT * FROM projects WHERE path = ?", (project_path,)).fetchone()
+    with connection_scope(conn, db_path) as c:
+        row = c.execute("SELECT * FROM projects WHERE path = ?", (project_path,)).fetchone()
         if row:
             return dict(row)
-        cursor = conn.execute(
+        cursor = c.execute(
             "INSERT INTO projects (name, path) VALUES (?, ?)", (name, project_path)
         )
         return {"id": cursor.lastrowid, "name": name, "path": project_path}
@@ -632,7 +666,7 @@ def link_item_to_project(item_type, item_id, project_id, affinity="used", db_pat
     return True
 
 
-def get_project_affinities(results, project_id, db_path=None):
+def get_project_affinities(results, project_id, db_path=None, conn=None):
     """Batch fetch project affinities for a list of search results.
     Returns dict of (item_type, item_id) -> affinity string.
     """
@@ -647,7 +681,7 @@ def get_project_affinities(results, project_id, db_path=None):
         params.extend([r["item_type"], int(r["item_id"]), project_id])
 
     affinities = {}
-    with get_connection(db_path) as conn:
+    with connection_scope(conn, db_path) as conn:
         rows = conn.execute(
             f"""SELECT item_type, item_id, affinity
                 FROM item_projects
@@ -674,7 +708,9 @@ def find_similar(content: str, item_type: str | None = None, threshold: float = 
         return []
 
     model = resolve_embedding_model_name()
-    ok_vec, vec_err = embedding_matches_vec_schema(embedding, model)
+    ok_vec, vec_err = embedding_matches_vec_schema(
+        embedding, model, expected_dim=get_vec_dimension(db_path=db_path)
+    )
     if not ok_vec:
         logger.warning("find_similar: %s", vec_err)
         return []
@@ -796,7 +832,9 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
             embedding = _embed(full_text, model=embedding_model)
 
             if embedding:
-                ok_vec, vec_err = embedding_matches_vec_schema(embedding, embedding_model)
+                ok_vec, vec_err = embedding_matches_vec_schema(
+                    embedding, embedding_model, expected_dim=get_vec_dimension(conn=conn)
+                )
                 if ok_vec:
                     conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (row["fts_rowid"],))
                     conn.execute(
@@ -899,9 +937,9 @@ def is_pinned(item_type: str, item_id: int, db_path=None) -> bool:
         return row is not None
 
 
-def get_pinned_items(item_type: str | None = None, limit: int = 20, db_path=None) -> list[dict]:
+def get_pinned_items(item_type: str | None = None, limit: int = 20, db_path=None, conn=None) -> list[dict]:
     """Return pinned memory rows joined with FTS metadata."""
-    with get_connection(db_path) as conn:
+    with connection_scope(conn, db_path) as conn:
         conditions = []
         params: list = []
         if item_type:
@@ -1065,11 +1103,43 @@ def set_schema_meta(key: str, value: str, db_path=None) -> None:
         )
 
 
+def get_vec_dimension(conn=None, db_path=None) -> int:
+    """Live vec_memory dimension: schema_meta.vec_dimension, else the 768 default."""
+    from .embeddings import VEC_EMBEDDING_DIMENSION
+
+    try:
+        with connection_scope(conn, db_path) as c:
+            row = c.execute(
+                "SELECT value FROM schema_meta WHERE key='vec_dimension'"
+            ).fetchone()
+        if row:
+            return int(row["value"])
+    except Exception:
+        logger.debug("vec_dimension lookup failed; using default", exc_info=True)
+    return VEC_EMBEDDING_DIMENSION
+
+
+def rebuild_vec_table(dim: int, conn) -> None:
+    """Drop and recreate vec_memory with a new embedding dimension.
+
+    All vectors are lost — callers must mark embeddings stale and re-embed.
+    """
+    conn.execute("DROP TABLE IF EXISTS vec_memory")
+    conn.execute(
+        f"CREATE VIRTUAL TABLE vec_memory USING vec0(embedding float[{int(dim)}])"
+    )
+
+
 def verify_embedding_schema_match(db_path=None) -> str | None:
     """Return error message if live embedding dim != stored vec_dimension, else None."""
-    from .embeddings import VEC_EMBEDDING_DIMENSION, embed_text, resolve_embedding_model_name
+    from .embeddings import (
+        VEC_EMBEDDING_DIMENSION,
+        embed_text,
+        resolve_embed_backend,
+        resolve_embedding_model_name,
+    )
 
-    if os.environ.get("ENGRAM_EMBED_URL", "").strip().lower() == "disabled":
+    if resolve_embed_backend()[0] == "disabled":
         return None
 
     stored = get_schema_meta("vec_dimension", db_path=db_path)
@@ -1081,12 +1151,6 @@ def verify_embedding_schema_match(db_path=None) -> str | None:
         expected = int(stored)
     except ValueError:
         return None
-
-    if expected != VEC_EMBEDDING_DIMENSION:
-        return (
-            f"schema_meta.vec_dimension={expected} but vec_memory requires "
-            f"{VEC_EMBEDDING_DIMENSION}. Run: engram migrate-embeddings --target-model <model>"
-        )
 
     probe = embed_text("dimension probe")
     if probe is None:
@@ -1101,36 +1165,38 @@ def verify_embedding_schema_match(db_path=None) -> str | None:
 
 
 def migrate_embeddings_to_model(target_model: str, db_path=None) -> dict:
-    """Mark all embeddings stale and update schema_meta after model change."""
-    from .embeddings import VEC_EMBEDDING_DIMENSION, embed_text, expected_dimensions_for_model
+    """Switch the embedding model, rebuilding vec_memory if the dimension changes.
 
-    dim = expected_dimensions_for_model(target_model)
-    if dim is not None and dim != VEC_EMBEDDING_DIMENSION:
-        return {
-            "ok": False,
-            "error": (
-                f"Model {target_model!r} uses {dim}-dim vectors; current schema requires "
-                f"{VEC_EMBEDDING_DIMENSION}. Schema migration for new dimensions is not yet supported."
-            ),
-        }
+    Probes the model for its real output dimension. If it differs from the live
+    vec_memory dimension, the vector table is dropped and recreated at the new
+    width (all vectors are regenerated from FTS content, so nothing is lost).
+    """
+    from .embeddings import embed_text
 
     os.environ["ENGRAM_EMBED_MODEL"] = target_model
     probe = embed_text("migrate probe", model=target_model)
     if probe is None:
-        return {"ok": False, "error": "Could not reach Ollama to probe embedding model."}
-    if len(probe) != VEC_EMBEDDING_DIMENSION:
-        return {
-            "ok": False,
-            "error": f"Model produced {len(probe)}-dim vectors; schema requires {VEC_EMBEDDING_DIMENSION}.",
-        }
+        return {"ok": False, "error": "Could not reach the embedding backend to probe the model."}
+
+    new_dim = len(probe)
+    current_dim = get_vec_dimension(db_path=db_path)
+    rebuilt = False
+    if new_dim != current_dim:
+        if sqlite_vec is None:
+            return {"ok": False, "error": "sqlite-vec extension unavailable; cannot rebuild vec_memory."}
+        with get_connection(db_path) as conn:
+            rebuild_vec_table(new_dim, conn)
+        rebuilt = True
 
     stale_count = mark_embeddings_stale(db_path=db_path)
     set_schema_meta("embed_model", target_model, db_path=db_path)
-    set_schema_meta("vec_dimension", str(len(probe)), db_path=db_path)
+    set_schema_meta("vec_dimension", str(new_dim), db_path=db_path)
     reembed_result = reembed_stale(db_path=db_path)
     return {
         "ok": True,
         "target_model": target_model,
+        "dimension": new_dim,
+        "vec_table_rebuilt": rebuilt,
         "marked_stale": stale_count,
         "reembed": reembed_result,
     }
