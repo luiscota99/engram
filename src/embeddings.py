@@ -49,6 +49,9 @@ _MODEL_CONTEXT: dict[str, int] = {
     "bge-large": 2000,              # 512-token window
     "bge-large-en-v1.5": 2000,
     "snowflake-arctic-embed": 2000, # 512-token window
+    "embeddinggemma": 6000,         # 2048-token window on Ollama → cap at 6000 chars
+    "snowflake-arctic-embed2": 8000,  # 8192-token window
+    "qwen3-embedding": 8000,        # 32K window; cap for latency
 }
 
 SUPPORTED_MODELS: dict[str, dict] = {
@@ -75,6 +78,26 @@ SUPPORTED_MODELS: dict[str, dict] = {
         "context_tokens": 512,
         "size_mb": 669,
         "notes": "Fast inference. Competitive MTEB. Small context window.",
+    },
+    "embeddinggemma": {
+        "dimensions": 768,
+        "context_tokens": 2048,
+        "size_mb": 622,
+        "notes": "Google, 300M params (2025). Same 768-dim as nomic (no rebuild to "
+                 "switch) BUT measured 5x SLOWER than nomic via Ollama on Apple "
+                 "Silicon (2026-07) — benchmark on your hardware before switching.",
+    },
+    "snowflake-arctic-embed2": {
+        "dimensions": 1024,
+        "context_tokens": 8192,
+        "size_mb": 1200,
+        "notes": "Multilingual without English regression; quantization-friendly MRL.",
+    },
+    "qwen3-embedding": {
+        "dimensions": 1024,
+        "context_tokens": 32768,
+        "size_mb": 639,
+        "notes": "0.6B variant. Top multilingual MTEB family (2025); flexible output dims.",
     },
 }
 
@@ -283,7 +306,7 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
         return None
 
     active_model = model or _get_model()
-    max_chars = _MODEL_CONTEXT.get(active_model, 2000)
+    max_chars = config.embed_max_chars() or _MODEL_CONTEXT.get(active_model, 2000)
 
     if len(text) > max_chars:
         text = text[:max_chars]
@@ -359,7 +382,7 @@ def embed_batch(texts: list[str], model: str | None = None) -> list[list[float] 
         return [None] * len(texts)
 
     active_model = model or _get_model()
-    max_chars = _MODEL_CONTEXT.get(active_model, 2000)
+    max_chars = config.embed_max_chars() or _MODEL_CONTEXT.get(active_model, 2000)
     prepared = [(t or "")[:max_chars] for t in texts]
 
     # Serve what we can from cache; batch only the misses.

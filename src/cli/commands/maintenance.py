@@ -52,6 +52,12 @@ def cmd_efficiency(args):
     print(f"  Approved reflexes:   {r['reflexes_approved']} (of {r['reflexes_total']} drafted)")
     print(f"  Total reflex runs:   {r['reflex_runs']}")
     print(f"  Auto-demotions:      {r['auto_demotions']}")
+    success = r.get("reflex_success") or {}
+    if success:
+        total_runs = sum(v["runs"] for v in success.values())
+        total_ok = sum(v["ok"] for v in success.values())
+        if total_runs:
+            print(f"  Success rate:        {total_ok}/{total_runs} ({total_ok/total_runs:.0%})")
     if r["tokens_avoided_floor"]:
         print(f"  Tokens avoided:      >= {r['tokens_avoided_floor']:,} (floor: workflow text not re-read; reasoning savings not claimed)")
     print()

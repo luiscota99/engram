@@ -29,7 +29,7 @@ from .database import connection_scope, get_connection
 logger = logging.getLogger(__name__)
 
 ALLOWED_INTERPRETERS = ("bash", "sh", "python3")
-RUN_TIMEOUT_SECONDS = 120
+RUN_TIMEOUT_SECONDS = 300  # real workflows (test suites, builds) exceed 2 min
 MAX_OUTPUT_CHARS = 8000
 
 # Consecutive failures before a reflex is auto-demoted (approval revoked,
@@ -208,6 +208,9 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
         env[env_key] = str(value)
 
     started = datetime.now().isoformat(timespec="seconds")
+    import time as _time
+
+    t0 = _time.perf_counter()
     try:
         proc = subprocess.run(
             [row["interpreter"], "-c", row["script"]]
@@ -224,9 +227,14 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
     except subprocess.TimeoutExpired:
         status = "timeout"
         output = f"Timed out after {RUN_TIMEOUT_SECONDS}s"
+    duration_ms = int((_time.perf_counter() - t0) * 1000)
 
     demoted = False
     with get_connection(db_path) as c:
+        c.execute(
+            "INSERT INTO reflex_runs (reflex_id, started_at, duration_ms, status) VALUES (?, ?, ?, ?)",
+            (reflex_id, started, duration_ms, status),
+        )
         if status == "ok":
             c.execute(
                 "UPDATE reflexes SET run_count = run_count + 1, last_run_at = ?, "
@@ -307,6 +315,29 @@ def get_promotion_candidates(*, min_uses: int = PROMOTION_MIN_USES, db_path=None
             (min_uses,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_reflex_success_rates(*, db_path=None, conn=None) -> dict[int, dict]:
+    """Per-reflex run stats from reflex_runs: {reflex_id: {runs, ok, rate, avg_ms}}."""
+    with connection_scope(conn, db_path) as c:
+        try:
+            rows = c.execute(
+                """SELECT reflex_id, COUNT(*) AS runs,
+                          SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok,
+                          AVG(duration_ms) AS avg_ms
+                   FROM reflex_runs GROUP BY reflex_id"""
+            ).fetchall()
+        except Exception:
+            return {}
+        return {
+            r["reflex_id"]: {
+                "runs": r["runs"],
+                "ok": r["ok"],
+                "rate": round(r["ok"] / r["runs"], 3) if r["runs"] else None,
+                "avg_ms": round(r["avg_ms"] or 0),
+            }
+            for r in rows
+        }
 
 
 def reflex_tools_for_mcp(db_path=None) -> list[dict]:

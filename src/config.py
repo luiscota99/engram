@@ -79,6 +79,20 @@ def max_context_chars() -> int:
         return DEFAULT_MAX_CONTEXT_CHARS
 
 
+def embed_max_chars() -> int | None:
+    """Optional cap on characters embedded per document (ENGRAM_EMBED_MAX_CHARS).
+
+    Embedding time scales ~linearly with input length; measured on Apple
+    Silicon, a 6000-char doc costs ~5.4s with nomic-embed-text. Halving the
+    cap roughly halves bulk-ingest time at some recall cost. Unset = per-model
+    default from the known-models table."""
+    raw = os.environ.get("ENGRAM_EMBED_MAX_CHARS", "").strip()
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
 def defer_embed() -> bool:
     """When true (ENGRAM_DEFER_EMBED=1), writes skip inline embedding and mark the
     row pending; a batched ``engram reembed`` sweep generates vectors later.

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -335,6 +335,17 @@ CREATE TABLE IF NOT EXISTS reflexes (
     last_status TEXT,
     fail_streak INTEGER DEFAULT 0
 );
+
+-- Per-run reflex execution history (schema v15): success *rates*, not
+-- just streaks, so promotion/demotion decisions rest on real distributions.
+CREATE TABLE IF NOT EXISTS reflex_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reflex_id INTEGER NOT NULL REFERENCES reflexes(id) ON DELETE CASCADE,
+    started_at TEXT NOT NULL,
+    duration_ms INTEGER,
+    status TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reflex_runs_reflex ON reflex_runs(reflex_id);
 
 -- Temporal facts: supersession/invalidation history (schema v11)
 CREATE TABLE IF NOT EXISTS memory_facts (

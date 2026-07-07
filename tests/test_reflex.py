@@ -137,3 +137,33 @@ def test_handle_reflex_call_routes_to_executor(test_db):
 def test_promote_missing_skill_raises(test_db):
     with pytest.raises(ValueError):
         promote_skill(9999, db_path=test_db["path"])
+
+
+def test_reflex_runs_history_and_success_rates(test_db):
+    from src.database import get_connection
+    from src.reflex import get_reflex_success_rates
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="History Test")
+    conn.commit()
+    with patch("src.llm.is_llm_available", return_value=False):
+        r = promote_skill(sid, db_path=test_db["path"])
+    with get_connection(test_db["path"]) as c:
+        c.execute("UPDATE reflexes SET script = 'echo fine' WHERE id = ?", (r["id"],))
+    approve_reflex(r["id"], db_path=test_db["path"])
+
+    run_reflex(r["id"], db_path=test_db["path"])
+    run_reflex(r["id"], db_path=test_db["path"])
+
+    # break it → one failure recorded (streak 1, still approved)
+    with get_connection(test_db["path"]) as c:
+        c.execute("UPDATE reflexes SET script = 'exit 3', approved_hash = ? WHERE id = ?",
+                  (__import__("hashlib").sha256(b"exit 3").hexdigest(), r["id"]))
+    run_reflex(r["id"], db_path=test_db["path"])
+
+    rates = get_reflex_success_rates(db_path=test_db["path"])
+    st = rates[r["id"]]
+    assert st["runs"] == 3
+    assert st["ok"] == 2
+    assert st["rate"] == round(2 / 3, 3)
+    assert st["avg_ms"] >= 0

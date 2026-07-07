@@ -343,6 +343,16 @@ MIGRATIONS = {
         # Callable so a fresh-schema DB (column already present) migrates cleanly.
         lambda conn: _add_column_if_missing(conn, "reflexes", "fail_streak", "INTEGER DEFAULT 0"),
     ],
+    15: [
+        """CREATE TABLE IF NOT EXISTS reflex_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reflex_id INTEGER NOT NULL REFERENCES reflexes(id) ON DELETE CASCADE,
+            started_at TEXT NOT NULL,
+            duration_ms INTEGER,
+            status TEXT NOT NULL
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_reflex_runs_reflex ON reflex_runs(reflex_id);",
+    ],
 }
 
 
@@ -389,6 +399,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    15: [
+        "DROP TABLE IF EXISTS reflex_runs;",
+    ],
     14: [
         # ALTER TABLE ADD COLUMN is left in place on downgrade (harmless).
     ],

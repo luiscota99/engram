@@ -247,3 +247,13 @@ def test_embed_batch_returns_unit_vectors(monkeypatch):
     import math
     for v in out:
         assert abs(math.sqrt(sum(x * x for x in v)) - 1.0) < 1e-9
+
+
+def test_embed_max_chars_override(monkeypatch):
+    monkeypatch.delenv("ENGRAM_EMBED_URL", raising=False)
+    monkeypatch.setenv("ENGRAM_EMBED_MAX_CHARS", "100")
+    vec = [0.1] * 768
+    with patch("urllib.request.urlopen", return_value=_mock_response(vec)) as mock_open:
+        emb.embed_text("x" * 5000)
+    body = json.loads(mock_open.call_args[0][0].data.decode())
+    assert len(body["prompt"]) == 100

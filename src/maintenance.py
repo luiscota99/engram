@@ -1152,6 +1152,13 @@ def get_efficiency_report(db_path=None) -> dict:
             "SELECT COUNT(*) as c FROM mistakes WHERE mistake LIKE 'Auto-demoted%'"
         ).fetchone()["c"]
 
+    try:
+        from .reflex import get_reflex_success_rates
+
+        report["reflex_success"] = get_reflex_success_rates(db_path=db_path)
+    except Exception:
+        report["reflex_success"] = {}
+
     report["reflexes_approved"] = len(approved)
     report["reflexes_total"] = len(rows)
     report["reflex_runs"] = total_runs
