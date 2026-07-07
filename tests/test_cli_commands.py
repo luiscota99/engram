@@ -426,3 +426,30 @@ class TestImportClaudeMemories:
 
         out = _capture_output(cmd_import_claude_memories, Args())
         assert "Imported 0" in out
+
+
+class TestRegisterClaudeMcp:
+    def test_registers_and_is_idempotent(self, test_db, tmp_path):
+        import json
+
+        from src.cli.commands.bootstrap import register_claude_mcp
+
+        ok, msg = register_claude_mcp(home=str(tmp_path))
+        assert ok and "registered" in msg
+        cfg = json.loads((tmp_path / ".claude.json").read_text())
+        assert "engram" in cfg["mcpServers"]
+        assert cfg["mcpServers"]["engram"]["args"][0].endswith("src/mcp_server.py")
+
+        ok2, msg2 = register_claude_mcp(home=str(tmp_path))
+        assert ok2 and "skipped" in msg2
+
+    def test_preserves_existing_config(self, test_db, tmp_path):
+        import json
+
+        from src.cli.commands.bootstrap import register_claude_mcp
+
+        (tmp_path / ".claude.json").write_text(json.dumps({"theme": "dark", "mcpServers": {"other": {}}}))
+        register_claude_mcp(home=str(tmp_path))
+        cfg = json.loads((tmp_path / ".claude.json").read_text())
+        assert cfg["theme"] == "dark"
+        assert "other" in cfg["mcpServers"] and "engram" in cfg["mcpServers"]

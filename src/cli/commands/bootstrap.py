@@ -146,6 +146,35 @@ def cmd_claude_skill(args):
     )
 
 
+def register_claude_mcp(home: str | None = None) -> tuple[bool, str]:
+    """Register the Engram MCP server in ~/.claude.json (user scope, idempotent).
+
+    Uses the interpreter running this command so the server gets the same
+    environment (sqlite-vec, sqlean) that engram itself was installed with.
+    """
+    base = home or os.path.expanduser("~")
+    path = os.path.join(base, ".claude.json")
+    server_script = os.path.join(_engram_root(), "src", "mcp_server.py")
+    try:
+        cfg = {}
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                cfg = json.load(f)
+        servers = cfg.setdefault("mcpServers", {})
+        if "engram" in servers:
+            return True, "MCP server already registered in ~/.claude.json (skipped)"
+        servers["engram"] = {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": [server_script],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        return True, "✓ MCP server registered in ~/.claude.json (memory_route + reflexes as native tools)"
+    except Exception as e:
+        return False, f"Warning: could not register Claude Code MCP: {e}"
+
+
 def detect_integrations(home: str | None = None) -> dict[str, bool]:
     """Which agent tools exist on this machine, judged by their config dirs."""
     base = home or os.path.expanduser("~")
@@ -184,6 +213,8 @@ def cmd_install(args):
             print(f"  Claude Code: ✓ skill installed at {detail}")
         else:
             print(f"  Claude Code: Warning — {detail}")
+        ok2, msg2 = register_claude_mcp()
+        print(f"  Claude Code: {msg2}")
     if "antigravity" in targets:
         ok, path = write_global_antigravity_agents_snippet()
         print(f"  Antigravity: ✓ global rules updated at {path}")
