@@ -366,6 +366,8 @@ def rank_results(
     stale_rowids: set | None = None,
     detected_tags: list[str] | None = None,
     rrf_scores: dict[str, float] | None = None,
+    item_dates: dict | None = None,
+    temporal_intent: dict | None = None,
 ) -> list[dict]:
     """Apply utility scoring to a list of results and sort descending.
 
@@ -408,5 +410,43 @@ def rank_results(
         r["rrf_normalized"] = round(rrf_scores.get(rk, 0.0), 6) if rrf_scores else 0.0
         r["utility_score"] = base + rrf
 
+    if temporal_intent and temporal_intent.get("has_temporal") and item_dates:
+        _apply_temporal_boost(results, item_dates, temporal_intent)
+
     results.sort(key=lambda x: x.get("utility_score", 0.0), reverse=True)
     return results
+
+
+# Multiplier when an item's date matches an explicit date in the query
+# ("in May 2023"); modest so it re-orders near-ties, not everything.
+# NOTE: a directional heuristic ("first"/"most recent" → prefer oldest/newest)
+# was implemented and benchmarked on LongMemEval (2026-07-07): zero effect on
+# R@5, slightly negative MRR — removed. Only explicit date matches remain.
+TEMPORAL_DATE_MATCH_BOOST = 1.3
+
+
+def _apply_temporal_boost(results: list[dict], item_dates: dict, intent: dict) -> None:
+    """Adjust utility scores in place when the query mentions explicit dates.
+
+    Matches by ISO-prefix: item date "2023-05-14" matches query prefix
+    "2023-05" (from "in May 2023"). Inert for queries without date mentions.
+    """
+    dated = []
+    for r in results:
+        try:
+            d = item_dates.get((r["item_type"], int(r["item_id"])))
+        except (TypeError, ValueError):
+            d = None
+        if d:
+            # normalize separators so "2023/05/20" matches prefix "2023-05"
+            dated.append((r, str(d)[:10].replace("/", "-")))
+
+    if not dated:
+        return
+
+    for r, d in dated:
+        for prefix in intent.get("dates", []):
+            if d.startswith(prefix):
+                r["utility_score"] *= TEMPORAL_DATE_MATCH_BOOST
+                r["temporal_boost"] = "date_match"
+                break

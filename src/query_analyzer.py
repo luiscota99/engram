@@ -154,3 +154,63 @@ def detect_query_tags(query: str, db_path: str | None = None, conn=None) -> list
     """
     candidates = extract_tags(query)
     return filter_to_existing_tags(candidates, db_path=db_path, conn=conn)
+
+
+# ── Temporal intent ──────────────────────────────────────────────────
+
+_EARLIEST_CUES = (
+    "first", "earliest", "initial", "initially", "originally", "original",
+    "at the beginning", "to begin with", "started with",
+)
+_LATEST_CUES = (
+    "last", "latest", "most recent", "recently", "newest", "final",
+    "currently", "right now", "these days",
+)
+
+_ISO_DATE_RE = re.compile(r"\b(20\d{2})(?:[-/](\d{1,2})(?:[-/](\d{1,2}))?)?\b")
+_MONTH_RE = re.compile(
+    r"\b(january|february|march|april|may|june|july|august|september|october|november|december)"
+    r"\s+(20\d{2})\b",
+    re.IGNORECASE,
+)
+_MONTH_NUM = {
+    m: i + 1
+    for i, m in enumerate(
+        ["january", "february", "march", "april", "may", "june", "july",
+         "august", "september", "october", "november", "december"]
+    )
+}
+
+
+def detect_temporal_intent(query: str) -> dict:
+    """Detect temporal cues in a query for date-aware ranking.
+
+    Returns ``{"direction": "earliest"|"latest"|None, "dates": [ISO prefixes],
+    "has_temporal": bool}``. Direction cues are ordinal words ("first issue",
+    "most recent"); dates are explicit mentions ("May 2023", "2024-03") mapped
+    to ISO prefixes for startswith-matching against item dates.
+
+    Ranking only consumes ``dates`` — a direction-based boost was benchmarked
+    on LongMemEval and removed (no R@5 effect, slightly negative MRR).
+    ``direction`` remains available for display/agent use.
+    """
+    q = (query or "").lower()
+    direction = None
+    if any(cue in q for cue in _EARLIEST_CUES):
+        direction = "earliest"
+    elif any(cue in q for cue in _LATEST_CUES):
+        direction = "latest"
+
+    dates: list[str] = []
+    for month, year in _MONTH_RE.findall(q):
+        dates.append(f"{year}-{_MONTH_NUM[month.lower()]:02d}")
+    for y, m, _d in _ISO_DATE_RE.findall(q):
+        prefix = f"{y}-{int(m):02d}" if m else y
+        if prefix not in dates:
+            dates.append(prefix)
+
+    return {
+        "direction": direction,
+        "dates": dates,
+        "has_temporal": bool(direction or dates),
+    }

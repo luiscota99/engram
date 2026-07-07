@@ -18,7 +18,7 @@ from .database import (
 )
 from .embeddings import embed_text, get_embedding_degradation_reason, is_embedding_host_available
 from .item_registry import table_for, usage_ranked_types
-from .query_analyzer import detect_query_tags
+from .query_analyzer import detect_query_tags, detect_temporal_intent
 from .ranking import rank_results, reciprocal_rank_scores, rerank_with_bm25, result_key
 from .search_audit import append_search_audit
 
@@ -256,25 +256,31 @@ def search(
             else:
                 results.append(lex_map[kk])
 
-        # 3. Batch-fetch usage_count and last_used_at per type (avoids N+1 queries)
+        # 3. Batch-fetch usage_count, last_used_at, and item date per type
         usage_counts = {}
         last_used_map = {}
+        item_dates = {}
 
         for itype in usage_ranked_types():
             table = table_for(itype)
             if not table:
                 continue
+            # mistakes/conversations/sessions carry a semantic date; others use created_at
+            date_col = "date" if itype in ("mistake", "conversation", "session") else "created_at"
             ids = [int(r["item_id"]) for r in results if r["item_type"] == itype]
             if ids:
                 placeholders = ",".join("?" * len(ids))
                 rows = conn.execute(
-                    f"SELECT id, usage_count, last_used_at FROM {table} WHERE id IN ({placeholders})",
+                    f"SELECT id, usage_count, last_used_at, "
+                    f"COALESCE({date_col}, created_at) as item_date "
+                    f"FROM {table} WHERE id IN ({placeholders})",
                     ids,
                 ).fetchall()
                 for row in rows:
                     key = (itype, row["id"])
                     usage_counts[key] = row["usage_count"] or 0
                     last_used_map[key] = row["last_used_at"]
+                    item_dates[key] = row["item_date"]
 
         # 4. Project affinity
         affinities = {}
@@ -298,6 +304,8 @@ def search(
         stale_rowids=stale_rowids,
         detected_tags=detected_tags,
         rrf_scores=rrf_scores if rrf_scores else None,
+        item_dates=item_dates,
+        temporal_intent=detect_temporal_intent(query or ""),
     )
 
     # 6. BM25 reranking — adjusts utility scores using keyword overlap signal
