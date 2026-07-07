@@ -6,7 +6,8 @@ import os
 import shutil
 import sys
 
-from ...database import get_db_path, init_db
+from ... import config
+from ...database import get_connection, get_db_path, init_db
 from ...seed import seed_database
 from ..fmt import fmt_bold, fmt_dim, fmt_header
 
@@ -100,6 +101,172 @@ def cmd_antigravity_global(args):
                 "see Engram README (Global CLI section)."
             )
         )
+
+
+def _engram_root() -> str:
+    # __file__ is src/cli/commands/bootstrap.py → repo root is four levels up
+    return os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    )
+
+
+def install_claude_skill(home: str | None = None) -> tuple[bool, str]:
+    """Copy the Claude Code skill into ~/.claude/skills/. Returns (ok, message)."""
+    source = os.path.join(_engram_root(), "claude-skills", "engram-memory", "SKILL.md")
+    if not os.path.exists(source):
+        return False, (
+            f"skill source not found: {source} "
+            "(run from a git checkout of Engram; claude-skills/ is not packaged)"
+        )
+    base = home or os.path.expanduser("~")
+    dest_dir = os.path.join(base, ".claude", "skills", "engram-memory")
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = os.path.join(dest_dir, "SKILL.md")
+    shutil.copy2(source, dest)
+    return True, dest
+
+
+def cmd_claude_skill(args):
+    """Install the Engram skill for Claude Code into ~/.claude/skills/."""
+    _ = args
+    if not os.path.exists(get_db_path()):
+        init_db()
+        print(f"✓ Initialized database at {get_db_path()}")
+
+    ok, detail = install_claude_skill()
+    if not ok:
+        print(f"Error: {detail}")
+        sys.exit(1)
+    print(f"✓ Installed Claude Code skill: {detail}")
+    print(
+        fmt_dim(
+            "Claude Code loads personal skills from ~/.claude/skills/ in every project. "
+            "Re-run `engram claude-skill` after updating Engram to refresh it."
+        )
+    )
+
+
+def detect_integrations(home: str | None = None) -> dict[str, bool]:
+    """Which agent tools exist on this machine, judged by their config dirs."""
+    base = home or os.path.expanduser("~")
+    return {
+        "cursor": os.path.isdir(os.path.join(base, ".cursor")),
+        "claude": os.path.isdir(os.path.join(base, ".claude")) or shutil.which("claude") is not None,
+        "antigravity": os.path.isdir(os.path.join(base, ".gemini"))
+        or shutil.which("antigravity") is not None,
+    }
+
+
+def cmd_install(args):
+    """One-shot setup: detect installed agent tools and wire Engram into all of them."""
+    force_all = getattr(args, "all", False)
+
+    if not os.path.exists(get_db_path()):
+        init_db()
+        print(f"✓ Initialized database at {get_db_path()}")
+
+    detected = detect_integrations()
+    targets = {k for k, present in detected.items() if present or force_all}
+    if not targets:
+        print("No supported tools detected (~/.cursor, ~/.claude, ~/.gemini).")
+        print(fmt_dim("Use `engram install --all` to set up every integration anyway."))
+        return
+
+    print(fmt_header("Engram install — global integrations\n"))
+    skipped = [k for k in ("cursor", "claude", "antigravity") if k not in targets]
+
+    if "cursor" in targets:
+        _ok, msg = _setup_mcp_config(_engram_root())
+        print(f"  Cursor:      {msg}")
+    if "claude" in targets:
+        ok, detail = install_claude_skill()
+        if ok:
+            print(f"  Claude Code: ✓ skill installed at {detail}")
+        else:
+            print(f"  Claude Code: Warning — {detail}")
+    if "antigravity" in targets:
+        ok, path = write_global_antigravity_agents_snippet()
+        print(f"  Antigravity: ✓ global rules updated at {path}")
+
+    for k in skipped:
+        print(fmt_dim(f"  {k.capitalize()}: not detected — skipped (use --all to force)"))
+
+    print()
+    print(fmt_dim("Per-project extras (Cursor rules, .antigravity/instructions.md): run `engram bootstrap` inside a repo."))
+    print(fmt_dim("Verify anytime with `engram doctor`."))
+
+
+def _iter_claude_memory_files(root: str):
+    """Yield markdown memory files under a Claude Code home (~/.claude by default)."""
+    for dirpath, _dirnames, filenames in os.walk(root):
+        # Claude Code keeps per-project memories in .../memory/ directories
+        if os.path.basename(dirpath) == "memory":
+            for fn in sorted(filenames):
+                if fn.endswith(".md") and fn != "MEMORY.md":  # MEMORY.md is just the index
+                    yield os.path.join(dirpath, fn)
+
+
+def cmd_import_claude_memories(args):
+    """Import Claude Code's file-based memories into Engram (idempotent by content hash)."""
+    import hashlib
+
+    from ...memory_ops import create_conversation
+
+    init_db()
+    root = os.path.abspath(os.path.expanduser(args.dir or "~/.claude"))
+    if not os.path.isdir(root):
+        print(f"Directory not found: {root}", file=sys.stderr)
+        sys.exit(1)
+
+    imported = 0
+    skipped = 0
+    for path in _iter_claude_memory_files(root):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            raw = f.read()
+        body = raw.strip()
+        if not body:
+            continue
+
+        title = os.path.splitext(os.path.basename(path))[0].replace("-", " ")
+        # Lift the description from frontmatter when present
+        if body.startswith("---"):
+            for line in body.split("\n")[1:15]:
+                if line.strip() == "---":
+                    break
+                if line.startswith("description:"):
+                    title = line.split(":", 1)[1].strip() or title
+
+        digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        conversation_id = f"claude-mem-{digest[:24]}"
+
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if row:
+                skipped += 1
+                continue
+            create_conversation(
+                conn,
+                conversation_id=conversation_id,
+                title=title[:120],
+                date=_date_today(),
+                domain="claude-memory",
+                key_decisions=body[:4000],
+                tags="claude-memory",
+            )
+            imported += 1
+
+    print(f"✓ Imported {imported} Claude Code memories ({skipped} already present).")
+    if imported == 0 and skipped == 0:
+        print(fmt_dim(f"No memory files found under {root} (looked for */memory/*.md)."))
+
+
+def _date_today() -> str:
+    from datetime import date
+
+    return date.today().isoformat()
 
 
 def _prompt_bootstrap_mode() -> str:
@@ -243,7 +410,7 @@ def cmd_bootstrap(args):
         print(fmt_dim("  See: https://github.com/luismiguelcota/engram#agent-integration"))
 
     # Ollama status
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    ollama_host = config.ollama_host()
     ollama_ok = False
     try:
         with _urllib_req.urlopen(_urllib_req.Request(ollama_host, method="GET"), timeout=2) as resp:

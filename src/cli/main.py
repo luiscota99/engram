@@ -4,7 +4,15 @@ from __future__ import annotations
 import argparse
 
 from ..database import init_db
-from .commands.bootstrap import cmd_antigravity_global, cmd_bootstrap, cmd_init, cmd_seed
+from .commands.bootstrap import (
+    cmd_antigravity_global,
+    cmd_bootstrap,
+    cmd_claude_skill,
+    cmd_import_claude_memories,
+    cmd_init,
+    cmd_install,
+    cmd_seed,
+)
 from .commands.codebase import (
     cmd_clean_codebase,
     cmd_graph,
@@ -322,6 +330,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Install or refresh the global Engram block in ~/.gemini/AGENTS.md (all Antigravity workspaces)",
     )
     p_ag.set_defaults(func=cmd_antigravity_global)
+
+    p_cs = sub.add_parser(
+        "claude-skill",
+        help="Install or refresh the Engram skill for Claude Code (~/.claude/skills/engram-memory)",
+    )
+    p_cs.set_defaults(func=cmd_claude_skill)
+
+    p_install = sub.add_parser(
+        "install",
+        help="One-shot setup: detect Cursor/Claude Code/Antigravity and wire Engram into all of them",
+    )
+    p_install.add_argument("--all", action="store_true", help="Set up every integration even if not detected")
+    p_install.set_defaults(func=cmd_install)
+
+    p_icm = sub.add_parser(
+        "import-claude-memories",
+        help="Import Claude Code's file-based memories (~/.claude/**/memory/*.md) into Engram",
+    )
+    p_icm.add_argument("--dir", help="Claude home to scan (default: ~/.claude)")
+    p_icm.set_defaults(func=cmd_import_claude_memories)
 
     p_seed = sub.add_parser("seed", help="Seed with historical data")
     p_seed.set_defaults(func=cmd_seed)

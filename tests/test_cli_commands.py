@@ -272,3 +272,157 @@ class TestCmdSessionHelp:
 
         with pytest.raises(SystemExit):
             cmd_session_help(Args())
+
+
+# ── cmd_suggest_consolidate ──────────────────────────────────────────
+
+class TestCmdSuggestConsolidate:
+    """Regression: find_consolidation_candidates returns (clusters, skip_reason);
+    treating the tuple as the cluster list crashed on any real candidates."""
+
+    def _args(self):
+        class Args:
+            threshold = 0.8
+            type = None
+            limit = 10
+
+        return Args()
+
+    def test_empty_db_prints_no_candidates(self, test_db):
+        from unittest.mock import patch
+
+        from src.cli.commands.memory import cmd_suggest_consolidate
+
+        with patch(
+            "src.cli.commands.memory.find_consolidation_candidates",
+            return_value=([], None),
+        ):
+            output = _capture_output(cmd_suggest_consolidate, self._args())
+        assert "No consolidation candidates" in output
+
+    def test_unchanged_fingerprint_message(self, test_db):
+        from unittest.mock import patch
+
+        from src.cli.commands.memory import cmd_suggest_consolidate
+
+        with patch(
+            "src.cli.commands.memory.find_consolidation_candidates",
+            return_value=([], "unchanged"),
+        ):
+            output = _capture_output(cmd_suggest_consolidate, self._args())
+        assert "unchanged" in output
+
+    def test_prints_cluster_details(self, test_db):
+        from unittest.mock import patch
+
+        from src.cli.commands.memory import cmd_suggest_consolidate
+
+        cluster = {
+            "item_type": "skill",
+            "cluster_size": 2,
+            "avg_similarity": 0.91,
+            "items": [
+                {"item_id": 1, "title": "Skill A"},
+                {"item_id": 2, "title": "Skill B"},
+            ],
+        }
+        with patch(
+            "src.cli.commands.memory.find_consolidation_candidates",
+            return_value=([cluster], None),
+        ):
+            output = _capture_output(cmd_suggest_consolidate, self._args())
+        assert "Skill A" in output
+        assert "Skill B" in output
+        assert "--delete-ids 1,2" in output
+
+
+# ── cmd_claude_skill ─────────────────────────────────────────────────
+
+class TestCmdClaudeSkill:
+    def test_installs_skill_to_claude_dir(self, test_db, tmp_path, monkeypatch):
+        from src.cli.commands.bootstrap import cmd_claude_skill
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        class Args:
+            pass
+
+        output = _capture_output(cmd_claude_skill, Args())
+        dest = tmp_path / ".claude" / "skills" / "engram-memory" / "SKILL.md"
+        assert dest.is_file()
+        assert "Installed Claude Code skill" in output
+        content = dest.read_text()
+        assert content.startswith("---")
+        assert "engram search" in content
+
+
+# ── cmd_install / import-claude-memories ─────────────────────────────
+
+class TestCmdInstall:
+    def test_detects_and_installs_all_present_tools(self, test_db, tmp_path, monkeypatch):
+        from src.cli.commands.bootstrap import cmd_install
+
+        for d in (".cursor", ".claude", ".gemini"):
+            (tmp_path / d).mkdir()
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        class Args:
+            all = False
+
+        output = _capture_output(cmd_install, Args())
+        assert (tmp_path / ".cursor" / "mcp.json").is_file()
+        assert (tmp_path / ".claude" / "skills" / "engram-memory" / "SKILL.md").is_file()
+        assert (tmp_path / ".gemini" / "AGENTS.md").is_file()
+        assert "Cursor" in output and "Claude Code" in output and "Antigravity" in output
+
+    def test_skips_undetected_tools(self, test_db, tmp_path, monkeypatch):
+        from src.cli.commands.bootstrap import cmd_install
+
+        (tmp_path / ".claude").mkdir()
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr("shutil.which", lambda _: None)
+
+        class Args:
+            all = False
+
+        output = _capture_output(cmd_install, Args())
+        assert not (tmp_path / ".cursor" / "mcp.json").exists()
+        assert (tmp_path / ".claude" / "skills" / "engram-memory" / "SKILL.md").is_file()
+        assert "not detected" in output
+
+
+class TestImportClaudeMemories:
+    def _write_memory(self, home, name, body):
+        mem_dir = home / ".claude" / "projects" / "-users-x-proj" / "memory"
+        mem_dir.mkdir(parents=True, exist_ok=True)
+        (mem_dir / f"{name}.md").write_text(body)
+
+    def test_import_is_idempotent(self, test_db, tmp_path, monkeypatch):
+        from src.cli.commands.bootstrap import cmd_import_claude_memories
+
+        self._write_memory(
+            tmp_path,
+            "wal-mode",
+            "---\nname: wal-mode\ndescription: Always enable WAL\n---\n\nWAL avoids writer starvation.",
+        )
+
+        class Args:
+            dir = str(tmp_path / ".claude")
+
+        out1 = _capture_output(cmd_import_claude_memories, Args())
+        out2 = _capture_output(cmd_import_claude_memories, Args())
+        assert "Imported 1" in out1
+        assert "Imported 0" in out2 and "1 already present" in out2
+
+    def test_memory_index_file_is_skipped(self, test_db, tmp_path):
+        from src.cli.commands.bootstrap import cmd_import_claude_memories
+
+        mem_dir = tmp_path / ".claude" / "projects" / "-p" / "memory"
+        mem_dir.mkdir(parents=True)
+        (mem_dir / "MEMORY.md").write_text("- [a](a.md) — index only")
+
+        class Args:
+            dir = str(tmp_path / ".claude")
+
+        out = _capture_output(cmd_import_claude_memories, Args())
+        assert "Imported 0" in out
