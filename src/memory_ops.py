@@ -122,6 +122,62 @@ def create_conversation(
     return cid
 
 
+def create_conversation_chunked(
+    conn,
+    *,
+    conversation_id: str,
+    title: str,
+    date: str,
+    domain: str,
+    turns: list[str],
+    window: int = 8,
+    stride: int = 4,
+    tags: str | Iterable[str] | None = None,
+) -> list[int]:
+    """Create a conversation plus turn-window part rows for fine-grained retrieval.
+
+    Long conversations average their content into one embedding, which buries
+    single-sentence evidence (preferences, one-off facts). Each window of
+    ``window`` turns (stride ``stride``) becomes a sibling conversation row
+    (``id#p1``, ``id#p2``, …) with its own FTS row and vector, so a query can
+    land on the exact slice. Short conversations (≤ window turns) produce no
+    parts. Returns ``[parent_row_id, part_row_ids...]``.
+    """
+    body = "\n".join(turns)
+    parent_id = create_conversation(
+        conn,
+        conversation_id=conversation_id,
+        title=title,
+        date=date,
+        domain=domain,
+        key_decisions=body[:6000],
+        tags=tags,
+    )
+    ids = [parent_id]
+    if len(turns) <= window:
+        return ids
+
+    part_n = 0
+    for start in range(0, len(turns), stride):
+        chunk = turns[start:start + window]
+        if len(chunk) < max(2, window // 2) and part_n > 0:
+            break  # tail already covered by the previous overlapping window
+        part_n += 1
+        part_body = "\n".join(chunk)
+        ids.append(
+            create_conversation(
+                conn,
+                conversation_id=f"{conversation_id}#p{part_n}",
+                title=f"{title[:70]} (part {part_n})",
+                date=date,
+                domain=domain,
+                key_decisions=part_body[:6000],
+                tags=tags,
+            )
+        )
+    return ids
+
+
 def create_session(
     conn,
     *,

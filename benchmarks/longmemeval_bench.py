@@ -210,46 +210,77 @@ def run_longmemeval(
     }
 
 
-def ingest_oracle_corpus(oracle: list[dict], db_path: str) -> dict[str, int]:
+def ingest_oracle_corpus(oracle: list[dict], db_path: str, chunked: bool = False) -> dict[str, list[int]]:
     """Ingest every haystack session as a conversation; return session_id → row id.
 
     All questions share one corpus, so each query faces the other questions'
     sessions as distractors (~950 sessions for the full oracle file).
-    """
-    from src.database import get_connection
-    from src.memory_ops import create_conversation
 
-    id_map: dict[str, int] = {}
+    Writes run in deferred-embedding mode (FTS rows land instantly, vectors are
+    marked pending), then a batched reembed sweep generates all vectors in
+    sub-batches of 32 — one HTTP round-trip per sub-batch instead of per doc.
+    """
+    from src.database import get_connection, reembed_stale
+    from src.memory_ops import create_conversation, create_conversation_chunked
+
+    id_map: dict[str, list[int]] = {}
     n_done = 0
-    with get_connection(db_path) as conn:
-        for q in oracle:
-            for sid, sdate, sess in zip(
-                q["haystack_session_ids"], q["haystack_dates"], q["haystack_sessions"]
-            ):
-                if sid in id_map:
-                    continue
-                turns = []
-                for t in sess:
-                    content = (t.get("content") or "").strip()
-                    if content:
-                        turns.append(f"{t.get('role', 'user')}: {content}")
-                body = "\n".join(turns)[:6000]
-                title = next(
-                    (t.get("content", "") for t in sess if t.get("role") == "user"), sid
-                )[:80]
-                cid = create_conversation(
-                    conn,
-                    conversation_id=sid,
-                    title=title,
-                    date=str(sdate)[:10],
-                    domain="longmemeval",
-                    key_decisions=body,
-                )
-                id_map[sid] = cid
-                n_done += 1
-                if n_done % 100 == 0:
-                    print(f"  ingested {n_done} sessions...")
-                    conn.commit()
+    prev_defer = os.environ.get("ENGRAM_DEFER_EMBED")
+    os.environ["ENGRAM_DEFER_EMBED"] = "1"
+    try:
+        with get_connection(db_path) as conn:
+            for q in oracle:
+                for sid, sdate, sess in zip(
+                    q["haystack_session_ids"], q["haystack_dates"], q["haystack_sessions"]
+                ):
+                    if sid in id_map:
+                        continue
+                    turns = []
+                    for t in sess:
+                        content = (t.get("content") or "").strip()
+                        if content:
+                            turns.append(f"{t.get('role', 'user')}: {content}")
+                    title = next(
+                        (t.get("content", "") for t in sess if t.get("role") == "user"), sid
+                    )[:80]
+                    if chunked:
+                        ids = create_conversation_chunked(
+                            conn,
+                            conversation_id=sid,
+                            title=title,
+                            date=str(sdate)[:10],
+                            domain="longmemeval",
+                            turns=turns,
+                        )
+                    else:
+                        body = "\n".join(turns)[:6000]
+                        ids = [create_conversation(
+                            conn,
+                            conversation_id=sid,
+                            title=title,
+                            date=str(sdate)[:10],
+                            domain="longmemeval",
+                            key_decisions=body,
+                        )]
+                    id_map[sid] = ids
+                    n_done += 1
+                    if n_done % 200 == 0:
+                        print(f"  ingested {n_done} sessions (FTS)...")
+                        conn.commit()
+    finally:
+        if prev_defer is None:
+            os.environ.pop("ENGRAM_DEFER_EMBED", None)
+        else:
+            os.environ["ENGRAM_DEFER_EMBED"] = prev_defer
+
+    # Batched vector sweep
+    embedded = 0
+    while True:
+        result = reembed_stale(db_path=db_path, batch_size=200)
+        embedded += result.get("succeeded", 0)
+        if result.get("remaining", 0) == 0 or result.get("processed", 0) == 0:
+            break
+        print(f"  embedded {embedded} sessions (batched)...")
     return id_map
 
 
@@ -258,6 +289,7 @@ def run_longmemeval_oracle(
     db_path: str,
     limit: int | None = None,
     k: int = 5,
+    chunked: bool = False,
 ) -> dict:
     """Real LongMemEval retrieval eval: session-level Recall@k / MRR on the oracle file.
 
@@ -275,9 +307,10 @@ def run_longmemeval_oracle(
 
     print(f"  Ingesting sessions from {len(oracle)} questions...")
     t0 = time.perf_counter()
-    id_map = ingest_oracle_corpus(oracle, db_path)
+    id_map = ingest_oracle_corpus(oracle, db_path, chunked=chunked)
     ingest_s = time.perf_counter() - t0
-    print(f"  Corpus ready: {len(id_map)} sessions in {ingest_s:.0f}s")
+    n_rows = sum(len(v) for v in id_map.values())
+    print(f"  Corpus ready: {len(id_map)} sessions ({n_rows} rows{', chunked' if chunked else ''}) in {ingest_s:.0f}s")
 
     queries = [q for q in oracle if not str(q.get("question_id", "")).endswith("_abs")]
     per_query: list[dict] = []
@@ -285,7 +318,11 @@ def run_longmemeval_oracle(
     total_ms = 0.0
 
     for i, q in enumerate(queries, 1):
-        expected = {id_map[sid] for sid in q.get("answer_session_ids", []) if sid in id_map}
+        expected = {
+            rid
+            for sid in q.get("answer_session_ids", [])
+            for rid in id_map.get(sid, [])
+        }
         if not expected:
             continue
         t0 = time.perf_counter()
@@ -318,6 +355,8 @@ def run_longmemeval_oracle(
     aggregate = {
         "n_queries": n,
         "corpus_sessions": len(id_map),
+        "corpus_rows": sum(len(v) for v in id_map.values()),
+        "chunked": chunked,
         f"R@{k}": round(sum(r[f"R@{k}"] for r in per_query) / n if n else 0.0, 4),
         "MRR": round(sum(r["mrr"] for r in per_query) / n if n else 0.0, 4),
         "avg_latency_ms": round(total_ms / n if n else 0.0, 1),
@@ -355,6 +394,12 @@ def main() -> None:
         "session-retrieval eval (use a FRESH ENGRAM_DB_PATH; the corpus is written to it)",
     )
     parser.add_argument(
+        "--chunked",
+        action="store_true",
+        help="With --oracle-file: also index overlapping turn-windows per session "
+        "(fine-grained retrieval for buried single-sentence evidence)",
+    )
+    parser.add_argument(
         "--fail-under-r5",
         type=float,
         default=None,
@@ -369,7 +414,9 @@ def main() -> None:
         if not db_path:
             print("Set ENGRAM_DB_PATH to a fresh database file for the oracle run.", file=sys.stderr)
             sys.exit(1)
-        results = run_longmemeval_oracle(args.oracle_file, db_path, limit=args.limit)
+        results = run_longmemeval_oracle(
+            args.oracle_file, db_path, limit=args.limit, chunked=args.chunked
+        )
         results["source"] = args.oracle_file
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)

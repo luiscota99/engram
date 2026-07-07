@@ -4,42 +4,42 @@
   "aggregate": {
     "n_queries": 470,
     "corpus_sessions": 940,
-    "R@5": 0.5383,
-    "MRR": 0.4422,
-    "avg_latency_ms": 218.2,
-    "avg_context_tokens": 374.4
+    "R@5": 0.5404,
+    "MRR": 0.4467,
+    "avg_latency_ms": 177.1,
+    "avg_context_tokens": 373.4
   },
   "by_category": {
     "temporal-reasoning": {
       "n": 127,
-      "R@5": 0.4488,
-      "MRR": 0.3361
+      "R@5": 0.4173,
+      "MRR": 0.3202
     },
     "multi-session": {
       "n": 121,
-      "R@5": 0.6529,
-      "MRR": 0.5182
+      "R@5": 0.6116,
+      "MRR": 0.4723
     },
     "knowledge-update": {
       "n": 72,
-      "R@5": 0.5,
-      "MRR": 0.4241
+      "R@5": 0.5139,
+      "MRR": 0.4461
     },
     "single-session-preference": {
       "n": 30,
-      "R@5": 0.3,
-      "MRR": 0.2244
+      "R@5": 0.3667,
+      "MRR": 0.2428
     },
     "single-session-assistant": {
       "n": 56,
-      "R@5": 0.8214,
-      "MRR": 0.7961
+      "R@5": 0.8929,
+      "MRR": 0.8676
     },
     "single-session-user": {
       "n": 64,
-      "R@5": 0.4062,
-      "MRR": 0.3216
+      "R@5": 0.4531,
+      "MRR": 0.3776
     }
   },
-  "source": "/private/tmp/claude-501/-Users-luismiguel-Desktop-AI-engram/0ad17d4a-58f0-499b-bfe7-060883f57eec/scratchpad/longmemeval_oracle.json"
+  "note": "v2: consistent L2-normalized embeddings (schema v12); explicit-date boost only"
 }

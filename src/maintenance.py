@@ -890,6 +890,36 @@ def merge_projects(
 # ── Health Dashboard ─────────────────────────────────────────────────
 
 
+def get_reuse_rates(db_path=None) -> dict:
+    """Per-type capture→reuse rates: of items 30+ days old, how many were ever used.
+
+    Returns ``{item_type: {"eligible": n, "reused": n, "rate": float|None}}``.
+    The capture-quality signal — low rate means that type of memory is being
+    saved but never retrieved again.
+    """
+    from .item_registry import REGISTRY
+
+    cutoff_30 = (datetime.now() - timedelta(days=30)).isoformat()
+    rates: dict = {}
+    with get_connection(db_path) as conn:
+        for itype, spec in REGISTRY.items():
+            if not spec.gc_eligible:
+                continue
+            eligible = conn.execute(
+                f"SELECT COUNT(*) as c FROM {spec.table} WHERE created_at < ?", (cutoff_30,)
+            ).fetchone()["c"]
+            reused = conn.execute(
+                f"SELECT COUNT(*) as c FROM {spec.table} WHERE created_at < ? AND usage_count > 0",
+                (cutoff_30,),
+            ).fetchone()["c"]
+            rates[itype] = {
+                "eligible": eligible,
+                "reused": reused,
+                "rate": round(reused / eligible, 3) if eligible else None,
+            }
+    return rates
+
+
 def run_health_check(db_path=None) -> dict:
     """Generate a comprehensive health report for the memory database."""
     report: dict = {}

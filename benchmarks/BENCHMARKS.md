@@ -150,23 +150,33 @@ Ollama, no LLM in the loop, no API calls.
 
 | Metric | Value |
 |--------|-------|
-| **R@5 (session-level)** | **0.538** |
-| MRR | 0.442 |
-| Avg latency / query | 218 ms |
-| Avg context tokens / query | 374 |
+| **R@5 (session-level)** | **0.540** |
+| MRR | 0.447 |
 | Corpus | 940 sessions |
 | Queries | 470 |
 
-By question type:
+By question type (v2, consistent L2-normalized embeddings — schema v12):
 
-| Category | n | R@5 |
-|----------|--:|----:|
-| single-session-assistant | 56 | 0.821 |
-| multi-session | 121 | 0.653 |
-| knowledge-update | 72 | 0.500 |
-| temporal-reasoning | 127 | 0.449 |
-| single-session-user | 64 | 0.406 |
-| single-session-preference | 30 | 0.300 |
+| Category | n | R@5 | v1 (unnormalized) |
+|----------|--:|----:|----:|
+| single-session-assistant | 56 | 0.893 | 0.821 |
+| multi-session | 121 | 0.612 | 0.653 |
+| knowledge-update | 72 | 0.514 | 0.500 |
+| single-session-user | 64 | 0.453 | 0.406 |
+| temporal-reasoning | 127 | 0.417 | 0.449 |
+| single-session-preference | 30 | 0.367 | 0.300 |
+
+**Normalization finding (2026-07-07).** Ollama's legacy `/api/embeddings` returns
+unnormalized vectors; the newer `/api/embed` (used by batched sweeps) returns unit
+vectors. Mixing them under euclidean KNN silently partitions the index — queries
+only ever matched documents from the same endpoint era (R@5 collapsed to 0.13 on a
+mixed corpus). Engram now L2-normalizes every vector in code and migration v12
+rescales existing stored vectors in place (no re-embedding).
+
+**Ablation (2026-07-07).** A directional temporal-ranking heuristic ("first" →
+prefer oldest) was implemented and measured on this benchmark: zero effect on R@5,
+−0.4pt MRR — removed. Only the explicit-date match boost remains (inert unless the
+query names a date).
 
 ### How to read this honestly
 

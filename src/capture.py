@@ -189,6 +189,26 @@ def suggest_capture(
             "tags": ", ".join(keywords[:3]),
         }
 
+    # Reuse-aware feedback: if a suggested type historically never gets
+    # retrieved again, say so — the fix for a starving memory system is
+    # capturing fewer, higher-signal entries, not more.
+    reuse_hints: dict[str, str] = {}
+    try:
+        from .maintenance import get_reuse_rates
+
+        rates = get_reuse_rates()
+        for t in suggested_types:
+            stats = rates.get(t) or {}
+            rate = stats.get("rate")
+            if stats.get("eligible", 0) >= 10 and rate is not None and rate < 0.2:
+                reuse_hints[t] = (
+                    f"only {rate:.0%} of {t}s captured 30+ days ago were ever reused "
+                    f"({stats['reused']}/{stats['eligible']}) — capture this only if it's "
+                    f"genuinely non-obvious"
+                )
+    except Exception:
+        pass  # reuse stats are advisory; never block a suggestion on them
+
     return {
         "suggested_types": suggested_types,
         "draft_mistake": draft_mistake,
@@ -197,6 +217,7 @@ def suggest_capture(
         "confidence": confidence,
         "keywords": keywords,
         "domain": domain,
+        "reuse_hints": reuse_hints,
         "influence_prompt": SESSION_INFLUENCE_PROMPT.strip(),
     }
 
@@ -213,6 +234,9 @@ def format_capture_suggestion(suggestion: dict) -> str:
         return "\n".join(lines)
 
     lines.append("Suggested entries (requires your approval before saving):\n")
+
+    for t, hint in (suggestion.get("reuse_hints") or {}).items():
+        lines.append(f"> ⚠ Reuse check ({t}): {hint}\n")
 
     if suggestion["draft_mistake"]:
         conf = suggestion["confidence"].get("mistake", 0)

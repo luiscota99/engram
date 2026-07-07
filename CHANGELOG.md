@@ -27,9 +27,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Leaner MCP search injection** — `memory_search` default limit 10→5 with rank-aware snippets (500 chars for the top hit, 150 below): ~34% fewer context tokens per search on a real corpus (845→560) while the top hit carries 3× more detail; `estimate_context_tokens` in benchmarks now mirrors this injected format instead of raw row sizes.
 - Connection reuse on the search hot path — one connection per search (was 8), plus a `connection_scope` helper for multi-step operations.
 - sqlite-vec pinned to >=0.1.9 (proper DELETE/space reclamation in vec0 tables).
+- **Batched + deferred embeddings** — `embed_batch` (one HTTP round-trip per 16 docs with per-item fallback), `ENGRAM_DEFER_EMBED=1` write-fast mode (FTS rows land instantly, vectors fill in via batched `engram reembed`), used by the LongMemEval ingest; corpus ingestion is now crash-resumable.
+- **Explicit-date ranking boost** — queries mentioning a date ("in May 2023", "2024-03") boost items whose date matches by ISO prefix. A directional heuristic ("first"/"most recent") was benchmarked on LongMemEval and removed (no R@5 effect, slightly negative MRR) — see benchmarks/BENCHMARKS.md.
+- **Turn-window chunked ingestion** — `create_conversation_chunked` indexes overlapping turn-windows as sibling rows so buried single-sentence evidence gets its own vector; `--chunked` flag on the oracle benchmark.
+- **Reuse-aware capture** — `suggest_capture` consults per-type reuse rates (`get_reuse_rates`) and warns when a suggested type historically never gets retrieved again.
 
 ### Fixed
 
+- **Embedding normalization (schema v12)** — Ollama's legacy `/api/embeddings` returns unnormalized vectors while the newer `/api/embed` returns unit vectors; mixing them under euclidean KNN silently partitioned the vector index (queries only matched same-endpoint documents). All vectors are now L2-normalized in code, and migration v12 rescales existing stored vectors in place — no re-embedding needed.
 - Fresh databases were missing schema v11 objects (`memory_facts` table, `superseded_by` columns, `codebase_knowledge.file_mtime`) because they were added only in migrations, never in the baseline `SCHEMA_SQL`. `memory_invalidate` with a reason crashed on new installs.
 - `engram suggest-consolidate` and `run_sleep` crashed (or reported `clusters_found == 2` on an empty database) — both treated the `(clusters, skip_reason)` tuple from `find_consolidation_candidates` as the cluster list.
 - Flaky search performance test: the 500ms budget included a live Ollama embedding call (800ms+ on a cold model load); the query embedding is now stubbed so the test measures the SQL/ranking path it was written to guard.

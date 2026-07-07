@@ -211,3 +211,47 @@ class TestFormatCaptureSuggestion:
         output = format_capture_suggestion(result)
         assert isinstance(output, str)
         assert "No strong signals" in output
+
+
+class TestReuseAwareCapture:
+    def test_low_reuse_type_gets_hint(self, test_db, monkeypatch):
+        from unittest.mock import patch
+
+        from src.capture import format_capture_suggestion, suggest_capture
+
+        low = {"skill": {"eligible": 20, "reused": 1, "rate": 0.05}}
+        with patch("src.maintenance.get_reuse_rates", return_value=low):
+            suggestion = suggest_capture(
+                task_description="refactor the deploy script",
+                outcome="split into stages and added rollback",
+            )
+        assert "skill" in suggestion["suggested_types"]
+        assert "skill" in suggestion["reuse_hints"]
+        formatted = format_capture_suggestion(suggestion)
+        assert "Reuse check (skill)" in formatted
+
+    def test_healthy_reuse_no_hint(self, test_db):
+        from unittest.mock import patch
+
+        from src.capture import suggest_capture
+
+        good = {"skill": {"eligible": 20, "reused": 15, "rate": 0.75}}
+        with patch("src.maintenance.get_reuse_rates", return_value=good):
+            suggestion = suggest_capture(
+                task_description="refactor the deploy script",
+                outcome="split into stages and added rollback",
+            )
+        assert suggestion["reuse_hints"] == {}
+
+    def test_small_sample_no_hint(self, test_db):
+        from unittest.mock import patch
+
+        from src.capture import suggest_capture
+
+        few = {"skill": {"eligible": 3, "reused": 0, "rate": 0.0}}
+        with patch("src.maintenance.get_reuse_rates", return_value=few):
+            suggestion = suggest_capture(
+                task_description="tweak config",
+                outcome="done",
+            )
+        assert suggestion["reuse_hints"] == {}
