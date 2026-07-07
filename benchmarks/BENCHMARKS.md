@@ -178,6 +178,16 @@ prefer oldest) was implemented and measured on this benchmark: zero effect on R@
 −0.4pt MRR — removed. Only the explicit-date match boost remains (inert unless the
 query names a date).
 
+**Ablation (2026-07-08): turn-window chunking regressed.** Indexing overlapping
+8-turn windows alongside whole sessions (`--chunked`, 940 sessions → 3,500 rows)
+was expected to lift the preference/user categories. Measured: aggregate R@5
+0.540 → **0.500**, preference 0.367 → **0.200**, multi-session 0.612 → 0.504.
+Diagnosis: with 3.7× more rows and 5 result slots, multiple windows of the same
+near-miss session crowd out the top-5; each window competes as an independent
+candidate. Fine-grained retrieval needs **parent-level aggregation** (score the
+best window per session, rank sessions) to work — until that exists, chunked
+ingestion stays opt-in and off by default.
+
 ### How to read this honestly
 
 - **Not comparable to vendor headline numbers.** Mem0 (94.4%) and Zep (63.8%) report

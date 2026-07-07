@@ -33,7 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - sqlite-vec pinned to >=0.1.9 (proper DELETE/space reclamation in vec0 tables).
 - **Batched + deferred embeddings** — `embed_batch` (one HTTP round-trip per 16 docs with per-item fallback), `ENGRAM_DEFER_EMBED=1` write-fast mode (FTS rows land instantly, vectors fill in via batched `engram reembed`), used by the LongMemEval ingest; corpus ingestion is now crash-resumable.
 - **Explicit-date ranking boost** — queries mentioning a date ("in May 2023", "2024-03") boost items whose date matches by ISO prefix. A directional heuristic ("first"/"most recent") was benchmarked on LongMemEval and removed (no R@5 effect, slightly negative MRR) — see benchmarks/BENCHMARKS.md.
-- **Turn-window chunked ingestion** — `create_conversation_chunked` indexes overlapping turn-windows as sibling rows so buried single-sentence evidence gets its own vector; `--chunked` flag on the oracle benchmark.
+- **Turn-window chunked ingestion** — `create_conversation_chunked` indexes overlapping turn-windows as sibling rows so buried single-sentence evidence gets its own vector; `--chunked` flag on the oracle benchmark. Benchmarked 2026-07-08: **regression** (aggregate R@5 0.540→0.500, preference 0.367→0.200) — windows crowd out the top-k without parent-level aggregation; stays opt-in and off by default, diagnosis in BENCHMARKS.md.
 - **Reuse-aware capture** — `suggest_capture` consults per-type reuse rates (`get_reuse_rates`) and warns when a suggested type historically never gets retrieved again.
 
 ### Fixed

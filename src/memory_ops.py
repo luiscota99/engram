@@ -142,6 +142,11 @@ def create_conversation_chunked(
     (``id#p1``, ``id#p2``, …) with its own FTS row and vector, so a query can
     land on the exact slice. Short conversations (≤ window turns) produce no
     parts. Returns ``[parent_row_id, part_row_ids...]``.
+
+    .. warning:: Benchmarked NEGATIVE on LongMemEval (2026-07-08): −4pt aggregate
+       R@5 — sibling windows compete as independent candidates and crowd out the
+       top-k (see benchmarks/BENCHMARKS.md). Do not use as a default; it needs
+       parent-level score aggregation in search before it can pay off.
     """
     body = "\n".join(turns)
     parent_id = create_conversation(
