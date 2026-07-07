@@ -63,8 +63,8 @@ TOOLS = [
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max results to return (default: 10)",
-                    "default": 10,
+                    "description": "Max results to return (default: 5; top hit is usually rank 1 — raise only when casting a wide net)",
+                    "default": 5,
                 },
                 "project_path": {
                     "type": "string",

@@ -81,3 +81,28 @@ def test_memory_add_decision_workflow_violation_when_roles_missing(mcp_db):
 
     assert "WorkflowViolation" in result
     assert "Analyst" in result
+
+
+def test_format_results_rank_aware_snippets():
+    """Top hit gets a 500-char snippet; lower ranks stay at 150."""
+    from src.mcp.handlers import format_and_truncate_results
+
+    long_text = "x" * 1000
+    results = [
+        {"item_type": "skill", "item_id": 1, "title": "top", "snippet": long_text, "tags": ""},
+        {"item_type": "skill", "item_id": 2, "title": "second", "snippet": long_text, "tags": ""},
+    ]
+    out = format_and_truncate_results(results)
+    blocks = out.split("[SKILL ID:")
+    assert "x" * 500 in blocks[1] and "x" * 501 not in blocks[1]
+    assert "x" * 150 in blocks[2] and "x" * 151 not in blocks[2]
+
+
+def test_memory_search_default_limit_is_5(test_db):
+    from unittest.mock import patch
+
+    from src.mcp.handlers import handle_memory_search
+
+    with patch("src.mcp.handlers.memory_search", return_value=[]) as ms:
+        handle_memory_search({"query": "anything"})
+    assert ms.call_args.kwargs["limit"] == 5

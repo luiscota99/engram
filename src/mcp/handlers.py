@@ -51,6 +51,8 @@ from src.workflow import (
     record_role_contribution,
 )
 
+from .. import config
+
 McpToolArgs = Mapping[str, Any]
 
 
@@ -69,7 +71,7 @@ def format_and_truncate_results(
             return wrap_untrusted_text("Engram memory search results", msg)
         return wrap_untrusted_text("Engram memory search results", "No results found.")
 
-    max_chars = int(os.environ.get("ENGRAM_MAX_CONTEXT_CHARS", 8000))
+    max_chars = config.max_context_chars()
     lines = [
         f"{UNTRUSTED_CONTEXT_POLICY}\n",
         "Found results. NOTE: These are truncated summaries to save context tokens.\n",
@@ -84,15 +86,19 @@ def format_and_truncate_results(
     total_length = sum(len(line) for line in lines)
     truncated = False
 
-    for r in results:
+    for rank, r in enumerate(results, start=1):
         score = r.get("utility_score")
         search_type = "S" if r.get("is_semantic") else "K"
         pin_marker = " [PINNED]" if r.get("pinned") else ""
         score_str = f" (score: {score:.1f}, {search_type})" if score is not None else f" ({search_type})"
         block = f"[{r['item_type'].upper()} ID: {r['item_id']}]{pin_marker}{score_str} {r['title']}\n"
         if r.get("snippet"):
+            # Rank-aware detail: the top hit gets enough context to often skip a
+            # memory_read_item round trip; lower ranks stay headline-sized.
+            snippet_cap = 500 if rank == 1 else 150
             snippet = r["snippet"].replace("\n", " ")
-            block += f"  Snippet: {snippet[:150]}...\n"
+            suffix = "..." if len(snippet) > snippet_cap else ""
+            block += f"  Snippet: {snippet[:snippet_cap]}{suffix}\n"
         if r.get("tags"):
             block += f"  Tags: {r['tags']}\n"
         block += "\n"
@@ -166,7 +172,7 @@ def handle_memory_search(args: McpToolArgs) -> str:
     query = args.get("query", "")
     item_type = args.get("type")
     tags = args.get("tags", "").split(",") if args.get("tags") else None
-    limit = args.get("limit", 10)
+    limit = args.get("limit", 5)
     project_path = args.get("project_path")
     results = memory_search(
         query,
@@ -815,9 +821,28 @@ def handle_memory_suggest_consolidations(args: McpToolArgs) -> str:
     return "\n".join(lines)
 
 
+def _confirm_destructive(description: str) -> str | None:
+    """Gate a destructive operation behind MCP elicitation when the client supports it.
+
+    Returns an abort message if the user declined, or None to proceed. Clients
+    without elicitation get the pre-gate behavior (proceed).
+    """
+    from .protocol import elicit_confirmation
+
+    if elicit_confirmation(description) is False:
+        return "Cancelled by user — no changes were made."
+    return None
+
+
 def handle_memory_gc(args: McpToolArgs) -> str:
     mode = args.get("mode", "dry-run")
     days = int(args.get("days_unused", 180))
+    if mode != "dry-run":
+        aborted = _confirm_destructive(
+            f"Engram GC is about to {mode} memory items unused for {days}+ days. Proceed?"
+        )
+        if aborted:
+            return aborted
     result = run_gc(mode=mode, days_unused=days)
     if result.get("blocked"):
         return f"GC blocked: {result.get('reason', 'safety guardrail triggered')}"
@@ -1061,10 +1086,18 @@ def handle_memory_invalidate(args: McpToolArgs) -> str:
 
 
 def handle_memory_sleep(args: McpToolArgs) -> str:
+    dry_run = bool(args.get("dry_run", False))
+    if not dry_run:
+        aborted = _confirm_destructive(
+            "Engram sleep-time consolidation will supersede near-duplicate memories "
+            "and archive stale ones. Proceed?"
+        )
+        if aborted:
+            return aborted
     summary = run_sleep(
         threshold=float(args.get("threshold", 0.85)),
         days_unused=int(args.get("days_unused", 30)),
-        dry_run=bool(args.get("dry_run", False)),
+        dry_run=dry_run,
     )
     return json.dumps(summary, indent=2)
 

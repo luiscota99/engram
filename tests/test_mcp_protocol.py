@@ -67,3 +67,142 @@ def test_tools_call_success_returns_plain_call_tool_result():
 
     assert resp["result"]["content"][0]["text"] == "ok"
     assert resp["result"].get("isError") not in (True,)
+
+
+def _initialize(prot, capabilities):
+    resp = prot.handle_request({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {"capabilities": capabilities},
+    })
+    assert resp is not None and "result" in resp
+
+
+def test_initialize_records_client_capabilities():
+    import src.mcp.protocol as prot
+
+    _initialize(prot, {"elicitation": {}})
+    assert prot.client_supports_elicitation() is True
+
+    _initialize(prot, {})
+    assert prot.client_supports_elicitation() is False
+
+
+def test_elicit_confirmation_returns_none_without_capability():
+    import src.mcp.protocol as prot
+
+    _initialize(prot, {})
+    assert prot.elicit_confirmation("Proceed?") is None
+
+
+def _run_elicitation(monkeypatch, client_response_factory):
+    """Drive elicit_confirmation with a fake stdio pair; returns (result, request)."""
+    import io
+    import json as _json
+    import sys as _sys
+
+    import src.mcp.protocol as prot
+
+    _initialize(prot, {"elicitation": {}})
+
+    out = io.StringIO()
+    monkeypatch.setattr(_sys, "stdout", out)
+
+    state = {}
+
+    def fake_readline():
+        if "reply" not in state:
+            request = _json.loads(out.getvalue().strip().splitlines()[-1])
+            state["request"] = request
+            state["reply"] = _json.dumps(client_response_factory(request)) + "\n"
+            return state["reply"]
+        return ""  # EOF on any further read
+
+    monkeypatch.setattr(_sys, "stdin", mock.Mock(readline=fake_readline))
+    result = prot.elicit_confirmation("Delete 12 items?")
+    return result, state.get("request")
+
+
+def test_elicit_confirmation_accept(monkeypatch):
+    result, request = _run_elicitation(
+        monkeypatch,
+        lambda req: {
+            "jsonrpc": "2.0",
+            "id": req["id"],
+            "result": {"action": "accept", "content": {"confirm": True}},
+        },
+    )
+    assert result is True
+    assert request["method"] == "elicitation/create"
+    assert request["params"]["message"] == "Delete 12 items?"
+
+
+def test_elicit_confirmation_decline(monkeypatch):
+    result, _ = _run_elicitation(
+        monkeypatch,
+        lambda req: {
+            "jsonrpc": "2.0",
+            "id": req["id"],
+            "result": {"action": "decline"},
+        },
+    )
+    assert result is False
+
+
+def test_elicit_confirmation_requeues_unrelated_messages(monkeypatch):
+    """A concurrent request arriving mid-elicitation must not be dropped."""
+    import io
+    import json as _json
+    import sys as _sys
+
+    import src.mcp.protocol as prot
+
+    _initialize(prot, {"elicitation": {}})
+    prot._pending_lines.clear()
+
+    out = io.StringIO()
+    monkeypatch.setattr(_sys, "stdout", out)
+
+    unrelated = _json.dumps({"jsonrpc": "2.0", "id": 99, "method": "ping"})
+    lines = [unrelated + "\n"]
+
+    def fake_readline():
+        if lines:
+            return lines.pop(0)
+        request = _json.loads(out.getvalue().strip().splitlines()[-1])
+        return _json.dumps({
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": {"action": "accept", "content": {"confirm": True}},
+        }) + "\n"
+
+    monkeypatch.setattr(_sys, "stdin", mock.Mock(readline=fake_readline))
+    result = prot.elicit_confirmation("Proceed?")
+    assert result is True
+    assert prot._pending_lines == [unrelated]
+    prot._pending_lines.clear()
+
+
+def test_memory_gc_dry_run_skips_elicitation():
+    """dry-run GC must never block on a confirmation round-trip."""
+    import src.mcp.protocol as prot
+    from src.mcp.handlers import handle_memory_gc
+
+    _initialize(prot, {"elicitation": {}})
+    with mock.patch("src.mcp.protocol.elicit_confirmation") as elicit:
+        with mock.patch("src.mcp.handlers.run_gc", return_value={"blocked": False, "candidates": []}):
+            handle_memory_gc({"mode": "dry-run"})
+    elicit.assert_not_called()
+
+
+def test_memory_gc_declined_elicitation_cancels():
+    import src.mcp.protocol as prot
+    from src.mcp.handlers import handle_memory_gc
+
+    _initialize(prot, {"elicitation": {}})
+    with mock.patch("src.mcp.protocol.elicit_confirmation", return_value=False):
+        with mock.patch("src.mcp.handlers.run_gc") as gc:
+            out = handle_memory_gc({"mode": "archive"})
+    gc.assert_not_called()
+    assert "Cancelled" in out
