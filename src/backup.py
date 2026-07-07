@@ -11,11 +11,27 @@ from .database import get_connection, get_db_path
 
 
 def export_to_json(conn):
-    """Export the core database tables to a dictionary."""
+    """Export the core database tables to a dictionary.
+
+    Includes reflexes and their run history: reflex scripts exist only in the
+    database (they are data, not repo code), so a backup that skips them loses
+    every approved automation.
+    """
     data = {}
-    tables = ["mistakes", "patterns", "skills", "conversations", "prompts"]
+    tables = [
+        "mistakes",
+        "patterns",
+        "skills",
+        "conversations",
+        "prompts",
+        "reflexes",
+        "reflex_runs",
+    ]
     for table in tables:
-        rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+        try:
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+        except Exception:
+            continue  # table absent in pre-migration databases
         data[table] = [dict(r) for r in rows]
     return data
 

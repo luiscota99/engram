@@ -142,3 +142,28 @@ def test_vec_load_failure_degrades_to_lexical(test_db, monkeypatch):
         results = search("lexical fallback", db_path=test_db["path"])
         assert len(results) >= 1
         assert results[0]["is_semantic"] is False
+
+
+def test_backup_export_includes_reflexes(test_db, monkeypatch):
+    """Reflex scripts live only in the DB — backups must carry them."""
+    from unittest.mock import patch
+
+    from src.backup import export_to_json
+    from src.reflex import approve_reflex, promote_skill, run_reflex
+
+    conn = test_db["conn"]
+    conn.execute(
+        "INSERT INTO skills (name, domain, trigger_desc, workflow) VALUES ('bk', 'ops', 't', 'w')"
+    )
+    conn.commit()
+    with patch("src.llm.is_llm_available", return_value=False):
+        r = promote_skill(1, db_path=test_db["path"])
+    conn.execute("UPDATE reflexes SET script = 'echo backed-up' WHERE id = ?", (r["id"],))
+    conn.commit()
+    approve_reflex(r["id"], db_path=test_db["path"])
+    run_reflex(r["id"], db_path=test_db["path"])
+
+    data = export_to_json(conn)
+    assert "reflexes" in data and len(data["reflexes"]) == 1
+    assert data["reflexes"][0]["script"] == "echo backed-up"
+    assert "reflex_runs" in data and len(data["reflex_runs"]) == 1
