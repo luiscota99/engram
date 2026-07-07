@@ -1042,6 +1042,19 @@ def run_health_check(db_path=None) -> dict:
             f"{report['vec_drift']} FTS entries are missing vector embeddings. "
             f"Run `engram doctor --repair`."
         )
+    try:
+        from .reflex import get_promotion_candidates
+
+        candidates = get_promotion_candidates(db_path=db_path)
+        report["promotion_candidates"] = candidates
+        for cand in candidates[:3]:
+            recommendations.append(
+                f"Skill #{cand['id']} '{cand['name']}' used {cand['usage_count']}x — proven. "
+                f"Promote it to a reflex: engram promote {cand['id']}"
+            )
+    except Exception:
+        report["promotion_candidates"] = []
+
     cr = report["capture_reuse"]
     if cr["eligible_30d_plus"] >= 10 and cr["reuse_rate"] is not None and cr["reuse_rate"] < 0.2:
         recommendations.append(
@@ -1100,3 +1113,56 @@ def run_sleep(
         summary["gc_candidates"] = len(gc_candidates)
 
     return summary
+
+
+# ── Efficiency report (Action Ladder) ────────────────────────────────
+
+
+def get_efficiency_report(db_path=None) -> dict:
+    """Measured Action-Ladder statistics: how much work runs below the
+    reasoning rung, and a conservative floor on tokens avoided.
+
+    Honesty rule: only report what is measurable. The per-run savings floor is
+    the token length of the workflow text an agent would otherwise have had to
+    read (chars/4) minus the ~50-token reflex call — reasoning tokens saved on
+    top of that are real but unmeasurable here, so they are not claimed.
+    """
+    report: dict = {}
+    with get_connection(db_path) as conn:
+        try:
+            rows = conn.execute(
+                """SELECT r.name, r.run_count, r.last_status, r.approved_at,
+                          s.workflow, s.trigger_desc
+                   FROM reflexes r JOIN skills s ON s.id = r.skill_id"""
+            ).fetchall()
+        except Exception:
+            rows = []
+
+        approved = [dict(r) for r in rows if r["approved_at"]]
+        total_runs = sum(r["run_count"] or 0 for r in rows)
+        floor_saved = 0
+        for r in approved:
+            per_run = max(
+                0,
+                (len(r["workflow"] or "") + len(r["trigger_desc"] or "")) // 4 - 50,
+            )
+            floor_saved += per_run * (r["run_count"] or 0)
+
+        demotions = conn.execute(
+            "SELECT COUNT(*) as c FROM mistakes WHERE mistake LIKE 'Auto-demoted%'"
+        ).fetchone()["c"]
+
+    report["reflexes_approved"] = len(approved)
+    report["reflexes_total"] = len(rows)
+    report["reflex_runs"] = total_runs
+    report["auto_demotions"] = demotions
+    report["tokens_avoided_floor"] = floor_saved
+    report["reuse"] = get_reuse_rates(db_path=db_path)
+    report["promotion_candidates"] = []
+    try:
+        from .reflex import get_promotion_candidates
+
+        report["promotion_candidates"] = get_promotion_candidates(db_path=db_path)
+    except Exception:
+        logger.debug("promotion candidates unavailable", exc_info=True)
+    return report

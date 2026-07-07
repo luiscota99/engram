@@ -23,6 +23,7 @@ from .commands.llm import cmd_llm
 from .commands.maintenance import (
     cmd_backup,
     cmd_doctor,
+    cmd_efficiency,
     cmd_gc,
     cmd_health,
     cmd_merge_projects,
@@ -44,7 +45,7 @@ from .commands.memory import (
     cmd_suggest_capture,
     cmd_suggest_consolidate,
 )
-from .commands.reflex import cmd_promote, cmd_reflex
+from .commands.reflex import cmd_promote, cmd_reflex, cmd_route
 from .commands.session import (
     cmd_get_role,
     cmd_get_session,
@@ -351,6 +352,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_icm.add_argument("--dir", help="Claude home to scan (default: ~/.claude)")
     p_icm.set_defaults(func=cmd_import_claude_memories)
+
+    p_eff = sub.add_parser("efficiency", help="Action-Ladder efficiency report (reflex runs, reuse, tokens avoided)")
+    p_eff.set_defaults(func=cmd_efficiency)
+
+    p_route = sub.add_parser("route", help="Action-ladder lookup: reflex / recall / reason for a task")
+    p_route.add_argument("task", nargs="+", help="Task description")
+    p_route.set_defaults(func=cmd_route)
 
     # ── Reflexes (proven skills → executable, approved scripts) ──────
     p_promote = sub.add_parser("promote", help="Draft a reflex script from a proven skill")

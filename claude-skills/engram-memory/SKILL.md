@@ -20,10 +20,24 @@ lexical + semantic search.
 Interface: the `engram` CLI on PATH. If it is missing, skip this skill
 silently — do not install anything without being asked.
 
-## When to search (LIGHT default)
+## The Action Ladder: one lookup before non-trivial work
 
-At the start of a non-trivial task, run one search with 2–4 keywords from the
-request:
+Before doing a non-trivial task, ask Engram for the cheapest correct rung:
+
+```bash
+engram route "rollback the failed deploy"
+```
+
+- **REFLEX** → an approved script exists. Invoke the named `reflex_*` MCP tool
+  (or `engram reflex run`) instead of re-deriving the workflow. Deterministic.
+- **RECALL** → prior art found. Follow the listed skill/pattern steps; call
+  `engram search`/`memory_read_item` only if you need more detail.
+- **REASON** → no prior art. Work it out, then capture the outcome so the next
+  occurrence lands on a cheaper rung.
+
+Heed any "Known pitfalls" lines — they are past mistakes matching this task.
+
+## Searching directly (when you already know what you want)
 
 ```bash
 engram search "fts5 sqlite ranking" -n 3

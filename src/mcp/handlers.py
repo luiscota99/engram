@@ -168,6 +168,16 @@ def handle_memory_read_item(args: McpToolArgs) -> str:
     return json.dumps(item, indent=2).strip()
 
 
+def handle_memory_route(args: McpToolArgs) -> str:
+    from src.router import route_task
+
+    task = args.get("task", "").strip()
+    if not task:
+        return "Error: task is required."
+    result = route_task(task, project_path=args.get("project_path"))
+    return wrap_untrusted_text("Engram action-ladder route", result["text"])
+
+
 def handle_memory_search(args: McpToolArgs) -> str:
     query = args.get("query", "")
     item_type = args.get("type")
@@ -1106,6 +1116,7 @@ TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_add": handle_memory_add,
     "memory_record_usage": handle_memory_record_usage,
     "memory_read_item": handle_memory_read_item,
+    "memory_route": handle_memory_route,
     "memory_search": handle_memory_search,
     "memory_recent": handle_memory_recent,
     "memory_add_mistake": handle_memory_add_mistake,

@@ -32,6 +32,11 @@ ALLOWED_INTERPRETERS = ("bash", "sh", "python3")
 RUN_TIMEOUT_SECONDS = 120
 MAX_OUTPUT_CHARS = 8000
 
+# Consecutive failures before a reflex is auto-demoted (approval revoked,
+# failure captured as a mistake). Correctness beats convenience: a script
+# that fails twice in a row no longer deserves deterministic-tool status.
+DEMOTION_FAIL_STREAK = 2
+
 _TEMPLATE = """#!/usr/bin/env {interpreter}
 # Reflex draft for skill #{skill_id}: {skill_name}
 # Drafted from the workflow below — REVIEW AND EDIT before approving.
@@ -220,12 +225,46 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
         status = "timeout"
         output = f"Timed out after {RUN_TIMEOUT_SECONDS}s"
 
+    demoted = False
     with get_connection(db_path) as c:
-        c.execute(
-            "UPDATE reflexes SET run_count = run_count + 1, last_run_at = ?, last_status = ? "
-            "WHERE id = ?",
-            (started, status, reflex_id),
-        )
+        if status == "ok":
+            c.execute(
+                "UPDATE reflexes SET run_count = run_count + 1, last_run_at = ?, "
+                "last_status = ?, fail_streak = 0 WHERE id = ?",
+                (started, status, reflex_id),
+            )
+        else:
+            c.execute(
+                "UPDATE reflexes SET run_count = run_count + 1, last_run_at = ?, "
+                "last_status = ?, fail_streak = fail_streak + 1 WHERE id = ?",
+                (started, status, reflex_id),
+            )
+            streak = c.execute(
+                "SELECT fail_streak FROM reflexes WHERE id = ?", (reflex_id,)
+            ).fetchone()["fail_streak"]
+            if streak >= DEMOTION_FAIL_STREAK:
+                # Auto-demote: revoke approval and capture the failure so the
+                # next agent that hits this workflow knows what broke.
+                c.execute(
+                    "UPDATE reflexes SET approved_at = NULL, approved_hash = NULL, "
+                    "fail_streak = 0 WHERE id = ?",
+                    (reflex_id,),
+                )
+                demoted = True
+                try:
+                    from .memory_ops import create_mistake
+
+                    create_mistake(
+                        c,
+                        date=started[:10],
+                        context=f"Reflex '{row['name']}' (skill #{row['skill_id']})",
+                        mistake=f"Auto-demoted after {DEMOTION_FAIL_STREAK} consecutive failures ({status})",
+                        fix="(fill in once root cause is known; re-approve with: engram reflex approve)",
+                        root_cause=output[:500] or None,
+                        tags="reflex,auto-demotion",
+                    )
+                except Exception:
+                    logger.exception("Failed to capture demotion mistake for reflex %s", reflex_id)
         # A reflex run is also a use of the underlying skill — feeds the reuse metric.
         c.execute(
             "UPDATE skills SET usage_count = usage_count + 1, last_used_at = datetime('now') "
@@ -233,12 +272,41 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
             (row["skill_id"],),
         )
 
-    return {
+    result = {
         "ok": status == "ok",
         "status": status,
         "output": output[:MAX_OUTPUT_CHARS],
         "reflex": row["name"],
     }
+    if demoted:
+        result["demoted"] = True
+        result["error"] = (
+            f"Reflex auto-demoted after {DEMOTION_FAIL_STREAK} consecutive failures. "
+            f"The failure was captured as a mistake; fix the script and re-approve."
+        )
+    return result
+
+
+# Uses required before a skill is suggested for promotion. Reuse is the
+# proof gate: compiling unproven workflows is how prior art (Voyager, AWM)
+# drowned in brittle scripts.
+PROMOTION_MIN_USES = 5
+
+
+def get_promotion_candidates(*, min_uses: int = PROMOTION_MIN_USES, db_path=None, conn=None) -> list[dict]:
+    """Skills proven by reuse that have no reflex yet — ready for `engram promote`."""
+    with connection_scope(conn, db_path) as c:
+        rows = c.execute(
+            """SELECT s.id, s.name, s.usage_count, s.last_used_at
+               FROM skills s
+               LEFT JOIN reflexes r ON r.skill_id = s.id
+               WHERE r.id IS NULL AND s.usage_count >= ?
+                 AND (s.superseded_by IS NULL)
+               ORDER BY s.usage_count DESC
+               LIMIT 10""",
+            (min_uses,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def reflex_tools_for_mcp(db_path=None) -> list[dict]:

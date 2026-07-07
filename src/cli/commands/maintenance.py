@@ -41,6 +41,34 @@ def cmd_backup(args):
     run_backup(git_sync=args.git)
 
 
+def cmd_efficiency(args):
+    """Action-Ladder efficiency report: measured, no invented numbers."""
+    _ = args
+    from ...maintenance import get_efficiency_report
+
+    r = get_efficiency_report()
+    print(fmt_header("Action Ladder — efficiency report\n"))
+    print(fmt_bold("Reflex rung (deterministic, ~50 tokens/call):"))
+    print(f"  Approved reflexes:   {r['reflexes_approved']} (of {r['reflexes_total']} drafted)")
+    print(f"  Total reflex runs:   {r['reflex_runs']}")
+    print(f"  Auto-demotions:      {r['auto_demotions']}")
+    if r["tokens_avoided_floor"]:
+        print(f"  Tokens avoided:      >= {r['tokens_avoided_floor']:,} (floor: workflow text not re-read; reasoning savings not claimed)")
+    print()
+    print(fmt_bold("Recall rung (capture -> reuse):"))
+    for itype, st in r["reuse"].items():
+        if st["eligible"]:
+            rate = f"{st['rate']:.0%}" if st["rate"] is not None else "n/a"
+            print(f"  {itype:<14} {st['reused']}/{st['eligible']} reused ({rate})")
+    print()
+    if r["promotion_candidates"]:
+        print(fmt_bold("Ready to move down the ladder:"))
+        for cand in r["promotion_candidates"][:5]:
+            print(f"  engram promote {cand['id']}   # '{cand['name']}' used {cand['usage_count']}x")
+    else:
+        print(fmt_dim("No promotion candidates yet - skills earn reflex-hood at 5+ uses."))
+
+
 def cmd_health(args):
     report = run_health_check()
     print(fmt_header("Engram Health Report\n"))

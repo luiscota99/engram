@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -332,7 +332,8 @@ CREATE TABLE IF NOT EXISTS reflexes (
     created_at TEXT DEFAULT (datetime('now')),
     run_count INTEGER DEFAULT 0,
     last_run_at TEXT,
-    last_status TEXT
+    last_status TEXT,
+    fail_streak INTEGER DEFAULT 0
 );
 
 -- Temporal facts: supersession/invalidation history (schema v11)

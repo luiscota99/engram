@@ -339,7 +339,17 @@ MIGRATIONS = {
             last_status TEXT
         );""",
     ],
+    14: [
+        # Callable so a fresh-schema DB (column already present) migrates cleanly.
+        lambda conn: _add_column_if_missing(conn, "reflexes", "fail_streak", "INTEGER DEFAULT 0"),
+    ],
 }
+
+
+def _add_column_if_missing(conn, table: str, column: str, decl: str) -> None:
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def _normalize_vec_memory(conn) -> None:
@@ -379,6 +389,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    14: [
+        # ALTER TABLE ADD COLUMN is left in place on downgrade (harmless).
+    ],
     13: [
         "DROP TABLE IF EXISTS reflexes;",
     ],

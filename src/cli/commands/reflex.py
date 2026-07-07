@@ -12,6 +12,16 @@ from ...reflex import (
 from ..fmt import fmt_bold, fmt_dim, fmt_header
 
 
+def cmd_route(args):
+    """Action-ladder lookup: cheapest correct way to do a task."""
+    from ...router import route_task
+
+    task = " ".join(args.task)
+    result = route_task(task)
+    print(fmt_header(f"Route: {result['rung'].upper()}\n"))
+    print(result["text"])
+
+
 def cmd_promote(args):
     """Draft a reflex from a proven skill (inert until `engram reflex approve`)."""
     try:
