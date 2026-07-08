@@ -12,8 +12,11 @@ Safe migration guarantees:
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
+
+logger = logging.getLogger(__name__)
 
 MIGRATIONS = {
     2: ["CREATE TABLE IF NOT EXISTS _test_migration_v2 (id INTEGER PRIMARY KEY);"],
@@ -353,7 +356,47 @@ MIGRATIONS = {
         );""",
         "CREATE INDEX IF NOT EXISTS idx_reflex_runs_reflex ON reflex_runs(reflex_id);",
     ],
+    16: [
+        # Rebuild memory_fts with porter stemming. Rowids are copied verbatim
+        # so vec_memory (keyed by the same rowids) stays aligned — no re-embed.
+        lambda conn: _rebuild_fts_with_porter(conn),
+    ],
 }
+
+
+def _swap_fts_table(conn, tokenize_clause: str, staging_name: str) -> None:
+    """Rebuild memory_fts with a new tokenizer, preserving rowids exactly
+    (vec_memory is keyed by the same rowids — no re-embed needed).
+
+    Dependent triggers reference memory_fts, and SQLite validates trigger
+    bodies during ALTER TABLE RENAME — so they are saved, dropped, and
+    recreated around the swap.
+    """
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(memory_fts)").fetchall()]
+    if not cols:
+        return
+    triggers = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql LIKE '%memory_fts%'"
+    ).fetchall()
+    for t in triggers:
+        conn.execute(f"DROP TRIGGER IF EXISTS {t[0]}")
+    conn.execute(
+        f"CREATE VIRTUAL TABLE {staging_name} USING fts5("
+        f"item_type, item_id UNINDEXED, title, content, tags{tokenize_clause})"
+    )
+    conn.execute(
+        f"INSERT INTO {staging_name}(rowid, item_type, item_id, title, content, tags) "
+        f"SELECT rowid, item_type, item_id, title, content, tags FROM memory_fts"
+    )
+    conn.execute("DROP TABLE memory_fts")
+    conn.execute(f"ALTER TABLE {staging_name} RENAME TO memory_fts")
+    for t in triggers:
+        if t[1]:
+            conn.execute(t[1])
+
+
+def _rebuild_fts_with_porter(conn) -> None:
+    _swap_fts_table(conn, ", tokenize='porter unicode61'", "memory_fts_v16")
 
 
 def _add_column_if_missing(conn, table: str, column: str, decl: str) -> None:
@@ -390,7 +433,7 @@ def _normalize_vec_memory(conn) -> None:
         )
         fixed += 1
     if fixed:
-        print(f"  ✓ Normalized {fixed} stored vectors to unit length.")
+        logger.info(f"  ✓ Normalized {fixed} stored vectors to unit length.")
 
 
 # ── Downgrade definitions ────────────────────────────────────────────
@@ -399,6 +442,10 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    16: [
+        # Reverse rebuild without porter (stable rowids, same shape).
+        lambda conn: _swap_fts_table(conn, "", "memory_fts_v15"),
+    ],
     15: [
         "DROP TABLE IF EXISTS reflex_runs;",
     ],
@@ -445,7 +492,7 @@ def run_migrations(conn, current_version: int, target_version: int) -> bool:
     for version in range(current_version + 1, target_version + 1):
         if version not in MIGRATIONS:
             continue
-        print(f"→ Running database migration v{version}...")
+        logger.info(f"→ Running database migration v{version}...")
         for step in MIGRATIONS[version]:
             if callable(step):
                 step(conn)
@@ -453,14 +500,14 @@ def run_migrations(conn, current_version: int, target_version: int) -> bool:
                 conn.execute(step)
 
         if version == 6:
-            print("→ v6: Rebuilding FTS index to resolve existing drift...")
+            logger.info("→ v6: Rebuilding FTS index to resolve existing drift...")
             rebuild_fts(conn)
-            print("  ✓ FTS index rebuilt successfully.")
+            logger.info("  ✓ FTS index rebuilt successfully.")
 
         conn.execute(
             "UPDATE schema_meta SET value = ? WHERE key = 'version'", (str(version),)
         )
-        print(f"  ✓ Migration v{version} complete.")
+        logger.info(f"  ✓ Migration v{version} complete.")
 
     return True
 
@@ -472,19 +519,22 @@ def downgrade_to(conn, current_version: int, target_version: int) -> bool:
 
     for version in range(current_version, target_version, -1):
         if version not in DOWNGRADES:
-            print(f"  ⚠ No downgrade script for v{version} → v{version - 1}; skipping.")
+            logger.info(f"  ⚠ No downgrade script for v{version} → v{version - 1}; skipping.")
             continue
-        print(f"→ Downgrading v{version} → v{version - 1}...")
+        logger.info(f"→ Downgrading v{version} → v{version - 1}...")
         for query in DOWNGRADES[version]:
             try:
-                conn.execute(query)
+                if callable(query):
+                    query(conn)
+                else:
+                    conn.execute(query)
             except Exception as e:
-                print(f"  ⚠ Downgrade step skipped ({e}): {query[:80]}")
+                logger.info(f"  ⚠ Downgrade step skipped ({e}): {query[:80]}")
         conn.execute(
             "UPDATE schema_meta SET value = ? WHERE key = 'version'",
             (str(version - 1),),
         )
-        print(f"  ✓ Downgraded to v{version - 1}.")
+        logger.info(f"  ✓ Downgraded to v{version - 1}.")
 
     return True
 

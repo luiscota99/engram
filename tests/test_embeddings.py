@@ -11,8 +11,9 @@ from src import embeddings as emb
 
 
 @pytest.fixture(autouse=True)
-def reset_embed_host_state():
-    """Clear dead-host cooldown and the embedding cache between tests."""
+def reset_embed_host_state(monkeypatch):
+    """Clear caches between tests; L2 persistent cache off unless a test opts in."""
+    monkeypatch.setenv("ENGRAM_EMBED_CACHE", "off")
     emb._dead_hosts.clear()
     emb._host_fails.clear()
     emb._last_embed_failure_reason = None
@@ -94,7 +95,8 @@ def test_embed_text_failure_is_not_cached():
     assert mock_open.call_count == 1, "failed embed must retry, not serve a cached None"
 
 
-def test_embed_cache_evicts_least_recently_used():
+def test_embed_cache_evicts_least_recently_used(monkeypatch):
+    monkeypatch.setenv("ENGRAM_EMBED_CACHE", "off")  # isolate the in-process LRU from L2
     fake_embedding = [0.3] * emb.VEC_EMBEDDING_DIMENSION
 
     with patch("urllib.request.urlopen", side_effect=lambda *a, **k: _mock_response(fake_embedding)) as mock_open:
@@ -257,3 +259,35 @@ def test_embed_max_chars_override(monkeypatch):
         emb.embed_text("x" * 5000)
     body = json.loads(mock_open.call_args[0][0].data.decode())
     assert len(body["prompt"]) == 100
+
+
+def test_persistent_cache_survives_process_boundary(monkeypatch, tmp_path):
+    """L2 cache: a second 'process' (cleared LRU) hits sqlite, not HTTP."""
+    monkeypatch.delenv("ENGRAM_EMBED_URL", raising=False)
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(tmp_path / "mem.db"))
+    monkeypatch.setenv("ENGRAM_EMBED_CACHE", "on")
+    vec = [0.2] * emb.VEC_EMBEDDING_DIMENSION
+
+    with patch("urllib.request.urlopen", return_value=_mock_response(vec)) as mock_open:
+        first = emb.embed_text("persistent query")
+    assert mock_open.call_count == 1
+
+    emb.clear_embedding_cache()  # simulate a fresh CLI process (cold LRU)
+    with patch("urllib.request.urlopen") as mock_open2:
+        second = emb.embed_text("persistent query")
+    mock_open2.assert_not_called()
+    assert second == first
+
+
+def test_persistent_cache_can_be_disabled(monkeypatch, tmp_path):
+    monkeypatch.delenv("ENGRAM_EMBED_URL", raising=False)
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(tmp_path / "mem.db"))
+    monkeypatch.setenv("ENGRAM_EMBED_CACHE", "off")
+    vec = [0.3] * emb.VEC_EMBEDDING_DIMENSION
+
+    with patch("urllib.request.urlopen", return_value=_mock_response(vec)):
+        emb.embed_text("no persist")
+    emb.clear_embedding_cache()
+    with patch("urllib.request.urlopen", return_value=_mock_response(vec)) as m2:
+        emb.embed_text("no persist")
+    assert m2.call_count == 1  # went to HTTP again — nothing persisted

@@ -20,7 +20,6 @@ import logging
 import math
 import os
 import time
-import urllib.request
 from collections import OrderedDict
 
 from . import config
@@ -109,6 +108,79 @@ _EMBED_TIMEOUT = 30  # seconds
 # common in a long-lived MCP server session — must not re-embed.
 EMBED_CACHE_MAX = 256
 _embed_cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
+
+# L2: persistent cross-process cache. The CLI is a fresh process per
+# invocation, so the LRU above is always cold there — every repeated query
+# paid the full ~100ms Ollama round-trip. This small standalone sqlite file
+# (NOT the main memory.db — no schema/migration coupling) makes repeats a
+# sub-ms indexed SELECT. Set ENGRAM_EMBED_CACHE=off to disable.
+PERSISTENT_CACHE_MAX_ROWS = 5000
+
+
+def _persistent_cache_path() -> str | None:
+    mode = os.environ.get("ENGRAM_EMBED_CACHE", "").strip().lower()
+    if mode in ("off", "0", "disabled"):
+        return None
+    db_dir = os.path.dirname(os.environ.get("ENGRAM_DB_PATH", "") or os.path.join(os.path.expanduser("~"), ".engram", "memory.db"))
+    return os.path.join(db_dir, "embed_cache.db")
+
+
+def _cache_conn():
+    import sqlite3
+
+    path = _persistent_cache_path()
+    if not path:
+        return None
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    conn = sqlite3.connect(path, timeout=2)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS embed_cache ("
+        "key TEXT PRIMARY KEY, vec TEXT NOT NULL, created_at REAL NOT NULL)"
+    )
+    return conn
+
+
+def _cache_key_hash(model: str, text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(f"{model}\x00{text}".encode("utf-8")).hexdigest()
+
+
+def _persistent_cache_get(model: str, text: str) -> list[float] | None:
+    try:
+        conn = _cache_conn()
+        if conn is None:
+            return None
+        row = conn.execute(
+            "SELECT vec FROM embed_cache WHERE key = ?", (_cache_key_hash(model, text),)
+        ).fetchone()
+        conn.close()
+        return json.loads(row[0]) if row else None
+    except Exception:
+        logger.debug("persistent embed cache read failed", exc_info=True)
+        return None
+
+
+def _persistent_cache_put(model: str, text: str, vec: list[float]) -> None:
+    try:
+        conn = _cache_conn()
+        if conn is None:
+            return
+        conn.execute(
+            "INSERT OR REPLACE INTO embed_cache (key, vec, created_at) VALUES (?, ?, ?)",
+            (_cache_key_hash(model, text), json.dumps(vec), time.time()),
+        )
+        n = conn.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0]
+        if n > PERSISTENT_CACHE_MAX_ROWS:
+            conn.execute(
+                "DELETE FROM embed_cache WHERE key IN ("
+                "SELECT key FROM embed_cache ORDER BY created_at ASC LIMIT ?)",
+                (n - PERSISTENT_CACHE_MAX_ROWS,),
+            )
+        conn.commit()
+        conn.close()
+    except Exception:
+        logger.debug("persistent embed cache write failed", exc_info=True)
 
 # Dead-host cooldown: avoid hammering a down Ollama instance after repeated failures.
 DEAD_HOST_COOLDOWN = 20.0
@@ -317,6 +389,14 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
         _embed_cache.move_to_end(cache_key)
         return list(cached)
 
+    l2 = _persistent_cache_get(active_model, text)
+    if l2 is not None:
+        _embed_cache[cache_key] = list(l2)
+        _embed_cache.move_to_end(cache_key)
+        while len(_embed_cache) > EMBED_CACHE_MAX:
+            _embed_cache.popitem(last=False)
+        return l2
+
     if _is_host_in_cooldown(base_url):
         _last_embed_failure_reason = "ollama_host_cooldown"
         return None
@@ -331,6 +411,8 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
     else:
         url = f"{base_url.rstrip('/')}/api/embeddings"
         data = json.dumps({"model": active_model, "prompt": text}).encode("utf-8")
+
+    import urllib.request
 
     req = urllib.request.Request(url, data=data, headers=headers)
     try:
@@ -349,6 +431,7 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
                 _embed_cache.move_to_end(cache_key)
                 while len(_embed_cache) > EMBED_CACHE_MAX:
                     _embed_cache.popitem(last=False)
+                _persistent_cache_put(active_model, text, embedding)
             return embedding
     except Exception:
         _mark_host_failure(base_url)
@@ -414,6 +497,8 @@ def embed_batch(texts: list[str], model: str | None = None) -> list[list[float] 
     else:
         url = f"{base_url.rstrip('/')}/api/embed"
     data = json.dumps({"model": active_model, "input": inputs}).encode("utf-8")
+
+    import urllib.request
 
     req = urllib.request.Request(url, data=data, headers=headers)
     try:

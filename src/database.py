@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -173,13 +173,16 @@ CREATE TABLE IF NOT EXISTS item_tags (
     PRIMARY KEY (item_type, item_id, tag_id)
 );
 
--- Full-text search index across all memory types
+-- Full-text search index across all memory types.
+-- porter stemming: 'committing' matches 'commit', 'verification' matches
+-- 'verify' — without it, natural phrasings missed morphological variants.
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     item_type,
     item_id UNINDEXED,
     title,
     content,
-    tags
+    tags,
+    tokenize='porter unicode61'
 );
 
 -- Prompts: reusable LLM system prompts for specialized tasks
@@ -424,7 +427,7 @@ def get_connection(db_path=None):
                     # Backup before any upgrade
                     backup_path = backup_before_migration(path, current_version + 1)
                     if backup_path:
-                        print(f"  ✓ Pre-migration backup saved to {backup_path}")
+                        logger.info("Pre-migration backup saved to %s", backup_path)
                     run_migrations(conn, current_version, SCHEMA_VERSION)
 
         yield conn
@@ -671,13 +674,17 @@ def record_usage(item_type, item_id, success=True, db_path=None):
     return True
 
 
-def get_or_create_project(project_path, name=None, db_path=None, conn=None):
-    """Get or create a project entry from its filesystem path.
-    Uses the git root if available, otherwise the given path.
-    """
+_git_root_cache: dict = {}
+
+
+def _resolve_git_root(project_path: str) -> str:
+    """Git root for a path, memoized — this fork ran on EVERY search before."""
+    cached = _git_root_cache.get(project_path)
+    if cached is not None:
+        return cached
     import subprocess
 
-    # Try to resolve to git root for consistent project identity
+    resolved = project_path
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -687,9 +694,18 @@ def get_or_create_project(project_path, name=None, db_path=None, conn=None):
             timeout=3,
         )
         if result.returncode == 0:
-            project_path = result.stdout.strip()
+            resolved = result.stdout.strip()
     except Exception:
         logger.debug("git root resolution failed for %s; using path as-is", project_path, exc_info=True)
+    _git_root_cache[project_path] = resolved
+    return resolved
+
+
+def get_or_create_project(project_path, name=None, db_path=None, conn=None):
+    """Get or create a project entry from its filesystem path.
+    Uses the git root if available, otherwise the given path.
+    """
+    project_path = _resolve_git_root(project_path)
 
     # Derive name from path basename if not provided
     if not name:

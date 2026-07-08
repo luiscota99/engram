@@ -27,6 +27,9 @@ from ...memory_ops import (
     create_session,
     create_skill,
     create_transcript,
+    mistake_dedup_content,
+    pattern_dedup_content,
+    skill_dedup_content,
 )
 from ...search import get_recent, get_stats, search, semantic_search
 from ...workflow import (
@@ -127,9 +130,7 @@ def cmd_add(args):
 
 
 def _add_mistake(args):
-    content = (
-        f"{args.context} | {args.mistake} | {args.root_cause or ''} | {args.fix} | {args.prevention or ''}"
-    )
+    content = mistake_dedup_content(args.context, args.mistake, args.root_cause, args.fix, args.prevention)
     if not _cli_dedup_gate(args, content, "mistake"):
         sys.exit(1)
     with get_connection() as conn:
@@ -148,7 +149,7 @@ def _add_mistake(args):
 
 
 def _add_pattern(args):
-    content = f"{args.symptoms} | {args.root_cause} | {args.fix}"
+    content = pattern_dedup_content(args.symptoms, args.root_cause, args.fix)
     if not _cli_dedup_gate(args, content, "pattern", name=args.name):
         sys.exit(1)
     with get_connection() as conn:
@@ -164,7 +165,7 @@ def _add_pattern(args):
 
 
 def _add_skill(args):
-    content = f"{args.trigger} | {args.workflow} | {args.pitfalls or ''}"
+    content = skill_dedup_content(args.trigger, args.workflow, args.pitfalls)
     if not _cli_dedup_gate(args, content, "skill", name=args.name):
         sys.exit(1)
     with get_connection() as conn:

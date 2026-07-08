@@ -30,7 +30,23 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_INTERPRETERS = ("bash", "sh", "python3")
 RUN_TIMEOUT_SECONDS = 300  # real workflows (test suites, builds) exceed 2 min
-MAX_OUTPUT_CHARS = 8000
+# Head+tail budget: failures live at the END of test/build logs, so plain
+# head-truncation used to discard exactly the signal the agent needed.
+OUTPUT_HEAD_CHARS = 1500
+OUTPUT_TAIL_CHARS = 2500
+
+
+def _clip_output(text: str) -> str:
+    """Keep the start and the end of long output; elide the middle."""
+    limit = OUTPUT_HEAD_CHARS + OUTPUT_TAIL_CHARS
+    if len(text) <= limit:
+        return text
+    elided = len(text) - limit
+    return (
+        text[:OUTPUT_HEAD_CHARS]
+        + f"\n…[{elided} chars elided]…\n"
+        + text[-OUTPUT_TAIL_CHARS:]
+    )
 
 # Consecutive failures before a reflex is auto-demoted (approval revoked,
 # failure captured as a mistake). Correctness beats convenience: a script
@@ -38,6 +54,8 @@ MAX_OUTPUT_CHARS = 8000
 DEMOTION_FAIL_STREAK = 2
 
 _TEMPLATE = """#!/usr/bin/env {interpreter}
+set -euo pipefail  # fail fast: a silent mid-script failure would record a
+                   # false 'ok' run and corrupt the reuse metric
 # Reflex draft for skill #{skill_id}: {skill_name}
 # Drafted from the workflow below — REVIEW AND EDIT before approving.
 # Parameters arrive as environment variables: {param_env_names}
@@ -54,33 +72,100 @@ def _script_hash(script: str) -> str:
     return hashlib.sha256(script.encode("utf-8")).hexdigest()
 
 
+def validate_script_syntax(script: str, interpreter: str = "bash") -> str | None:
+    """Parse-check a script without executing it. Returns an error or None.
+
+    ``bash -n`` / ``sh -n`` parse only; python uses ``compile``. Approving a
+    syntactically broken script used to burn two real runs before
+    auto-demotion caught it.
+    """
+    try:
+        if interpreter in ("bash", "sh"):
+            proc = subprocess.run(
+                [interpreter, "-n", "-c", script], capture_output=True, text=True, timeout=10
+            )
+            return None if proc.returncode == 0 else (proc.stderr.strip() or "syntax error")
+        if interpreter == "python3":
+            compile(script, "<reflex>", "exec")
+            return None
+        return f"unknown interpreter {interpreter!r}"
+    except SyntaxError as e:
+        return str(e)
+    except Exception as e:
+        return f"validation failed: {e}"
+
+
 def _tool_safe_name(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return slug[:48] or "unnamed"
 
 
-def _llm_draft_script(skill: dict) -> str | None:
-    """Ask the optional LLM layer for a script draft; None when unavailable."""
+def _related_mistakes(skill: dict, *, db_path=None) -> list[dict]:
+    """Top known failures related to this workflow — drafted reflexes should
+    encode them as preflight guards (a reflex must be MORE correct than fresh
+    reasoning, not just cheaper)."""
+    try:
+        from .search import search
+
+        query = f"{skill['name']} {skill.get('trigger_desc', '')}"[:200]
+        hits = search(query, item_type="mistake", limit=3, db_path=db_path, skip_audit=True)
+        return [{"title": h["title"], "snippet": (h.get("snippet") or "")[:300]} for h in hits]
+    except Exception:
+        logger.debug("related-mistake lookup failed for draft", exc_info=True)
+        return []
+
+
+def _llm_draft_script(skill: dict, *, db_path=None) -> tuple[str, dict] | None:
+    """Ask the optional LLM layer for a script draft + declared params.
+
+    Returns ``(script, params_schema)`` or None when unavailable.
+    """
     try:
         from .llm import call_chat_completion, is_llm_available, parse_json_from_llm
 
         if not is_llm_available():
             return None
+        guards = _related_mistakes(skill, db_path=db_path)
+        guard_text = "\n".join(f"- {g['title']}: {g['snippet']}" for g in guards) or "none known"
         prompt = (
             "Convert this engineering workflow into a single executable bash script.\n"
-            "Parameters must be read from environment variables named PARAM_<NAME>.\n"
-            "Reply with JSON: {\"script\": \"...\"}.\n\n"
+            "Rules:\n"
+            "1. Begin with `set -euo pipefail` — fail fast on any error.\n"
+            "2. Parameters are read from environment variables named PARAM_<NAME>.\n"
+            "3. Add preflight guard checks for the known failures listed below.\n"
+            "4. No destructive commands (rm -rf, curl|sh) unless the workflow explicitly requires them.\n"
+            'Reply with JSON: {"script": "...", "params": [{"name": "...", "description": "...", "required": true}]}.\n\n'
             f"Workflow name: {skill['name']}\n"
             f"Trigger: {skill.get('trigger_desc', '')}\n"
             f"Steps:\n{skill.get('workflow', '')}\n"
             f"Pitfalls to guard against:\n{skill.get('pitfalls') or 'none listed'}\n"
+            f"Known related failures (add guards):\n{guard_text}\n"
         )
         raw = call_chat_completion(
             [{"role": "user", "content": prompt}], task="extract"
         )
         parsed = parse_json_from_llm(raw or "")
         if isinstance(parsed, dict) and parsed.get("script"):
-            return str(parsed["script"])
+            props = {}
+            required = []
+            for prm in parsed.get("params") or []:
+                if isinstance(prm, dict) and prm.get("name"):
+                    key = str(prm["name"]).lower()
+                    props[key] = {
+                        "type": "string",
+                        "description": str(prm.get("description", ""))[:150],
+                    }
+                    if prm.get("required"):
+                        required.append(key)
+            schema = {
+                "type": "object",
+                "properties": props,
+                "additionalProperties": True,
+                "description": "Values are exported as PARAM_<UPPERCASED_KEY> env vars.",
+            }
+            if required:
+                schema["required"] = required
+            return str(parsed["script"]), schema
     except Exception:
         logger.debug("LLM reflex draft failed; falling back to template", exc_info=True)
     return None
@@ -107,7 +192,8 @@ def promote_skill(skill_id: int, *, db_path=None, conn=None) -> dict:
                 f"delete it first to re-promote."
             )
 
-        script = _llm_draft_script(skill)
+        drafted = _llm_draft_script(skill, db_path=db_path)
+        script, params_schema = (drafted if drafted else (None, None))
         drafted_by = "llm"
         if not script:
             drafted_by = "template"
@@ -122,6 +208,14 @@ def promote_skill(skill_id: int, *, db_path=None, conn=None) -> dict:
                 workflow_comment=workflow_comment or "#   (empty)",
             )
 
+        if params_schema is None:
+            params_schema = {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": True,
+                "description": "Values are exported as PARAM_<UPPERCASED_KEY> env vars.",
+            }
+        syntax_error = validate_script_syntax(script, "bash")
         description = (
             f"Reflex (compiled skill): {skill['name']}. "
             f"Trigger: {(skill.get('trigger_desc') or '')[:150]}"
@@ -129,20 +223,7 @@ def promote_skill(skill_id: int, *, db_path=None, conn=None) -> dict:
         cursor = c.execute(
             """INSERT INTO reflexes (skill_id, name, description, script, interpreter, params_schema)
                VALUES (?, ?, ?, ?, 'bash', ?)""",
-            (
-                skill_id,
-                name,
-                description,
-                script,
-                json.dumps(
-                    {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": True,
-                        "description": "Values are exported as PARAM_<UPPERCASED_KEY> env vars.",
-                    }
-                ),
-            ),
+            (skill_id, name, description, script, json.dumps(params_schema)),
         )
         return {
             "id": cursor.lastrowid,
@@ -150,6 +231,8 @@ def promote_skill(skill_id: int, *, db_path=None, conn=None) -> dict:
             "skill_id": skill_id,
             "drafted_by": drafted_by,
             "script": script,
+            "syntax_ok": syntax_error is None,
+            "syntax_error": syntax_error,
         }
 
 
@@ -159,6 +242,11 @@ def approve_reflex(reflex_id: int, *, db_path=None, conn=None) -> dict:
         row = c.execute("SELECT * FROM reflexes WHERE id = ?", (reflex_id,)).fetchone()
         if not row:
             raise ValueError(f"Reflex {reflex_id} not found")
+        syntax_error = validate_script_syntax(row["script"], row["interpreter"])
+        if syntax_error:
+            raise ValueError(
+                f"Refusing to approve reflex {reflex_id}: script does not parse — {syntax_error}"
+            )
         h = _script_hash(row["script"])
         c.execute(
             "UPDATE reflexes SET approved_at = datetime('now'), approved_hash = ? WHERE id = ?",
@@ -283,7 +371,7 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
     result = {
         "ok": status == "ok",
         "status": status,
-        "output": output[:MAX_OUTPUT_CHARS],
+        "output": _clip_output(output),
         "reflex": row["name"],
     }
     if demoted:

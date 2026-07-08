@@ -14,6 +14,20 @@ def _parse_tags(tags: str | Iterable[str] | None) -> list[str]:
     return [str(t).strip() for t in tags if str(t).strip()]
 
 
+def mistake_dedup_content(context, mistake, root_cause, fix, prevention) -> str:
+    """Canonical content string for mistake dedup — CLI and MCP must agree,
+    otherwise the same mistake fingerprints differently per entry path."""
+    return f"{context} | {mistake} | {root_cause or ''} | {fix} | {prevention or ''}"
+
+
+def pattern_dedup_content(symptoms, root_cause, standard_fix) -> str:
+    return f"{symptoms} | {root_cause} | {standard_fix}"
+
+
+def skill_dedup_content(trigger, workflow, pitfalls) -> str:
+    return f"{trigger} | {workflow} | {pitfalls or ''}"
+
+
 def create_mistake(
     conn,
     *,
