@@ -18,6 +18,7 @@ the search → read → decide loop an agent would otherwise spend several calls
 from __future__ import annotations
 
 import logging
+import re
 
 from .database import get_connection
 from .search import search
@@ -27,6 +28,12 @@ logger = logging.getLogger(__name__)
 # Utility-score floor below which a match is considered noise rather than
 # prior art (semantic base score is 100; weak lexical matches sit under 60).
 RECALL_MIN_SCORE = 60.0
+
+# Retrieve WIDE, decide narrow: both search channels cap candidates at the
+# requested limit BEFORE fusion, so a limit-5 routing search could drop the
+# right skill at candidate generation (observed in the field). The router's
+# output stays tiny regardless of this number.
+ROUTING_SEARCH_LIMIT = 30
 
 _SNIPPET_CHARS = 280
 
@@ -39,18 +46,22 @@ def route_task(task: str, *, db_path=None, project_path=None) -> dict:
     """
     results = search(
         task,
-        limit=5,
+        limit=ROUTING_SEARCH_LIMIT,
         db_path=db_path,
         project_path=project_path,
         skip_audit=False,
         audit_source="route",
     )
 
-    # Map matched skills to approved reflexes
+    # Map matched skills to approved reflexes, and ALSO match the task
+    # directly against every approved reflex's own name/description — the
+    # reflex surface often contains trigger phrasings the skill's FTS text
+    # doesn't (cheap: there are few reflexes by design).
     skill_ids = [int(r["item_id"]) for r in results if r["item_type"] == "skill"]
     reflex_by_skill: dict[int, dict] = {}
-    if skill_ids:
-        with get_connection(db_path) as conn:
+    direct_reflex: dict | None = None
+    with get_connection(db_path) as conn:
+        if skill_ids:
             placeholders = ",".join("?" * len(skill_ids))
             rows = conn.execute(
                 f"SELECT skill_id, name, description FROM reflexes "
@@ -58,6 +69,18 @@ def route_task(task: str, *, db_path=None, project_path=None) -> dict:
                 skill_ids,
             ).fetchall()
             reflex_by_skill = {r["skill_id"]: dict(r) for r in rows}
+        task_tokens = {t for t in re.findall(r"[a-z0-9]+", task.lower()) if len(t) > 2}
+        if task_tokens:
+            best_overlap = 0
+            for r in conn.execute(
+                "SELECT skill_id, name, description FROM reflexes WHERE approved_at IS NOT NULL"
+            ).fetchall():
+                surface = f"{r['name']} {r['description']}".lower().replace("_", " ")
+                surface_tokens = set(re.findall(r"[a-z0-9]+", surface))
+                overlap = len(task_tokens & surface_tokens)
+                if overlap >= 2 and overlap > best_overlap:
+                    best_overlap = overlap
+                    direct_reflex = dict(r)
 
     warnings = [
         {
@@ -69,7 +92,7 @@ def route_task(task: str, *, db_path=None, project_path=None) -> dict:
         if r["item_type"] == "mistake" and r.get("utility_score", 0) >= RECALL_MIN_SCORE
     ][:2]
 
-    # Rung 1: reflex
+    # Rung 1: reflex — via matched skill, or via direct reflex-surface match
     for r in results:
         if r["item_type"] == "skill" and int(r["item_id"]) in reflex_by_skill:
             reflex = reflex_by_skill[int(r["item_id"])]
@@ -80,6 +103,14 @@ def route_task(task: str, *, db_path=None, project_path=None) -> dict:
                 "warnings": warnings,
                 "text": _fmt_reflex(reflex, warnings),
             }
+    if direct_reflex is not None:
+        return {
+            "rung": "reflex",
+            "reflex": direct_reflex["name"],
+            "matches": [{"item_type": "skill", "item_id": str(direct_reflex["skill_id"]), "title": direct_reflex["name"]}],
+            "warnings": warnings,
+            "text": _fmt_reflex(direct_reflex, warnings),
+        }
 
     # Rung 2: recall
     recall = [

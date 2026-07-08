@@ -167,3 +167,46 @@ def test_backup_export_includes_reflexes(test_db, monkeypatch):
     assert "reflexes" in data and len(data["reflexes"]) == 1
     assert data["reflexes"][0]["script"] == "echo backed-up"
     assert "reflex_runs" in data and len(data["reflex_runs"]) == 1
+
+
+def test_fts_porter_stemming_matches_morphological_variants(test_db):
+    """'committing'/'verification' in docs must match 'commit'/'verify' queries."""
+    conn = test_db["conn"]
+    conn.execute(
+        "INSERT INTO skills (name, domain, trigger_desc, workflow) "
+        "VALUES ('Verification Pass', 'ops', 'before committing changes', 'run checks')"
+    )
+    index_in_fts(conn, "skill", 1, "Verification Pass", "before committing changes | run checks", [])
+    conn.commit()
+
+    rows = conn.execute(
+        "SELECT item_id FROM memory_fts WHERE memory_fts MATCH ?", ('"commit" OR "verify"',)
+    ).fetchall()
+    assert len(rows) == 1
+
+
+def test_v16_migration_preserves_vec_rowid_alignment(tmp_path):
+    import json
+
+    from src.database import get_connection, init_db
+
+    db = str(tmp_path / "porter.db")
+    init_db(db)
+    with get_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO skills (name, domain, trigger_desc, workflow) VALUES ('s', 'd', 'committing', 'w')"
+        )
+        cur = conn.execute(
+            "INSERT INTO memory_fts (item_type, item_id, title, content, tags) VALUES ('skill','1','s','committing changes','')"
+        )
+        rowid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)", (rowid, json.dumps([0.1] * 768))
+        )
+        conn.execute("UPDATE schema_meta SET value='15' WHERE key='version'")
+
+    with get_connection(db) as conn:  # reopen → v16 migration runs
+        r = conn.execute("SELECT rowid FROM memory_fts WHERE memory_fts MATCH '\"commit\"'").fetchone()
+        assert r is not None and r["rowid"] == rowid
+        v = conn.execute("SELECT rowid FROM vec_memory WHERE rowid = ?", (rowid,)).fetchone()
+        assert v is not None

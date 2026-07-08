@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Heavy review sweep (2026-07-07, "true recall" edition).** Recall: routing search now retrieves wide (30 candidates) and decides narrow — both channels capped at 5 BEFORE fusion, which dropped correct skills at candidate generation; the router also matches tasks directly against approved reflex names/descriptions. FTS rebuilt with **porter stemming** (schema v16, rowids preserved — no re-embed): "committing" now matches "commit". Recency no longer halves a cold memory's relevance (floored at 0.75); RRF weight raised 15→50 so fusion actually reorders; per-type `rank_multiplier` (defined since the registry existed, never read) is finally wired. Measured: seeded R@1 82%→85%, MRR 0.899→0.917, R@5 stays 100%; the field-observed routing miss now resolves to its reflex.
+- **Token diet.** MCP tool list 6,669→5,138 tokens/session (legacy add_* tools removed from the list — handlers still accept them; conversation/prompt folded into unified `memory_add`; `auto_extract` merged into `suggest_capture`; boilerplate trimmed). Search responses drop the duplicated injection-policy preamble (~85 tok/call); `memory_route` uses a one-line wrapper (~90 tok/call); `read_item` returns compact JSON.
+- **Persistent query-embedding cache** (`~/.engram/embed_cache.db`, L2 under the in-process LRU, `ENGRAM_EMBED_CACHE=off` to disable): repeated CLI searches 1.02s→0.10s — the CLI is a fresh process per call and previously always paid the ~100ms Ollama embed.
+- **Reflex drafting correctness**: `bash -n`/`py_compile` gate at approval (broken scripts are refused instead of burning runs), `set -euo pipefail` mandated (silent mid-script failures recorded false 'ok' runs and corrupted the reuse metric), params schema inferred from the LLM draft (agents see real arguments in the MCP tool), and related mistakes injected into the draft prompt as preflight guards. Reflex output now clips head+tail — failures live at the END of logs and head-truncation discarded exactly that signal.
+
+### Fixed
+
+- **Migration output corrupted the MCP JSON-RPC stream**: `database.py`/`migrations.py` printed progress to stdout, which the MCP server uses for framing — the first tool call after a schema upgrade broke the session. Routed to logging.
+- **Dedup fingerprints diverged between CLI and MCP** (MCP omitted `prevention` for mistakes): shared canonical content builders in `memory_ops`.
+- `git rev-parse` was forked on every search for project affinity — memoized per path.
+- `urllib.request` import deferred (~30ms off every non-embedding CLI command).
+
+### Added
+
 - **Reflex run history (schema v15)** — every execution recorded in `reflex_runs` (status, duration); `engram efficiency` reports measured success rates, not just streaks. Reflex timeout raised to 300s for real workflows (test suites, builds).
 - **`ENGRAM_EMBED_MAX_CHARS`** — optional per-document embedding length cap; embedding time scales ~linearly with input length, so this is the honest bulk-ingest speed lever. Measured on Apple Silicon: embeddinggemma is 5x *slower* than nomic-embed-text via Ollama despite fewer params (noted in the model table) — benchmark before switching models.
 - **Action Ladder** — the framework surface for token efficiency + action correctness (ADR 0006). `engram route` / MCP `memory_route` answers "cheapest correct way to do this task" in one budgeted call: an approved reflex to invoke, prior art to follow, or reason-then-capture; known mistakes surface as pitfall warnings on every rung. Reflexes auto-demote after 2 consecutive failures (approval revoked, failure captured as a mistake — schema v14 adds `fail_streak`); skills used 5+ times surface as promotion candidates in `engram health`; `engram efficiency` reports measured ladder stats with conservative token floors only.

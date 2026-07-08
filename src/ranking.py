@@ -18,6 +18,12 @@ from datetime import datetime, timezone
 # After 90 days of no use, a memory's recency factor is 0.5.
 RECENCY_HALF_LIFE_DAYS = 90
 
+# Recency scales only this fraction of the base score. Previously the raw
+# factor multiplied the WHOLE base, so a correct-but-cold memory started at
+# half its relevance — the antithesis of recall. Now: base * (floor + span*f).
+RECENCY_FLOOR = 0.75
+RECENCY_SPAN = 0.25
+
 # Penalty applied when an embedding was generated with a stale model.
 STALE_EMBEDDING_PENALTY = 10.0
 
@@ -55,7 +61,7 @@ BM25_WEIGHT = 0.3  # how much BM25 adjusts the final score: score *= (1 + BM25_W
 # Reciprocal rank fusion — combines semantic vs lexical ranked lists (see search.py).
 # Typical k≈60 (Cormack-style RRF). Normalized scores are summed into utility_score.
 RRF_K = 60
-RRF_WEIGHT = 15.0
+RRF_WEIGHT = 50.0  # was 15 — cosmetic next to base 100; fusion must be able to reorder
 
 
 def result_key(result: dict) -> str:
@@ -280,8 +286,8 @@ def calculate_utility_score(
     """
     base = BASE_SCORE_SEMANTIC if result.get("is_semantic") else BASE_SCORE_LEXICAL
 
-    # Apply recency decay to base score
-    decayed_base = base * _recency_factor(last_used_at)
+    # Recency nudges relevance, never dominates it (floor at RECENCY_FLOOR)
+    decayed_base = base * (RECENCY_FLOOR + RECENCY_SPAN * _recency_factor(last_used_at))
 
     # Log-scale usage boost (doesn't decay — demonstrated value persists)
     usage = _usage_boost(usage_count)
@@ -303,6 +309,13 @@ def calculate_utility_score(
     score = decayed_base + usage + affinity_boost + type_boost + tag_boost - stale_penalty
     if inferred_type and inferred_type == result.get("item_type"):
         score *= INTENT_TYPE_MULTIPLIERS.get(inferred_type, 1.0)
+
+    # Per-type relevance weight from the registry (mistakes/skills over
+    # conversations/sessions). Defined since the registry existed but never
+    # applied — wiring it keeps low-signal types from crowding the top-k.
+    from .item_registry import rank_multiplier_for
+
+    score *= rank_multiplier_for(result.get("item_type"))
     return score
 
 

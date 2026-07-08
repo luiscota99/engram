@@ -138,3 +138,9 @@ def dedup_table_map() -> dict[str, tuple[str, str]]:
         for t, spec in REGISTRY.items()
         if spec.dedup_column
     }
+
+
+def rank_multiplier_for(item_type: str | None) -> float:
+    """Per-type relevance weight for ranking; 1.0 for unknown types."""
+    spec = REGISTRY.get(item_type or "")
+    return spec.rank_multiplier if spec else 1.0

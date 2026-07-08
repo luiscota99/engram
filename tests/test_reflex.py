@@ -167,3 +167,78 @@ def test_reflex_runs_history_and_success_rates(test_db):
     assert st["ok"] == 2
     assert st["rate"] == round(2 / 3, 3)
     assert st["avg_ms"] >= 0
+
+
+def test_approve_refuses_broken_script(test_db):
+    from src.database import get_connection
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="Broken Script")
+    conn.commit()
+    with patch("src.llm.is_llm_available", return_value=False):
+        r = promote_skill(sid, db_path=test_db["path"])
+    with get_connection(test_db["path"]) as c:
+        c.execute("UPDATE reflexes SET script = ? WHERE id = ?", ('if [ then fi (', r["id"]))
+
+    with pytest.raises(ValueError, match="does not parse"):
+        approve_reflex(r["id"], db_path=test_db["path"])
+
+
+def test_template_draft_parses_and_reports_syntax_ok(test_db):
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="Template Syntax")
+    conn.commit()
+    with patch("src.llm.is_llm_available", return_value=False):
+        r = promote_skill(sid, db_path=test_db["path"])
+    assert r["syntax_ok"] is True
+    assert "set -euo pipefail" in r["script"]
+
+
+def test_llm_draft_stores_inferred_params_schema(test_db):
+    import json as _json
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="Param Inference")
+    conn.commit()
+
+    llm_reply = _json.dumps({
+        "script": "set -euo pipefail\necho \"$PARAM_SERVICE\"",
+        "params": [{"name": "service", "description": "target service", "required": True}],
+    })
+    with patch("src.llm.is_llm_available", return_value=True), \
+         patch("src.llm.call_chat_completion", return_value=llm_reply):
+        r = promote_skill(sid, db_path=test_db["path"])
+
+    assert r["drafted_by"] == "llm"
+    rows = list_reflexes(db_path=test_db["path"])
+    schema = _json.loads([x for x in rows if x["id"] == r["id"]][0]["params_schema"])
+    assert "service" in schema["properties"]
+    assert schema["required"] == ["service"]
+
+
+def test_llm_draft_prompt_includes_related_mistake_guards(test_db):
+    from src.memory_ops import create_mistake
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="Guarded Deploy")
+    create_mistake(
+        conn,
+        date="2026-07-01",
+        context="guarded deploy",
+        mistake="Deployed without saving env first",
+        fix="save then deploy",
+    )
+    conn.commit()
+
+    captured = {}
+
+    def fake_chat(messages, task=None):
+        captured["prompt"] = messages[0]["content"]
+        return '{"script": "set -euo pipefail\\necho ok"}'
+
+    with patch("src.llm.is_llm_available", return_value=True), \
+         patch("src.llm.call_chat_completion", side_effect=fake_chat):
+        promote_skill(sid, db_path=test_db["path"])
+
+    assert "Known related failures" in captured["prompt"]
+    assert "set -euo pipefail" in captured["prompt"]
