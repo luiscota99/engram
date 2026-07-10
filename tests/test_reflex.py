@@ -242,3 +242,25 @@ def test_llm_draft_prompt_includes_related_mistake_guards(test_db):
 
     assert "Known related failures" in captured["prompt"]
     assert "set -euo pipefail" in captured["prompt"]
+
+
+def test_approve_derives_params_schema_from_script(test_db):
+    """The script owns which params exist; approval re-derives the schema."""
+
+    from src.database import get_connection
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="Schema Sync")
+    conn.commit()
+    with patch("src.llm.is_llm_available", return_value=False):
+        r = promote_skill(sid, db_path=test_db["path"])
+    with get_connection(test_db["path"]) as c:
+        c.execute(
+            "UPDATE reflexes SET script = ? WHERE id = ?",
+            ('echo "$PARAM_PROJECT $PARAM_SERVICE"', r["id"]),
+        )
+    approve_reflex(r["id"], db_path=test_db["path"])
+
+    tools = reflex_tools_for_mcp(db_path=test_db["path"])
+    props = tools[0]["inputSchema"]["properties"]
+    assert set(props) == {"project", "service"}

@@ -258,8 +258,35 @@ def promote_skill(skill_id: int, *, db_path=None, conn=None) -> dict:
         }
 
 
+def sync_params_schema(script: str, existing_schema: str | None) -> str:
+    """Derive the params schema from the script's PARAM_* usage.
+
+    Normalization principle: the script owns the fact of which params exist;
+    the schema is a derived copy and must be regenerated, never hand-kept.
+    LLM-provided descriptions survive for params the script still uses.
+    """
+    used = {m.lower() for m in re.findall(r"PARAM_([A-Z_]+)", script or "")}
+    try:
+        old = json.loads(existing_schema or "{}")
+    except (TypeError, ValueError):
+        old = {}
+    old_props = old.get("properties") or {}
+    props = {
+        k: old_props.get(k) or {"type": "string", "description": f"exported as PARAM_{k.upper()}"}
+        for k in sorted(used)
+    }
+    schema = {
+        "type": "object",
+        "properties": props,
+        "additionalProperties": True,
+        "description": "Values are exported as PARAM_<UPPERCASED_KEY> env vars.",
+    }
+    return json.dumps(schema)
+
+
 def approve_reflex(reflex_id: int, *, db_path=None, conn=None) -> dict:
-    """Mark a reflex approved, pinning the current script hash."""
+    """Mark a reflex approved: pin the script hash and re-derive the params
+    schema from the script (the approved script is the source of truth)."""
     with connection_scope(conn, db_path) as c:
         row = c.execute("SELECT * FROM reflexes WHERE id = ?", (reflex_id,)).fetchone()
         if not row:
@@ -269,6 +296,10 @@ def approve_reflex(reflex_id: int, *, db_path=None, conn=None) -> dict:
             raise ValueError(
                 f"Refusing to approve reflex {reflex_id}: script does not parse — {syntax_error}"
             )
+        c.execute(
+            "UPDATE reflexes SET params_schema = ? WHERE id = ?",
+            (sync_params_schema(row["script"], row["params_schema"]), reflex_id),
+        )
         h = _script_hash(row["script"])
         c.execute(
             "UPDATE reflexes SET approved_at = datetime('now'), approved_hash = ? WHERE id = ?",
