@@ -37,6 +37,11 @@ engram route "rollback the failed deploy"
 
 Heed any "Known pitfalls" lines — they are past mistakes matching this task.
 
+If route mentions open inbox items, run `engram inbox` before changing any
+system. When a finding warrants human judgment and no approved reflex applies,
+file it with `memory_propose_decision` (or tell the user) — never act on it
+yourself.
+
 ## Searching directly (when you already know what you want)
 
 ```bash

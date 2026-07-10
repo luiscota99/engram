@@ -30,6 +30,44 @@ AI assistants are brilliant but stateless. They forget every lesson learned as s
 
 Architecture decisions are documented in [`docs/decisions/`](docs/decisions/).
 
+## The Action Ladder — memory that compiles into action
+
+Engram is more than recall: it is a framework that makes agents cheaper and
+more correct over time. Every task has three rungs, cheapest first:
+
+```
+REFLEX   ~50 tokens    approved deterministic script   ← earned by 5+ proven uses + human approval
+RECALL   ~200 tokens   follow retrieved prior art      ← earned by capture + reuse
+REASON   1000s tokens  full LLM derivation             ← the default for anything new
+```
+
+- **`engram route "task"`** (MCP: `memory_route`) — one budgeted call answers
+  "what is the cheapest correct way to do this": a reflex to invoke, prior art
+  to follow, or reason-then-capture. Known past mistakes ride along as pitfall
+  warnings on every rung.
+- **Reflexes** — skills proven by reuse get promoted (`engram promote <id>`)
+  into scripts a human reviews and approves (`engram reflex approve`). Approval
+  pins the script hash (edits un-approve); syntax is parse-checked; approved
+  reflexes appear as native `reflex_*` MCP tools in every client. Two
+  consecutive failures auto-demote and capture the failure as a mistake.
+- **Monitors & inbox** — a reflex with `kind=monitor` watches a real system on
+  a cron schedule (`engram schedule <id> "*/15 * * * *"`); firing files a
+  deduped **inbox** alert instead of demoting. Agents can *propose* actions
+  (`memory_propose_decision`) but never execute them: `engram inbox` +
+  `engram decide <id> --approve [--run]` is the only proposal→execution path,
+  human-invoked by construction. Delivery goes through a user-approved
+  `notify` reflex (`engram notify-init`; osascript default, swap for any
+  webhook) — the notification channel itself is under the trust model.
+- **Self-maintenance** — `engram self-check` (cron it daily) files promotion
+  candidates, flaky reflexes, hygiene issues and capture-quality warnings as
+  inbox decisions: the system proposes its own upkeep; you decide.
+- **Change journal** — mutating scripts emit `ENGRAM_CHANGE target=… before=…
+  after=…`; every reported mutation is journaled and revertible-by-information.
+- **Honest accounting** — `engram efficiency` reports measured floors only.
+
+See [ADR 0006](docs/decisions/0006-action-ladder.md) for the design and its
+scope fence.
+
 **Measured, not vibes:** Engram publishes reproducible numbers. On its home domain
 (labeled real-corpus eval): **R@5 = 1.00 at 60–120 ms, ~560 context tokens/query**.
 On the out-of-domain **LongMemEval oracle** (940 chit-chat sessions, retrieval-only,
