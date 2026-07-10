@@ -54,6 +54,20 @@ TOOLS = [
         }
     },
     {
+        "name": "memory_propose_decision",
+        "description": "Propose an action for the USER to decide asynchronously (files an inbox item; nothing executes). Use when a finding warrants human judgment and no approved reflex applies.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "One-line proposal"},
+                "body": {"type": "string", "description": "Evidence and context"},
+                "severity": {"type": "string", "enum": ["info", "warning", "high", "critical"]},
+                "finding_key": {"type": "string", "description": "Optional dedup key for recurring findings"}
+            },
+            "required": ["title"]
+        }
+    },
+    {
         "name": "memory_route",
         "description": "START HERE for any non-trivial task: one call returns the cheapest correct action — an approved reflex tool, prior art to follow, or reason-then-capture.",
         "inputSchema": {

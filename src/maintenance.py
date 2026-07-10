@@ -1173,3 +1173,96 @@ def get_efficiency_report(db_path=None) -> dict:
     except Exception:
         logger.debug("promotion candidates unavailable", exc_info=True)
     return report
+
+
+# ── Self-check: Engram monitoring Engram ─────────────────────────────
+
+
+def run_self_check(db_path=None) -> dict:
+    """Daily self-maintenance sweep: files inbox items for findings.
+
+    Idempotent by finding_key — an open item is never re-filed. The system
+    proposes its own upkeep as decisions; the human decides, as always.
+    """
+    from .inbox import file_item
+    from .reflex import get_promotion_candidates, get_reflex_success_rates, list_reflexes
+
+    filed: list[str] = []
+
+    def _file(**kw) -> None:
+        if file_item(db_path=db_path, source="self_check", **kw) is not None:
+            filed.append(kw["finding_key"])
+
+    # 1. Skills that earned reflex-hood
+    for cand in get_promotion_candidates(db_path=db_path):
+        _file(
+            kind="decision",
+            severity="info",
+            title=f"Promote skill #{cand['id']} '{cand['name']}'? (used {cand['usage_count']}x)",
+            body=f"Run: engram promote {cand['id']}  — then review and approve the drafted script.",
+            finding_key=f"promote:skill:{cand['id']}",
+        )
+
+    # 2. Underperforming reflexes (enough runs to judge)
+    rates = get_reflex_success_rates(db_path=db_path)
+    names = {r["id"]: r["name"] for r in list_reflexes(db_path=db_path)}
+    for rid, st in rates.items():
+        if st["runs"] >= 5 and st["rate"] is not None and st["rate"] < 0.7:
+            _file(
+                kind="decision",
+                severity="warning",
+                title=f"Reflex '{names.get(rid, rid)}' succeeding only {st['rate']:.0%} ({st['ok']}/{st['runs']}) — fix or demote?",
+                body="Inspect: engram reflex list; the script may need repair and re-approval.",
+                finding_key=f"reflex-flaky:{rid}",
+            )
+
+    # 3. Hygiene: unfilled auto-demotion mistakes, pending embeddings, drift
+    with get_connection(db_path) as conn:
+        placeholders = conn.execute(
+            "SELECT COUNT(*) AS c FROM mistakes WHERE fix LIKE '%(fill in%'"
+        ).fetchone()["c"]
+        pending = conn.execute(
+            "SELECT COUNT(*) AS c FROM embedding_status WHERE status IN ('pending','stale')"
+        ).fetchone()["c"]
+    if placeholders:
+        _file(
+            kind="alert",
+            severity="warning",
+            title=f"{placeholders} mistake(s) still carry '(fill in …)' placeholders",
+            body="Complete their root_cause/fix so future recall is trustworthy.",
+            finding_key="hygiene:placeholders",
+        )
+    if pending > 5:
+        _file(
+            kind="alert",
+            severity="warning",
+            title=f"{pending} memories lack embeddings (semantic recall degraded)",
+            body="Run: engram reembed",
+            finding_key="hygiene:pending-embeddings",
+        )
+
+    # 4. Consolidation clusters (vector-based; skipped when unchanged)
+    clusters, _reason = find_consolidation_candidates(db_path=db_path)
+    for cl in clusters[:3]:
+        ids = ",".join(str(i["item_id"]) for i in cl.get("items", []))
+        _file(
+            kind="decision",
+            severity="info",
+            title=f"Consolidate {cl['cluster_size']} near-duplicate {cl['item_type']}s? (ids {ids})",
+            body=f"avg similarity {cl.get('avg_similarity')}; engram suggest-consolidate for detail.",
+            finding_key=f"consolidate:{cl['item_type']}:{ids}",
+        )
+
+    # 5. Capture quality collapse
+    cr = get_reuse_rates(db_path=db_path)
+    for itype, st in cr.items():
+        if st["eligible"] >= 10 and st["rate"] is not None and st["rate"] < 0.2:
+            _file(
+                kind="alert",
+                severity="warning",
+                title=f"Reuse rate for {itype}s is {st['rate']:.0%} — capture quality warning",
+                body="Capture fewer, higher-signal entries; prune with engram gc.",
+                finding_key=f"reuse-low:{itype}",
+            )
+
+    return {"filed": filed, "count": len(filed)}

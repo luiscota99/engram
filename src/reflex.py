@@ -36,6 +36,28 @@ OUTPUT_HEAD_CHARS = 1500
 OUTPUT_TAIL_CHARS = 2500
 
 
+CHANGE_LINE = re.compile(
+    r"^ENGRAM_CHANGE\s+target=(?P<target>\S+)"
+    r"(?:\s+before=(?P<before>\S*))?(?:\s+after=(?P<after>\S*))?\s*$",
+    re.MULTILINE,
+)
+
+
+def _journal_changes(conn, run_id: int, output: str) -> int:
+    """Parse `ENGRAM_CHANGE target=... before=... after=...` lines from a run's
+    output into the reflex_changes journal — every mutation a reflex reports
+    becomes revertible-by-information."""
+    n = 0
+    for m in CHANGE_LINE.finditer(output or ""):
+        conn.execute(
+            "INSERT INTO reflex_changes (reflex_run_id, target, before_value, after_value) "
+            "VALUES (?, ?, ?, ?)",
+            (run_id, m.group("target"), m.group("before"), m.group("after")),
+        )
+        n += 1
+    return n
+
+
 def _clip_output(text: str) -> str:
     """Keep the start and the end of long output; elide the middle."""
     limit = OUTPUT_HEAD_CHARS + OUTPUT_TAIL_CHARS
@@ -317,13 +339,35 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
         output = f"Timed out after {RUN_TIMEOUT_SECONDS}s"
     duration_ms = int((_time.perf_counter() - t0) * 1000)
 
+    is_monitor = row.get("kind") == "monitor"
     demoted = False
     with get_connection(db_path) as c:
-        c.execute(
+        cur = c.execute(
             "INSERT INTO reflex_runs (reflex_id, started_at, duration_ms, status) VALUES (?, ?, ?, ?)",
             (reflex_id, started, duration_ms, status),
         )
-        if status == "ok":
+        _journal_changes(c, cur.lastrowid, output)
+        if is_monitor and status != "ok":
+            # A monitor firing is a FINDING on the watched system, not a broken
+            # script: file an alert (deduped while open) instead of demoting —
+            # demotion would disable the smoke detector for detecting smoke.
+            from .inbox import file_item
+
+            file_item(
+                kind="alert",
+                severity="high",
+                title=f"Monitor {row['name']} fired ({status})",
+                body=_clip_output(output),
+                source=row["name"],
+                finding_key=f"monitor:{row['name']}",
+                conn=c,
+            )
+            c.execute(
+                "UPDATE reflexes SET run_count = run_count + 1, last_run_at = ?, "
+                "last_status = ? WHERE id = ?",
+                (started, status, reflex_id),
+            )
+        elif status == "ok":
             c.execute(
                 "UPDATE reflexes SET run_count = run_count + 1, last_run_at = ?, "
                 "last_status = ?, fail_streak = 0 WHERE id = ?",

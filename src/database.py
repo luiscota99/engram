@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -339,7 +339,8 @@ CREATE TABLE IF NOT EXISTS reflexes (
     run_count INTEGER DEFAULT 0,
     last_run_at TEXT,
     last_status TEXT,
-    fail_streak INTEGER DEFAULT 0
+    fail_streak INTEGER DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'action'
 );
 
 -- Per-run reflex execution history (schema v15): success *rates*, not
@@ -352,6 +353,38 @@ CREATE TABLE IF NOT EXISTS reflex_runs (
     status TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reflex_runs_reflex ON reflex_runs(reflex_id);
+
+-- Inbox: alerts and decision requests for the human (schema v17).
+-- Agents and monitors PROPOSE here; only the user decides. finding_key
+-- dedups recurring findings (daily self-check must not re-file open items).
+CREATE TABLE IF NOT EXISTS inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL DEFAULT 'alert',            -- alert | decision
+    severity TEXT NOT NULL DEFAULT 'warning',      -- info|warning|high|critical
+    title TEXT NOT NULL,
+    body TEXT,
+    source TEXT,
+    finding_key TEXT,
+    proposed_reflex_id INTEGER REFERENCES reflexes(id) ON DELETE SET NULL,
+    proposed_params TEXT,
+    status TEXT NOT NULL DEFAULT 'open',           -- open|acknowledged|approved|rejected|executed
+    created_at TEXT DEFAULT (datetime('now')),
+    decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox(status);
+CREATE INDEX IF NOT EXISTS idx_inbox_finding ON inbox(finding_key);
+
+-- Change journal: every mutation a reflex reports (schema v17). Scripts emit
+-- `ENGRAM_CHANGE target=... before=... after=...` lines; run_reflex journals
+-- them so any change is revertible-by-information.
+CREATE TABLE IF NOT EXISTS reflex_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reflex_run_id INTEGER REFERENCES reflex_runs(id) ON DELETE CASCADE,
+    target TEXT NOT NULL,
+    before_value TEXT,
+    after_value TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 
 -- Temporal facts: supersession/invalidation history (schema v11)
 CREATE TABLE IF NOT EXISTS memory_facts (

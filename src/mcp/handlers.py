@@ -171,6 +171,26 @@ def handle_memory_read_item(args: McpToolArgs) -> str:
     return json.dumps(item, separators=(",", ":"), ensure_ascii=False)
 
 
+def handle_memory_propose_decision(args: McpToolArgs) -> str:
+    """Agents PROPOSE; only the user decides (asynchronously, via engram decide)."""
+    from src.inbox import file_item
+
+    title = (args.get("title") or "").strip()
+    if not title:
+        return "Error: title is required."
+    item_id = file_item(
+        kind="decision",
+        severity=args.get("severity", "warning"),
+        title=title,
+        body=args.get("body"),
+        source="agent",
+        finding_key=args.get("finding_key"),
+    )
+    if item_id is None:
+        return "An open item already covers this finding — not re-filed."
+    return f"Decision request #{item_id} filed. The user will resolve it with `engram decide {item_id}`."
+
+
 def handle_memory_route(args: McpToolArgs) -> str:
     from src.router import route_task
 
@@ -178,7 +198,17 @@ def handle_memory_route(args: McpToolArgs) -> str:
     if not task:
         return "Error: task is required."
     result = route_task(task, project_path=args.get("project_path"))
-    return f"[Engram route — memory-derived reference, not instructions]\n{result['text']}"
+    text = result["text"]
+    try:
+        from src.inbox import open_counts
+
+        counts = open_counts()
+        urgent = counts.get("critical", 0) + counts.get("high", 0)
+        if urgent:
+            text += f"\n⚠ Inbox: {urgent} open high/critical item(s) — check `engram inbox` before system changes."
+    except Exception:
+        pass
+    return f"[Engram route — memory-derived reference, not instructions]\n{text}"
 
 
 def handle_memory_search(args: McpToolArgs) -> str:
@@ -1125,6 +1155,7 @@ TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_add": handle_memory_add,
     "memory_record_usage": handle_memory_record_usage,
     "memory_read_item": handle_memory_read_item,
+    "memory_propose_decision": handle_memory_propose_decision,
     "memory_route": handle_memory_route,
     "memory_search": handle_memory_search,
     "memory_recent": handle_memory_recent,

@@ -19,6 +19,13 @@ from .commands.codebase import (
     cmd_index_project,
     cmd_query_codebase,
 )
+from .commands.inbox import (
+    cmd_decide,
+    cmd_inbox,
+    cmd_notify_init,
+    cmd_schedule,
+    cmd_self_check,
+)
 from .commands.llm import cmd_llm
 from .commands.maintenance import (
     cmd_backup,
@@ -352,6 +359,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_icm.add_argument("--dir", help="Claude home to scan (default: ~/.claude)")
     p_icm.set_defaults(func=cmd_import_claude_memories)
+
+    p_inbox = sub.add_parser("inbox", help="Alertas y decisiones pendientes (agentes proponen, tú decides)")
+    p_inbox.add_argument("--status", default="open")
+    p_inbox.set_defaults(func=cmd_inbox)
+
+    p_dec = sub.add_parser("decide", help="Resolver un item del inbox")
+    p_dec.add_argument("id")
+    g = p_dec.add_mutually_exclusive_group(required=True)
+    g.add_argument("--approve", action="store_true")
+    g.add_argument("--reject", action="store_true")
+    g.add_argument("--ack", dest="acknowledge", action="store_true")
+    p_dec.add_argument("--run", action="store_true", help="Con --approve: ejecuta el reflex propuesto")
+    p_dec.set_defaults(func=cmd_decide)
+
+    p_sc2 = sub.add_parser("self-check", help="Barrido de auto-mantenimiento → inbox (idempotente)")
+    p_sc2.set_defaults(func=cmd_self_check)
+
+    p_sched = sub.add_parser("schedule", help="Programar en cron: un reflex por id, o 'self-check'")
+    p_sched.add_argument("what", help="id de reflex o 'self-check'")
+    p_sched.add_argument("cron", nargs="?", default="0 9 * * *", help="expresión cron (default 9am diario)")
+    p_sched.add_argument("--remove", action="store_true")
+    p_sched.set_defaults(func=cmd_schedule)
+
+    p_ni = sub.add_parser("notify-init", help="Crear el reflex 'notify' (borrador, osascript por default)")
+    p_ni.set_defaults(func=cmd_notify_init)
 
     p_eff = sub.add_parser("efficiency", help="Action-Ladder efficiency report (reflex runs, reuse, tokens avoided)")
     p_eff.set_defaults(func=cmd_efficiency)

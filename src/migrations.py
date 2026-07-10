@@ -361,6 +361,33 @@ MIGRATIONS = {
         # so vec_memory (keyed by the same rowids) stays aligned — no re-embed.
         lambda conn: _rebuild_fts_with_porter(conn),
     ],
+    17: [
+        lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
+        """CREATE TABLE IF NOT EXISTS inbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL DEFAULT 'alert',
+            severity TEXT NOT NULL DEFAULT 'warning',
+            title TEXT NOT NULL,
+            body TEXT,
+            source TEXT,
+            finding_key TEXT,
+            proposed_reflex_id INTEGER REFERENCES reflexes(id) ON DELETE SET NULL,
+            proposed_params TEXT,
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TEXT DEFAULT (datetime('now')),
+            decided_at TEXT
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox(status);",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_finding ON inbox(finding_key);",
+        """CREATE TABLE IF NOT EXISTS reflex_changes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reflex_run_id INTEGER REFERENCES reflex_runs(id) ON DELETE CASCADE,
+            target TEXT NOT NULL,
+            before_value TEXT,
+            after_value TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );""",
+    ],
 }
 
 
@@ -442,6 +469,10 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    17: [
+        "DROP TABLE IF EXISTS inbox;",
+        "DROP TABLE IF EXISTS reflex_changes;",
+    ],
     16: [
         # Reverse rebuild without porter (stable rowids, same shape).
         lambda conn: _swap_fts_table(conn, "", "memory_fts_v15"),
