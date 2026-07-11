@@ -264,3 +264,68 @@ def test_approve_derives_params_schema_from_script(test_db):
     tools = reflex_tools_for_mcp(db_path=test_db["path"])
     props = tools[0]["inputSchema"]["properties"]
     assert set(props) == {"project", "service"}
+
+
+def test_read_only_reflex_runs_without_elicitation(test_db):
+    """A read-only reflex invoked via MCP must NOT trigger an elicitation gate."""
+    from unittest.mock import patch as _patch
+
+    from src.database import get_connection
+    from src.reflex import handle_reflex_call
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="Diag RO")
+    conn.commit()
+    with patch("src.llm.is_llm_available", return_value=False):
+        r = promote_skill(sid, db_path=test_db["path"])
+    with get_connection(test_db["path"]) as c:
+        c.execute("UPDATE reflexes SET script = 'echo diag' WHERE id = ?", (r["id"],))
+    approve_reflex(r["id"], read_only=True, db_path=test_db["path"])
+
+    with _patch("src.mcp.protocol.elicit_confirmation") as elicit:
+        out = handle_reflex_call("reflex_diag_ro", {}, db_path=test_db["path"])
+    elicit.assert_not_called()
+    assert "diag" in out
+
+
+def test_mutating_reflex_asks_for_confirmation_and_can_be_cancelled(test_db):
+    from unittest.mock import patch as _patch
+
+    from src.database import get_connection
+    from src.reflex import handle_reflex_call
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="Mutator")
+    conn.commit()
+    with patch("src.llm.is_llm_available", return_value=False):
+        r = promote_skill(sid, db_path=test_db["path"])
+    with get_connection(test_db["path"]) as c:
+        c.execute("UPDATE reflexes SET script = 'echo mutated' WHERE id = ?", (r["id"],))
+    approve_reflex(r["id"], db_path=test_db["path"])  # default: mutating
+
+    # user declines → not executed
+    with _patch("src.mcp.protocol.elicit_confirmation", return_value=False):
+        out = handle_reflex_call("reflex_mutator", {}, db_path=test_db["path"])
+    assert "cancelled" in out.lower()
+    with get_connection(test_db["path"]) as c:
+        assert c.execute("SELECT run_count FROM reflexes WHERE id = ?", (r["id"],)).fetchone()[0] == 0
+
+    # user approves → executes
+    with _patch("src.mcp.protocol.elicit_confirmation", return_value=True):
+        out = handle_reflex_call("reflex_mutator", {}, db_path=test_db["path"])
+    assert "mutated" in out
+
+
+def test_read_only_flag_defaults_off_and_is_explicit(test_db):
+    from src.database import get_connection
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn, name="Default Safe")
+    conn.commit()
+    with patch("src.llm.is_llm_available", return_value=False):
+        r = promote_skill(sid, db_path=test_db["path"])
+    with get_connection(test_db["path"]) as c:
+        c.execute("UPDATE reflexes SET script = 'echo x' WHERE id = ?", (r["id"],))
+    approve_reflex(r["id"], db_path=test_db["path"])  # no read_only passed
+    rows = {x["id"]: x for x in list_reflexes(db_path=test_db["path"])}
+    assert rows[r["id"]]["read_only"] == 0  # safe default: mutating

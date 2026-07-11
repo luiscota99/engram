@@ -361,6 +361,12 @@ MIGRATIONS = {
         # so vec_memory (keyed by the same rowids) stays aligned — no re-embed.
         lambda conn: _rebuild_fts_with_porter(conn),
     ],
+    18: [
+        # read_only: a safety dimension orthogonal to kind. Mutating is the SAFE
+        # default (0) — a script only earns free-run treatment by explicit human
+        # mark, never by inference (learned from a prior design's per-tool read_only flag).
+        lambda conn: _add_column_if_missing(conn, "reflexes", "read_only", "INTEGER NOT NULL DEFAULT 0"),
+    ],
     17: [
         lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
         """CREATE TABLE IF NOT EXISTS inbox (
@@ -469,6 +475,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    18: [
+        # ALTER ADD COLUMN is left in place on downgrade (harmless).
+    ],
     17: [
         "DROP TABLE IF EXISTS inbox;",
         "DROP TABLE IF EXISTS reflex_changes;",

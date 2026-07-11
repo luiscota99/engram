@@ -284,9 +284,14 @@ def sync_params_schema(script: str, existing_schema: str | None) -> str:
     return json.dumps(schema)
 
 
-def approve_reflex(reflex_id: int, *, db_path=None, conn=None) -> dict:
+def approve_reflex(reflex_id: int, *, read_only: bool | None = None, db_path=None, conn=None) -> dict:
     """Mark a reflex approved: pin the script hash and re-derive the params
-    schema from the script (the approved script is the source of truth)."""
+    schema from the script (the approved script is the source of truth).
+
+    ``read_only`` (a safety dimension orthogonal to kind) is set only when passed
+    explicitly — mutating stays the safe default, so a script never earns
+    free-run treatment by accident. Left as-is when None.
+    """
     with connection_scope(conn, db_path) as c:
         row = c.execute("SELECT * FROM reflexes WHERE id = ?", (reflex_id,)).fetchone()
         if not row:
@@ -300,6 +305,11 @@ def approve_reflex(reflex_id: int, *, db_path=None, conn=None) -> dict:
             "UPDATE reflexes SET params_schema = ? WHERE id = ?",
             (sync_params_schema(row["script"], row["params_schema"]), reflex_id),
         )
+        if read_only is not None:
+            c.execute(
+                "UPDATE reflexes SET read_only = ? WHERE id = ?",
+                (1 if read_only else 0, reflex_id),
+            )
         h = _script_hash(row["script"])
         c.execute(
             "UPDATE reflexes SET approved_at = datetime('now'), approved_hash = ? WHERE id = ?",
@@ -313,7 +323,8 @@ def list_reflexes(*, approved_only: bool = False, db_path=None, conn=None) -> li
         where = "WHERE approved_at IS NOT NULL" if approved_only else ""
         rows = c.execute(
             f"SELECT id, skill_id, name, description, interpreter, approved_at, "
-            f"approved_hash, script, params_schema, run_count, last_run_at, last_status "
+            f"approved_hash, script, params_schema, run_count, last_run_at, last_status, "
+            f"kind, read_only "
             f"FROM reflexes {where} ORDER BY id"
         ).fetchall()
         return [dict(r) for r in rows]
@@ -512,10 +523,11 @@ def reflex_tools_for_mcp(db_path=None) -> list[dict]:
                 schema = json.loads(r["params_schema"] or "{}")
             except (TypeError, ValueError):
                 schema = {"type": "object", "additionalProperties": True}
+            tag = "[read-only] " if r.get("read_only") else "[mutating — asks for confirmation] "
             tools.append(
                 {
                     "name": f"reflex_{r['name']}",
-                    "description": r["description"][:300],
+                    "description": tag + r["description"][:280],
                     "inputSchema": schema,
                 }
             )
@@ -525,12 +537,29 @@ def reflex_tools_for_mcp(db_path=None) -> list[dict]:
 
 
 def handle_reflex_call(tool_name: str, args: dict, db_path=None) -> str:
-    """Route an MCP ``reflex_<name>`` call to the executor."""
+    """Route an MCP ``reflex_<name>`` call to the executor.
+
+    Read-only reflexes run freely. Mutating reflexes invoked by an agent are
+    gated behind an elicitation confirmation when the client supports it —
+    approval grants the *capability*, this confirms *this use* (the two-tier
+    trust model). Clients without elicitation keep prior behavior.
+    """
     name = tool_name.removeprefix("reflex_")
     with get_connection(db_path) as c:
-        row = c.execute("SELECT id FROM reflexes WHERE name = ?", (name,)).fetchone()
+        row = c.execute("SELECT id, read_only FROM reflexes WHERE name = ?", (name,)).fetchone()
     if not row:
         return f"Error: no reflex named {name!r}."
+    if not row["read_only"]:
+        try:
+            from src.mcp.protocol import elicit_confirmation
+
+            decision = elicit_confirmation(
+                f"Agent wants to run the mutating reflex '{name}' with args {dict(args or {})}. Proceed?"
+            )
+            if decision is False:
+                return f"Reflex {name} cancelled by user."
+        except Exception:
+            logger.debug("elicitation unavailable for reflex %s; proceeding", name, exc_info=True)
     result = run_reflex(row["id"], params=dict(args or {}), db_path=db_path)
     if result["ok"]:
         return f"Reflex {name} completed.\n\n{result['output']}"

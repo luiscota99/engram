@@ -47,18 +47,27 @@ def cmd_reflex(args):
         print(fmt_header("Reflexes\n"))
         for r in rows:
             state = "approved" if r["approved_at"] else fmt_dim("draft (unapproved)")
+            safety = "read-only" if r.get("read_only") else "mutating"
+            kind = r.get("kind") or "action"
             runs = f"{r['run_count']} runs, last: {r['last_status'] or '—'}"
-            print(f"  #{r['id']} {fmt_bold(r['name'])}  [{state}]  {runs}")
+            print(f"  #{r['id']} {fmt_bold(r['name'])}  [{state}, {kind}/{safety}]  {runs}")
         return
 
     if action == "approve":
+        read_only = True if getattr(args, "read_only", False) else (
+            False if getattr(args, "mutating", False) else None
+        )
         try:
-            res = approve_reflex(int(args.id))
+            res = approve_reflex(int(args.id), read_only=read_only)
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        print(f"✓ Approved reflex '{res['name']}' (hash {res['approved_hash'][:12]}…).")
+        ro = " [read-only: runs without confirmation]" if read_only else ""
+        print(f"✓ Approved reflex '{res['name']}' (hash {res['approved_hash'][:12]}…){ro}.")
         print(fmt_dim("It is now exposed as MCP tool `reflex_" + res["name"] + "`."))
+        if read_only is None:
+            print(fmt_dim("Mutating by default — agents get an elicitation confirmation. "
+                          "Pass --read-only for safe diagnostics."))
         return
 
     if action == "run":

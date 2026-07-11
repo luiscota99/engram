@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -340,7 +340,8 @@ CREATE TABLE IF NOT EXISTS reflexes (
     last_run_at TEXT,
     last_status TEXT,
     fail_streak INTEGER DEFAULT 0,
-    kind TEXT NOT NULL DEFAULT 'action'
+    kind TEXT NOT NULL DEFAULT 'action',
+    read_only INTEGER NOT NULL DEFAULT 0
 );
 
 -- Per-run reflex execution history (schema v15): success *rates*, not
