@@ -1253,6 +1253,27 @@ def run_self_check(db_path=None) -> dict:
             finding_key=f"consolidate:{cl['item_type']}:{ids}",
         )
 
+    # 4b. Proven-but-unvalidated: reused skills with no test that PROVES they help
+    try:
+        with get_connection(db_path) as conn:
+            unval = conn.execute(
+                """SELECT s.id, s.name FROM skills s
+                   LEFT JOIN skill_tests t ON t.item_type='skill' AND t.item_id=s.id
+                   WHERE s.usage_count >= 5 AND t.id IS NULL AND s.superseded_by IS NULL
+                   ORDER BY s.usage_count DESC LIMIT 3""",
+            ).fetchall()
+        for row in unval:
+            _file(
+                kind="decision",
+                severity="info",
+                title=f"Skill #{row['id']} '{row['name']}' is reused but never validated — add a proof test?",
+                body="Reuse proves it's retrieved, not that it works. engram validate add skill "
+                     f"{row['id']} --scenario ... --assert ...",
+                finding_key=f"unvalidated:skill:{row['id']}",
+            )
+    except Exception:
+        logger.debug("unvalidated-skill scan failed", exc_info=True)
+
     # 5. Capture quality collapse
     cr = get_reuse_rates(db_path=db_path)
     for itype, st in cr.items():

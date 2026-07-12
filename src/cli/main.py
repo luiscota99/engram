@@ -72,6 +72,7 @@ from .commands.tools import (
     cmd_run,
     cmd_simulate,
 )
+from .commands.validate import cmd_validate
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -384,6 +385,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ni = sub.add_parser("notify-init", help="Crear el reflex 'notify' (borrador, osascript por default)")
     p_ni.set_defaults(func=cmd_notify_init)
+
+    p_val = sub.add_parser("validate", help="Prove a memory changes behavior (baseline-fails/treatment-passes)")
+    val_sub = p_val.add_subparsers(dest="vaction")
+    p_vadd = val_sub.add_parser("add", help="Attach a validation scenario to a memory")
+    p_vadd.add_argument("type", choices=["skill", "pattern", "mistake"])
+    p_vadd.add_argument("id")
+    p_vadd.add_argument("--scenario", required=True, help="The situation to test")
+    p_vadd.add_argument("--assert", dest="assert_", required=True, help="What a correct answer must satisfy")
+    p_vadd.add_argument("--grader", choices=["contains", "llm_judge"], default="contains")
+    p_vrun = val_sub.add_parser("run", help="Run one validation test")
+    p_vrun.add_argument("id")
+    p_val.set_defaults(func=cmd_validate)
 
     p_eff = sub.add_parser("efficiency", help="Action-Ladder efficiency report (reflex runs, reuse, tokens avoided)")
     p_eff.set_defaults(func=cmd_efficiency)

@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -354,6 +354,24 @@ CREATE TABLE IF NOT EXISTS reflex_runs (
     status TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reflex_runs_reflex ON reflex_runs(reflex_id);
+
+-- Skill validation tests (schema v19): a scenario a memory must PASS with
+-- and FAIL without — proving it actually changes behavior, not just that it's
+-- stored (Superpowers' TDD-for-skills rigor applied to personal memory).
+CREATE TABLE IF NOT EXISTS skill_tests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    scenario TEXT NOT NULL,
+    assertion TEXT NOT NULL,
+    grader TEXT NOT NULL DEFAULT 'contains',   -- contains | llm_judge
+    last_result TEXT,                          -- validated | redundant | ineffective | untested
+    baseline_passed INTEGER,
+    treatment_passed INTEGER,
+    last_run_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_skill_tests_item ON skill_tests(item_type, item_id);
 
 -- Inbox: alerts and decision requests for the human (schema v17).
 -- Agents and monitors PROPOSE here; only the user decides. finding_key

@@ -367,6 +367,22 @@ MIGRATIONS = {
         # mark, never by inference (learned from a prior design's per-tool read_only flag).
         lambda conn: _add_column_if_missing(conn, "reflexes", "read_only", "INTEGER NOT NULL DEFAULT 0"),
     ],
+    19: [
+        """CREATE TABLE IF NOT EXISTS skill_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_type TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            scenario TEXT NOT NULL,
+            assertion TEXT NOT NULL,
+            grader TEXT NOT NULL DEFAULT 'contains',
+            last_result TEXT,
+            baseline_passed INTEGER,
+            treatment_passed INTEGER,
+            last_run_at TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_skill_tests_item ON skill_tests(item_type, item_id);",
+    ],
     17: [
         lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
         """CREATE TABLE IF NOT EXISTS inbox (
@@ -475,6 +491,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    19: [
+        "DROP TABLE IF EXISTS skill_tests;",
+    ],
     18: [
         # ALTER ADD COLUMN is left in place on downgrade (harmless).
     ],

@@ -119,6 +119,14 @@ def route_task(task: str, *, db_path=None, project_path=None) -> dict:
         if r["item_type"] in ("skill", "pattern") and r.get("utility_score", 0) >= RECALL_MIN_SCORE
     ][:2]
     if recall:
+        try:
+            from .validation import validated_item_ids
+
+            validated = validated_item_ids(db_path=db_path)
+            for r in recall:
+                r["_validated"] = (r["item_type"], int(r["item_id"])) in validated
+        except Exception:
+            pass
         return {
             "rung": "recall",
             "matches": [
@@ -160,7 +168,8 @@ def _fmt_recall(recall: list[dict], warnings: list[dict]) -> str:
     lines = ["PRIOR ART FOUND — follow these steps instead of re-deriving:"]
     for r in recall:
         snippet = (r.get("snippet") or "").replace("\n", " ")[:_SNIPPET_CHARS]
-        lines.append(f"  [{r['item_type'].upper()} {r['item_id']}] {r['title']}")
+        badge = " ✓validated" if r.get("_validated") else ""
+        lines.append(f"  [{r['item_type'].upper()} {r['item_id']}]{badge} {r['title']}")
         if snippet:
             lines.append(f"    {snippet}")
     lines.append(
