@@ -243,8 +243,8 @@ def find_consolidation_candidates(
             item_map = {r["rowid"]: r for r in rows}
 
             emb_rows = conn.execute(
-                f"SELECT rowid, embedding FROM vec_memory WHERE rowid IN "
-                f"({','.join('?' * len(rowids))})",
+                f"SELECT rowid, vec_to_json(embedding) AS embedding FROM vec_memory "
+                f"WHERE rowid IN ({','.join('?' * len(rowids))})",
                 rowids,
             ).fetchall()
 
@@ -505,7 +505,7 @@ def _apply_auto_merge(
     if not merged:
         return {"applied": False, "reason": "LLM merge failed"}
 
-    tags = list({*(entry_a.get("tags") or []), *(entry_b.get("tags") or [])})
+    tags: list[str] = [str(t) for t in {*(entry_a.get("tags") or []), *(entry_b.get("tags") or [])}]
     with get_connection(db_path) as conn:
         new_id = _insert_merged_item(conn, item_type, merged, tags)
         if not new_id:
@@ -601,7 +601,7 @@ def _enrich_gc_candidates(candidates: list[dict], db_path=None) -> list[dict]:
             row = conn.execute(
                 """SELECT title, content FROM memory_fts
                    WHERE item_type = ? AND item_id = ? LIMIT 1""",
-                (c["item_type"], c["item_id"]),
+                (c["item_type"], str(c["item_id"])),
             ).fetchone()
             enriched.append({
                 **c,
@@ -1095,7 +1095,7 @@ def run_sleep(
             keeper = items[0]
             for item in items[1:]:
                 invalidate_memory(
-                    item["item_type"],
+                    cluster["item_type"],
                     int(item["item_id"]),
                     superseded_by=int(keeper["item_id"]),
                     reason="sleep-time consolidation",

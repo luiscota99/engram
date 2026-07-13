@@ -58,30 +58,23 @@ include = [
 [tool.coverage.run]
 branch = true
 source = ["src"]
-# The gate measures the *library core*, not the CLI shell. We omit code that
-# is exercised by hand or end-to-end, not by unit tests, and would otherwise
-# drag the number down without reflecting core quality:
-#   - cli/**        argparse dispatch + print formatting (run via `engram ...`)
-#   - browse.py     curses TUI (interactive; not unit-testable)
-#   - token_simulation.py / benchmark.py   measurement tooling, run manually
-# Everything else — search, ranking, reflex, router, validation, database,
-# maintenance, and the agent-facing MCP handlers — stays in scope and IS tested.
+# We omit only code that genuinely cannot be exercised by unit tests. Every
+# other module — the whole CLI shell, MCP handlers, maintenance, export, graph,
+# doctor, embeddings, the library core — is in scope and tested.
+#   - browse.py         curses TUI: an interactive keypress loop, not unit-testable
+#   - cli/__main__.py   `python -m` runpy shim (one-line entry, no logic)
 omit = [
-    "src/cli/*",
-    "src/cli/commands/*",
-    "src/mcp_server.py",
     "src/browse.py",
-    "src/token_simulation.py",
-    "src/benchmark.py",
+    "src/cli/__main__.py",
 ]
 
 [tool.coverage.report]
 skip_empty = true
 show_missing = true
-# Honest ratchet floor for the library core (currently ~60%). Set a few points
-# below the real number so normal cross-version variance doesn't flake CI, but
-# high enough to catch a genuine coverage regression. Raise as coverage grows.
-fail_under = 55
+# Honest ratchet floor. Real coverage of the in-scope code is ~97%; the gate
+# sits a few points below so normal cross-version variance (3.9–3.12 conditional
+# imports/branches) doesn't flake CI, while still catching a real regression.
+fail_under = 92
 
 [tool.pytest.ini_options]
 minversion = "6.0"
