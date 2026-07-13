@@ -157,3 +157,94 @@ def test_write_hook_leaves_invalid_json_untouched(tmp_path):
     changed, msg = write_claude_recall_hook(root)
     assert changed is False
     assert open(path).read() == "{ not valid json"  # untouched
+
+
+def test_recall_and_guard_hooks_coexist(tmp_path):
+    from src.cli.commands.bootstrap import write_claude_guard_hook, write_claude_recall_hook
+
+    root = str(tmp_path)
+    write_claude_recall_hook(root)
+    changed, _ = write_claude_guard_hook(root)
+    assert changed is True
+    settings = json.load(open(os.path.join(root, ".claude", "settings.json")))
+    assert "engram hook recall" in [
+        h["command"] for g in settings["hooks"]["UserPromptSubmit"] for h in g["hooks"]
+    ]
+    pre = settings["hooks"]["PreToolUse"]
+    assert pre[0]["matcher"] == "Edit|Write|Bash"
+    assert pre[0]["hooks"][0]["command"] == "engram hook guard"
+
+
+# ── Guard core: build_guard_warnings + guard_from_payload ────────────
+
+@pytest.fixture
+def guarded(tmp_path, monkeypatch):
+    db = tmp_path / "g.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db))
+    monkeypatch.delenv("ENGRAM_AUDIT_LOG", raising=False)
+    from src.database import init_db
+
+    init_db(str(db))
+    _add_mistake(
+        str(db),
+        "forgot FILTER_BRANCH_SQUELCH_WARNING and the tree-filter exit code",
+        context="git filter-branch history rewrite",
+    )
+    return {"path": str(db)}
+
+
+def test_guard_warns_on_lexically_relevant_action(guarded):
+    warns = hooks.build_guard_warnings("git filter-branch --tree-filter rewrite")
+    assert warns and "MISTAKE" in warns[0]
+
+
+def test_guard_silent_on_unrelated_action(guarded):
+    # semantic search would still return the nearest neighbor; the lexical gate
+    # must suppress it — no shared terms, no warning.
+    assert hooks.build_guard_warnings("list the files in this directory") == []
+
+
+def test_guard_empty_action(guarded):
+    assert hooks.build_guard_warnings("") == []
+
+
+def test_guard_payload_warn_vs_strict(guarded):
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "git filter-branch --tree-filter x"},
+    })
+    warn = json.loads(hooks.guard_from_payload(payload))
+    assert "permissionDecision" not in warn["hookSpecificOutput"]
+    assert "MISTAKE" in warn["hookSpecificOutput"]["additionalContext"]
+
+    strict = json.loads(hooks.guard_from_payload(payload, strict=True))
+    assert strict["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_guard_payload_no_match_is_empty(guarded):
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hello world"}})
+    assert hooks.guard_from_payload(payload) == ""
+
+
+def test_guard_payload_garbage_never_raises(guarded):
+    assert hooks.guard_from_payload("") == ""
+    assert hooks.guard_from_payload("not json") == ""
+
+
+def test_cmd_guard_strict_exits_nonzero_on_match(guarded, tmp_path):
+    from src.cli.commands.tools import cmd_guard
+
+    f = tmp_path / "change.txt"
+    f.write_text("we are running git filter-branch with a tree-filter again")
+    with pytest.raises(SystemExit) as exc:
+        _capture(cmd_guard, SimpleNamespace(files=[str(f)], staged=False, strict=True))
+    assert exc.value.code == 1
+
+
+def test_cmd_guard_clean_when_no_match(guarded, tmp_path):
+    from src.cli.commands.tools import cmd_guard
+
+    f = tmp_path / "clean.txt"
+    f.write_text("completely unrelated content about spreadsheets")
+    out = _capture(cmd_guard, SimpleNamespace(files=[str(f)], staged=False, strict=False))
+    assert "no known mistakes" in out.lower()

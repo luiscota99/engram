@@ -5,3 +5,17 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
+
+  # Level-4 enforcement: surface known mistakes/patterns relevant to the staged
+  # diff before the commit lands. Warn-only (never blocks) — it runs against the
+  # developer's LOCAL Engram DB, which CI does not have. Add `--strict` to the
+  # args to make repeated mistakes fail the commit.
+  - repo: local
+    hooks:
+      - id: engram-guard
+        name: engram guard (known mistakes in staged changes)
+        entry: engram guard --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

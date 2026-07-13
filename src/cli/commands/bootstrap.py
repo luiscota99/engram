@@ -351,15 +351,17 @@ def _setup_mcp_config(engram_root: str) -> tuple[bool, str]:
 
 
 RECALL_HOOK_COMMAND = "engram hook recall"
+GUARD_HOOK_COMMAND = "engram hook guard"
 
 
-def write_claude_recall_hook(project_root: str) -> tuple[bool, str]:
-    """Merge the auto-recall UserPromptSubmit hook into ``.claude/settings.json``.
+def merge_claude_hook(
+    project_root: str, event: str, command: str, matcher: str | None = None
+) -> tuple[bool, str]:
+    """Merge one Claude Code hook into ``.claude/settings.json`` (idempotent).
 
-    Enforcement, not advice: with this hook installed, Claude Code runs
-    ``engram hook recall`` on every prompt and injects relevant memories into
-    context — recall no longer depends on the agent choosing to search.
-    Idempotent: never duplicates an existing entry, preserves other settings.
+    Enforcement, not advice: an installed hook is run by the harness, not left to
+    the agent's discretion. Never duplicates an existing entry, preserves every
+    other setting, and leaves an unreadable/oddly-shaped file untouched.
     Returns ``(changed, message)``.
     """
     claude_dir = os.path.join(project_root, ".claude")
@@ -378,22 +380,25 @@ def write_claude_recall_hook(project_root: str) -> tuple[bool, str]:
     hooks = settings.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         return (False, "! Left .claude/settings.json 'hooks' untouched (unexpected shape).")
-    ups = hooks.setdefault("UserPromptSubmit", [])
-    if not isinstance(ups, list):
-        return (False, "! Left .claude/settings.json UserPromptSubmit untouched (unexpected shape).")
+    entries = hooks.setdefault(event, [])
+    if not isinstance(entries, list):
+        return (False, f"! Left .claude/settings.json {event} untouched (unexpected shape).")
 
     already = any(
         isinstance(group, dict)
         and any(
-            isinstance(h, dict) and h.get("command") == RECALL_HOOK_COMMAND
+            isinstance(h, dict) and h.get("command") == command
             for h in group.get("hooks", [])
         )
-        for group in ups
+        for group in entries
     )
     if already:
-        return (False, "✓ Auto-recall hook already present in .claude/settings.json")
+        return (False, f"✓ {event} hook '{command}' already present in .claude/settings.json")
 
-    ups.append({"hooks": [{"type": "command", "command": RECALL_HOOK_COMMAND}]})
+    group: dict = {"hooks": [{"type": "command", "command": command}]}
+    if matcher:
+        group = {"matcher": matcher, **group}
+    entries.append(group)
     try:
         os.makedirs(claude_dir, exist_ok=True)
         with open(settings_path, "w", encoding="utf-8") as f:
@@ -401,7 +406,19 @@ def write_claude_recall_hook(project_root: str) -> tuple[bool, str]:
             f.write("\n")
     except OSError as e:
         return (False, f"! Could not write .claude/settings.json ({e}).")
-    return (True, "✓ Installed auto-recall hook → .claude/settings.json (UserPromptSubmit)")
+    return (True, f"✓ Installed {command} → .claude/settings.json ({event})")
+
+
+def write_claude_recall_hook(project_root: str) -> tuple[bool, str]:
+    """Auto-recall (level 2): inject memory on every prompt (UserPromptSubmit)."""
+    return merge_claude_hook(project_root, "UserPromptSubmit", RECALL_HOOK_COMMAND)
+
+
+def write_claude_guard_hook(project_root: str) -> tuple[bool, str]:
+    """Guard (level 3): warn about known mistakes before Edit/Write/Bash."""
+    return merge_claude_hook(
+        project_root, "PreToolUse", GUARD_HOOK_COMMAND, matcher="Edit|Write|Bash"
+    )
 
 
 def cmd_bootstrap(args):
@@ -475,9 +492,12 @@ def cmd_bootstrap(args):
                 f.write("Activate by saying:\n- `use engram` — enables full memory search\n- `no engram` — keeps disabled\n")
         print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}  [{mode} mode]")
 
-        # Auto-recall enforcement hook for Claude Code (UserPromptSubmit)
-        _, hook_msg = write_claude_recall_hook(project_root)
-        print(f"  {hook_msg}")
+        # Enforcement hooks for Claude Code: auto-recall (UserPromptSubmit) and
+        # the pre-action guard (PreToolUse).
+        _, recall_msg = write_claude_recall_hook(project_root)
+        print(f"  {recall_msg}")
+        _, guard_msg = write_claude_guard_hook(project_root)
+        print(f"  {guard_msg}")
 
     # MCP config
     setup_mcp = getattr(args, "setup_mcp", None)

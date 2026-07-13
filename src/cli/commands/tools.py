@@ -91,6 +91,71 @@ def cmd_hook_recall(args):
         print(out)
 
 
+def cmd_hook_guard(args):
+    """PreToolUse guard hook: warn about known mistakes before an action.
+
+    Reads a Claude Code PreToolUse payload (JSON) from stdin and prints a
+    hook-output JSON block surfacing relevant mistakes/patterns, or nothing when
+    none apply. ``--strict`` asks the user to confirm instead of just warning.
+    """
+    from ...hooks import guard_from_payload
+
+    stdin_text = ""
+    if not sys.stdin.isatty():
+        try:
+            stdin_text = sys.stdin.read()
+        except Exception:
+            stdin_text = ""
+    out = guard_from_payload(stdin_text, strict=getattr(args, "strict", False))
+    if out:
+        print(out)
+
+
+def cmd_guard(args):
+    """Scan files (or the staged diff) against known mistakes/patterns.
+
+    Level-4 enforcement for the repo boundary: run from a pre-commit hook so a
+    developer sees relevant prior art before committing. Warns by default;
+    ``--strict`` exits non-zero if anything matches. Runs against the developer's
+    local Engram DB (CI has none, by design).
+    """
+    from ...hooks import build_guard_warnings
+
+    text_parts: list[str] = []
+    if getattr(args, "staged", False):
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "--cached", "--unified=0"],
+                capture_output=True, text=True, timeout=15,
+            )
+            text_parts.append(diff.stdout)
+        except Exception as e:
+            print(f"Could not read staged diff: {e}")
+            return
+    for path in getattr(args, "files", None) or []:
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                text_parts.append(f"{path}\n{f.read()[:4000]}")
+        except OSError:
+            continue
+
+    text = "\n".join(p for p in text_parts if p).strip()
+    if not text:
+        print("engram guard: nothing to scan (pass files or --staged).")
+        return
+
+    warnings = build_guard_warnings(text, limit=5)
+    if not warnings:
+        print("✓ engram guard: no known mistakes/patterns match these changes.")
+        return
+
+    print(fmt_header("⚠ engram guard — relevant prior art before you commit:"))
+    for w in warnings:
+        print(f"  - {w}")
+    if getattr(args, "strict", False):
+        sys.exit(1)
+
+
 def cmd_run(args):
     prompt_text = " ".join(args.prompt)
     claw_path = args.claw_path or config.claw_path()

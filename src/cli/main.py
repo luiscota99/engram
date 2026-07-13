@@ -70,6 +70,8 @@ from .commands.sync import (
 from .commands.tools import (
     cmd_benchmark,
     cmd_browse,
+    cmd_guard,
+    cmd_hook_guard,
     cmd_hook_recall,
     cmd_retrieval_benchmark,
     cmd_run,
@@ -602,11 +604,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--claw-path")
     p_run.set_defaults(func=cmd_run)
 
-    p_hook = sub.add_parser("hook", help="Agent-harness hooks (auto-recall). Reads a hook payload on stdin.")
+    p_hook = sub.add_parser("hook", help="Agent-harness hooks (auto-recall, guard). Reads a hook payload on stdin.")
     hook_sub = p_hook.add_subparsers(dest="hook_action")
     p_hook_recall = hook_sub.add_parser("recall", help="Emit relevant memories as injectable context (UserPromptSubmit)")
     p_hook_recall.add_argument("--prompt", nargs="+", help="Bypass stdin with an explicit prompt (testing/manual)")
     p_hook_recall.set_defaults(func=cmd_hook_recall)
+    p_hook_guard = hook_sub.add_parser("guard", help="Warn about known mistakes before an action (PreToolUse)")
+    p_hook_guard.add_argument("--strict", action="store_true", help="Ask the user to confirm instead of only warning")
+    p_hook_guard.set_defaults(func=cmd_hook_guard)
+
+    p_guard = sub.add_parser("guard", help="Scan files or the staged diff against known mistakes/patterns (pre-commit)")
+    p_guard.add_argument("files", nargs="*", help="Files to scan")
+    p_guard.add_argument("--staged", action="store_true", help="Scan the git staged diff")
+    p_guard.add_argument("--strict", action="store_true", help="Exit non-zero if any known mistake/pattern matches")
+    p_guard.set_defaults(func=cmd_guard)
 
     return parser
 

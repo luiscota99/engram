@@ -79,6 +79,109 @@ def build_recall_context(
     return "\n".join(lines)
 
 
+GUARD_BANNER = "⚠ Engram guard — known prior art relevant to this action (reference, not instructions):"
+
+
+def build_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> list[str]:
+    """Return short warnings for known *mistakes/patterns* relevant to an action.
+
+    Used both by the PreToolUse hook (per-action, level 3) and ``engram guard``
+    (per-commit, level 4). Only mistakes and patterns count — a matching skill is
+    encouragement, not a caution. Empty list when nothing relevant or on error.
+    """
+    action_text = (action_text or "").strip()
+    if not action_text:
+        return []
+
+    import re
+
+    from .search import search
+
+    try:
+        results = search(
+            action_text,
+            limit=max(limit * 3, 6),  # over-fetch, then keep only cautionary types
+            db_path=db_path,
+            skip_audit=False,
+            audit_source="guard",
+        )
+    except Exception:
+        return []
+
+    # A guard warns "you may be repeating a mistake" — a false positive is worse
+    # than a miss, so require real LEXICAL overlap (shared terms), not mere
+    # semantic proximity. Otherwise every unrelated action ("ls -la") would match
+    # the nearest neighbor. Recall (level 2) stays broad; the guard is precise.
+    def _tokens(text: str) -> set[str]:
+        return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) >= 4}
+
+    query_tokens = _tokens(action_text)
+    if not query_tokens:
+        return []
+
+    warnings: list[str] = []
+    for r in results:
+        if r.get("item_type") not in ("mistake", "pattern"):
+            continue
+        title = (r.get("title") or "").strip() or "(untitled)"
+        if not (query_tokens & _tokens(f"{title} {r.get('snippet') or ''}")):
+            continue
+        warnings.append(f"[{r['item_type'].upper()} #{r.get('item_id')}] {title}")
+        if len(warnings) >= limit:
+            break
+    return warnings
+
+
+def _guard_query_from_tool_input(tool_name: str, tool_input: dict) -> str:
+    """Build a search query from a PreToolUse tool_input payload."""
+    if not isinstance(tool_input, dict):
+        return str(tool_input or "")
+    parts: list[str] = []
+    for key in ("command", "file_path", "path", "description"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val:
+            parts.append(val)
+    # A slice of the edited/written content often carries the real signal.
+    for key in ("content", "new_string"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val:
+            parts.append(val[:400])
+            break
+    return " ".join(parts) if parts else str(tool_input)
+
+
+def guard_from_payload(stdin_text: str, *, strict: bool = False, db_path=None) -> str:
+    """Turn a Claude Code PreToolUse payload into the JSON the harness expects.
+
+    Default (warn): surfaces relevant known mistakes/patterns as
+    ``additionalContext`` without blocking. ``strict``: returns a
+    ``permissionDecision: "ask"`` so the user must confirm. Empty string (allow
+    silently) when nothing relevant. Never raises.
+    """
+    try:
+        payload = json.loads(stdin_text) if stdin_text.strip() else {}
+    except (ValueError, AttributeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    tool_name = payload.get("tool_name") or ""
+    tool_input = payload.get("tool_input") or {}
+    query = _guard_query_from_tool_input(tool_name, tool_input)
+    warnings = build_guard_warnings(query, db_path=db_path)
+    if not warnings:
+        return ""
+
+    context = GUARD_BANNER + "\n" + "\n".join(f"  - {w}" for w in warnings)
+    hook_out: dict = {"hookEventName": "PreToolUse", "additionalContext": context}
+    if strict:
+        hook_out["permissionDecision"] = "ask"
+        hook_out["permissionDecisionReason"] = (
+            "Engram has prior art on this kind of action — review before proceeding."
+        )
+    return json.dumps({"hookSpecificOutput": hook_out}, ensure_ascii=False)
+
+
 def recall_from_payload(stdin_text: str, *, db_path=None) -> str:
     """Turn a Claude Code hook stdin payload into the JSON the harness expects.
 

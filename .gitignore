@@ -19,3 +19,8 @@ dist/
 build/
 .coverage
 htmlcov/
+
+# Per-developer Claude Code settings — generated locally by `engram bootstrap`
+# (recall + guard hooks). Not shipped, so contributors aren't forced to run
+# hooks that assume engram is installed.
+.claude/
