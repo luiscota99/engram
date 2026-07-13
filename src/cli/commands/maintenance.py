@@ -1,6 +1,8 @@
 """Maintenance commands: gc, doctor, backup, health, stats, reembed, migrate."""
 from __future__ import annotations
 
+import os
+
 from ...backup import run_backup
 from ...database import (
     get_embedding_stats,
@@ -73,6 +75,82 @@ def cmd_efficiency(args):
             print(f"  engram promote {cand['id']}   # '{cand['name']}' used {cand['usage_count']}x")
     else:
         print(fmt_dim("No promotion candidates yet - skills earn reflex-hood at 5+ uses."))
+
+
+def cmd_audit(args):
+    """Turn search auditing on/off (persistent) or show its status.
+
+    Auditing is what makes `engram roi` answer 'how much did Engram help?'.
+    """
+    from ... import config
+
+    action = getattr(args, "action", "status")
+    if action == "on":
+        config.set_persistent("audit_enabled", True)
+        print(fmt_header("Search auditing enabled."))
+        print(f"  Logging searches to {fmt_dim(config.audit_log_path() or '')}")
+        print(fmt_dim("  Stored locally only (query + top-5 result ids). Turn off: engram audit off"))
+    elif action == "off":
+        config.set_persistent("audit_enabled", False)
+        print(fmt_header("Search auditing disabled."))
+        print(fmt_dim("  Existing log left in place; delete it manually if you want it gone."))
+    else:
+        path = config.audit_log_path()
+        env_forced = bool(os.environ.get("ENGRAM_AUDIT_LOG"))
+        print(fmt_header("Search auditing status"))
+        print(f"  Enabled: {fmt_bold('yes' if path else 'no')}")
+        if path:
+            src = "ENGRAM_AUDIT_LOG env" if env_forced else "engram audit on"
+            print(f"  Source:  {fmt_dim(src)}")
+            print(f"  Log:     {fmt_dim(path)}")
+            from ...search_audit import summarize_audit_log
+
+            s = summarize_audit_log(path)
+            print(f"  Recorded searches: {s['searches']}")
+        else:
+            print(fmt_dim("  Enable with: engram audit on"))
+
+
+def cmd_roi(args):
+    """How much has Engram actually helped? Measured from local telemetry."""
+    _ = args
+    from ...maintenance import get_roi_report
+
+    r = get_roi_report()
+    a = r["audit"]
+    print(fmt_header("Engram ROI — measured help\n"))
+
+    print(fmt_bold("Search activity (audit log):"))
+    if not a["enabled"]:
+        print(fmt_dim("  Auditing is OFF — enable with `engram audit on` to measure this."))
+    else:
+        print(f"  Searches served:   {a['searches']}")
+        if a["searches"]:
+            print(f"  Returned a hit:    {a['with_hit']}/{a['searches']} ({int((a['hit_rate'] or 0) * 100)}%)")
+            print(f"  Zero-result:       {a['zero_result']}")
+            if a["by_source"]:
+                by = ", ".join(f"{k}:{v}" for k, v in sorted(a["by_source"].items()))
+                print(f"  By source:         {by}")
+            if a["top_queries"]:
+                print(fmt_dim("  Top queries: " + "; ".join(f"{q} ({n})" for q, n in a["top_queries"][:5])))
+    print()
+
+    print(fmt_bold("Realized reuse:"))
+    print(f"  Memories ever used: {r['items_used']}/{r['items_total']}")
+    for itype, st in r["used_by_type"].items():
+        if st["total"]:
+            print(f"    {itype:<14} {st['used']}/{st['total']}")
+    print()
+
+    print(fmt_bold("Reflex rung:"))
+    print(f"  Approved reflexes:  {r['reflexes_approved']}")
+    print(f"  Runs:               {r['reflex_runs']}")
+    if r["tokens_avoided_floor"]:
+        print(f"  Tokens avoided:     >= {r['tokens_avoided_floor']:,} (floor)")
+    print()
+
+    print(fmt_bold("Verdict:"))
+    print(f"  {r['verdict']}")
 
 
 def cmd_health(args):

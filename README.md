@@ -302,6 +302,11 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 
 ### Measuring fit and whether Engram helped
 
+Turn on search auditing once (`engram audit on`), then ask **`engram roi`** at any
+time for a measured answer: searches served and hit rate, memories actually
+reused, reflex-rung tokens avoided, and an honest verdict — it will tell you
+"capture-heavy, reuse-light" or "auditing is off" rather than invent a number.
+
 See **[docs/MEASURING_FIT_AND_HELP.md](docs/MEASURING_FIT_AND_HELP.md)** — labeled retrieval (**R@5**), Session Help Score (**0–3**), optional `ENGRAM_AUDIT_LOG` / `ENGRAM_SESSION_HELP_LOG`, and **public vs private** disclosure for commits.
 
 ### Project & Codebase

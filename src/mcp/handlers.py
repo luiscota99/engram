@@ -830,6 +830,26 @@ def handle_memory_embedding_status(args: McpToolArgs) -> str:
     return "\n".join(lines)
 
 
+def handle_memory_roi(args: McpToolArgs) -> str:
+    from src.maintenance import get_roi_report
+
+    r = get_roi_report()
+    a = r["audit"]
+    lines = ["Engram ROI — measured help\n"]
+    if not a["enabled"]:
+        lines.append("Search auditing: OFF (enable with `engram audit on`)")
+    else:
+        hit = int((a["hit_rate"] or 0) * 100)
+        lines.append(f"Searches served: {a['searches']} (returned a hit: {a['with_hit']}, {hit}%)")
+    lines.append(f"Memories reused: {r['items_used']}/{r['items_total']}")
+    lines.append(
+        f"Reflex rung: {r['reflex_runs']} runs across {r['reflexes_approved']} approved "
+        f"reflexes, >= {r['tokens_avoided_floor']} tokens avoided (floor)"
+    )
+    lines.append(f"\nVerdict: {r['verdict']}")
+    return "\n".join(lines)
+
+
 def handle_memory_health(args: McpToolArgs) -> str:
     report = run_health_check()
     lines = ["Memory Health Report\n"]
@@ -1188,6 +1208,7 @@ TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_merge_entries": handle_memory_merge_entries,
     "memory_embedding_status": handle_memory_embedding_status,
     "memory_health": handle_memory_health,
+    "memory_roi": handle_memory_roi,
     "memory_suggest_consolidations": handle_memory_suggest_consolidations,
     "memory_gc": handle_memory_gc,
     "memory_export_skill": handle_memory_export_skill,

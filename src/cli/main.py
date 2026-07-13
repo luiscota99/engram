@@ -28,6 +28,7 @@ from .commands.inbox import (
 )
 from .commands.llm import cmd_llm
 from .commands.maintenance import (
+    cmd_audit,
     cmd_backup,
     cmd_doctor,
     cmd_efficiency,
@@ -37,6 +38,7 @@ from .commands.maintenance import (
     cmd_migrate,
     cmd_migrate_embeddings,
     cmd_reembed,
+    cmd_roi,
     cmd_sleep,
 )
 from .commands.memory import (
@@ -400,6 +402,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_eff = sub.add_parser("efficiency", help="Action-Ladder efficiency report (reflex runs, reuse, tokens avoided)")
     p_eff.set_defaults(func=cmd_efficiency)
+
+    p_roi = sub.add_parser("roi", help="How much has Engram helped? Measured from local telemetry")
+    p_roi.set_defaults(func=cmd_roi)
+
+    p_audit = sub.add_parser("audit", help="Turn search auditing on/off (persistent), or show status")
+    p_audit.add_argument("action", nargs="?", choices=["on", "off", "status"], default="status")
+    p_audit.set_defaults(func=cmd_audit)
 
     p_route = sub.add_parser("route", help="Action-ladder lookup: reflex / recall / reason for a task")
     p_route.add_argument("task", nargs="+", help="Task description")

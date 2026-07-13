@@ -1175,6 +1175,77 @@ def get_efficiency_report(db_path=None) -> dict:
     return report
 
 
+def get_roi_report(db_path=None) -> dict:
+    """Answer 'how much has Engram actually helped?' from local telemetry only.
+
+    Combines three measured signals — search activity (the audit log), realized
+    reuse (usage counts + capture→reuse), and the reflex rung's token floor —
+    and derives an honest one-line verdict. Invents nothing: if auditing is off
+    or nothing has been reused, it says so plainly.
+    """
+    from .search_audit import summarize_audit_log
+
+    report: dict = {}
+    report["audit"] = summarize_audit_log()
+
+    used_by_type: dict[str, dict] = {}
+    total_used = 0
+    total_items = 0
+    with get_connection(db_path) as conn:
+        for item_type, table in (
+            ("mistake", "mistakes"),
+            ("pattern", "patterns"),
+            ("skill", "skills"),
+            ("conversation", "conversations"),
+            ("prompt", "prompts"),
+        ):
+            try:
+                total = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+                used = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM {table} WHERE usage_count > 0"
+                ).fetchone()["c"]
+            except Exception:
+                continue
+            used_by_type[item_type] = {"used": used, "total": total}
+            total_used += used
+            total_items += total
+
+    report["used_by_type"] = used_by_type
+    report["items_used"] = total_used
+    report["items_total"] = total_items
+
+    eff = get_efficiency_report(db_path=db_path)
+    report["reflexes_approved"] = eff.get("reflexes_approved", 0)
+    report["reflex_runs"] = eff.get("reflex_runs", 0)
+    report["tokens_avoided_floor"] = eff.get("tokens_avoided_floor", 0)
+    report["reuse"] = eff.get("reuse", {})
+
+    audit = report["audit"]
+    if not audit["enabled"]:
+        verdict = (
+            "Search auditing is OFF — realized help can't be measured. "
+            "Turn it on with `engram audit on`, then use Engram in the loop."
+        )
+    elif audit["searches"] == 0:
+        verdict = (
+            "Auditing is on but no searches recorded yet — Engram hasn't been "
+            "queried. Value shows up only when you search before acting."
+        )
+    elif total_used == 0 and report["reflex_runs"] == 0:
+        verdict = (
+            f"{audit['searches']} searches served, but nothing retrieved has been "
+            "used yet — capture-heavy, reuse-light. The payoff is in reuse."
+        )
+    else:
+        verdict = (
+            f"{audit['searches']} searches served (hit rate "
+            f"{int((audit['hit_rate'] or 0) * 100)}%); {total_used} memories reused; "
+            f"{report['reflex_runs']} reflex runs saved ≥{report['tokens_avoided_floor']} tokens (floor)."
+        )
+    report["verdict"] = verdict
+    return report
+
+
 # ── Self-check: Engram monitoring Engram ─────────────────────────────
 
 

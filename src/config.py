@@ -35,6 +35,7 @@ Integrations
 """
 from __future__ import annotations
 
+import json
 import os
 
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
@@ -61,8 +62,67 @@ def llm_api_key() -> str:
     return os.environ.get("ENGRAM_LLM_API_KEY", "").strip()
 
 
+def engram_dir() -> str:
+    """Directory that holds the DB, audit log, and persistent config.
+
+    Derived from ENGRAM_DB_PATH (default ``~/.engram``) so every per-store file
+    lives together and multiple databases keep independent settings.
+    """
+    db = os.environ.get("ENGRAM_DB_PATH")
+    if db:
+        return os.path.dirname(os.path.abspath(os.path.expanduser(db)))
+    return os.path.join(os.path.expanduser("~"), ".engram")
+
+
+def _persistent_config_path() -> str:
+    return os.path.join(engram_dir(), "config.json")
+
+
+def read_persistent() -> dict:
+    """Load the on-disk settings map (``{}`` if missing or unreadable)."""
+    try:
+        with open(_persistent_config_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def set_persistent(key: str, value) -> None:
+    """Set one persistent setting, preserving the rest."""
+    data = read_persistent()
+    data[key] = value
+    path = _persistent_config_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError:
+        pass
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+
+
+def get_persistent(key: str, default=None):
+    return read_persistent().get(key, default)
+
+
+def default_audit_log_path() -> str:
+    """Where auditing writes when enabled without an explicit ENGRAM_AUDIT_LOG."""
+    return os.path.join(engram_dir(), "audit.jsonl")
+
+
 def audit_log_path() -> str | None:
-    return os.environ.get("ENGRAM_AUDIT_LOG") or None
+    """Resolve the search-audit log path.
+
+    Precedence: an explicit ``ENGRAM_AUDIT_LOG`` env var always wins; otherwise,
+    if auditing was turned on persistently (``engram audit on``), use the default
+    path next to the database; otherwise auditing is off.
+    """
+    env = os.environ.get("ENGRAM_AUDIT_LOG")
+    if env:
+        return env
+    if get_persistent("audit_enabled") is True:
+        return default_audit_log_path()
+    return None
 
 
 def session_help_log_path() -> str:

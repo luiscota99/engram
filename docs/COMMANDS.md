@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 55 commands.
+All commands are invoked as `engram <command>`. 57 commands.
 
 ### `engram add`
 
@@ -22,6 +22,12 @@ Add a new entry
 ### `engram antigravity-global`
 
 Install or refresh the global Engram block in ~/.gemini/AGENTS.md (all Antigravity workspaces)
+
+### `engram audit`
+
+Turn search auditing on/off (persistent), or show status
+
+  - `<action>` — one of `on, off, status`
 
 ### `engram backup`
 
@@ -290,6 +296,10 @@ Manage reflexes (list / approve / run)
 Run R@k / MRR / NDCG retrieval quality benchmark (see benchmarks/BENCHMARKS.md)
 
   - `<bench_args>` — Pass-through args (e.g. -- --mode compare). Prefix with -- if needed.
+
+### `engram roi`
+
+How much has Engram helped? Measured from local telemetry
 
 ### `engram route`
 

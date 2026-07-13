@@ -687,6 +687,14 @@ TOOLS = [
         }
     },
     {
+        "name": "memory_roi",
+        "description": "Measure how much Engram has actually helped, from local telemetry only: searches served and hit rate (audit log), memories reused, reflex-rung token savings, and an honest one-line verdict. Reports the truth even when that truth is 'not much yet'.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
         "name": "memory_suggest_consolidations",
         "description": "Find clusters of near-duplicate memories that could be merged using memory_consolidate_skills or memory_merge_entries. Returns grouped candidates by similarity.",
         "inputSchema": {
