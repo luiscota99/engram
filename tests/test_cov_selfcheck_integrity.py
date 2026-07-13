@@ -14,11 +14,30 @@ from src.memory_ops import create_mistake
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
+    """A DB whose indexes are consistent regardless of whether an embedding
+    backend is reachable. CI has no Ollama, so create_mistake indexes FTS but
+    can't embed — we reconcile vec_memory to FTS explicitly so the baseline is
+    genuinely clean (0 drift) and the drift-injection tests are deterministic."""
+    import json
+
+    from src.database import get_vec_dimension
+
     path = str(tmp_path / "mem.db")
     monkeypatch.setenv("ENGRAM_DB_PATH", path)
     init_db(path)
     with get_connection(path) as conn:
         create_mistake(conn, date="2026-07-13", context="c", mistake="m", fix="f")
+        dim = get_vec_dimension(conn=conn)
+        for row in conn.execute("SELECT rowid FROM memory_fts").fetchall():
+            has_vec = conn.execute(
+                "SELECT rowid FROM vec_memory WHERE rowid = ?", (row["rowid"],)
+            ).fetchone()
+            if not has_vec:
+                conn.execute(
+                    "INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)",
+                    (row["rowid"], json.dumps([0.001] * dim)),
+                )
+        conn.execute("UPDATE embedding_status SET status = 'ready'")
     return path
 
 
