@@ -22,6 +22,50 @@ def fmt_dim(t):
     return f"\033[2m{t}\033[0m"
 
 
+def integrity_report(db_path=None) -> dict:
+    r"""Structured, side-effect-free integrity scan (no printing, no repair).
+
+    The same signals ``run_diagnostics`` inspects, returned as counts so other
+    code — notably the scheduled self-check — can surface them without driving
+    the interactive/repair path. Keys: ``orphaned_tags``, ``core_count``,
+    ``fts_count``, ``fts_drift`` (\|core-fts\|), ``vec_count``, ``vec_drift``
+    (\|fts-vec\|), ``failed_embeddings``, ``orphaned_status``.
+    """
+    with get_connection(db_path) as conn:
+        orphaned_tags = conn.execute(
+            "SELECT COUNT(*) FROM tags WHERE id NOT IN (SELECT tag_id FROM item_tags)"
+        ).fetchone()[0]
+
+        core_count = 0
+        for table in ("mistakes", "patterns", "skills", "conversations", "prompts", "sessions"):
+            core_count += conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        fts_count = conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0]
+
+        try:
+            vec_count = conn.execute("SELECT COUNT(*) FROM vec_memory").fetchone()[0]
+        except Exception:
+            vec_count = fts_count  # sqlite-vec inactive → treat as no drift
+
+        failed_embeddings = conn.execute(
+            "SELECT COUNT(*) FROM embedding_status WHERE status = 'failed'"
+        ).fetchone()[0]
+        orphaned_status = conn.execute(
+            "SELECT COUNT(*) FROM embedding_status es "
+            "LEFT JOIN memory_fts mf ON mf.rowid = es.fts_rowid WHERE mf.rowid IS NULL"
+        ).fetchone()[0]
+
+    return {
+        "orphaned_tags": orphaned_tags,
+        "core_count": core_count,
+        "fts_count": fts_count,
+        "fts_drift": abs(core_count - fts_count),
+        "vec_count": vec_count,
+        "vec_drift": abs(fts_count - vec_count),
+        "failed_embeddings": failed_embeddings,
+        "orphaned_status": orphaned_status,
+    }
+
+
 def run_diagnostics(repair=False):
     """Scan database for orphans, drift, and structural integrity."""
     issues_found = 0

@@ -1312,6 +1312,44 @@ def run_self_check(db_path=None) -> dict:
             finding_key="hygiene:pending-embeddings",
         )
 
+    # 3b. Structural integrity — the signals only `engram doctor` used to catch.
+    # These rot silently (failed embeddings never retried, index drift on delete)
+    # and were the actual cause of a degraded DB, so the monitor now watches them.
+    try:
+        from .doctor import integrity_report
+
+        integ = integrity_report(db_path=db_path)
+        if integ["vec_drift"] > 0 or integ["failed_embeddings"] > 0:
+            n = integ["vec_drift"] + integ["failed_embeddings"]
+            _file(
+                kind="alert",
+                severity="warning",
+                title=f"{n} search entries missing/failed embeddings (semantic recall degraded)",
+                body="Run: engram doctor --repair  (then engram reembed if any remain)",
+                finding_key="integrity:vector-drift",
+            )
+        if integ["fts_drift"] > 0:
+            _file(
+                kind="alert",
+                severity="warning",
+                title=f"FTS index drift: {integ['core_count']} core items vs {integ['fts_count']} indexed",
+                body="Run: engram doctor --repair  (rebuilds the lexical index from core tables)",
+                finding_key="integrity:fts-drift",
+            )
+        if integ["orphaned_tags"] > 0 or integ["orphaned_status"] > 0:
+            _file(
+                kind="alert",
+                severity="info",
+                title=(
+                    f"{integ['orphaned_tags']} orphaned tags, "
+                    f"{integ['orphaned_status']} orphaned embedding-status rows"
+                ),
+                body="Run: engram doctor --repair  (safe cleanup)",
+                finding_key="integrity:orphans",
+            )
+    except Exception:
+        logger.debug("integrity scan in self-check failed", exc_info=True)
+
     # 4. Consolidation clusters (vector-based; skipped when unchanged)
     clusters, _reason = find_consolidation_candidates(db_path=db_path)
     for cl in clusters[:3]:
