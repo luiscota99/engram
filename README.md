@@ -68,6 +68,8 @@ REASON   1000s tokens  full LLM derivation             ← the default for anyth
 See [ADR 0006](docs/decisions/0006-action-ladder.md) for the design and its
 scope fence.
 
+**Full documentation:** [`docs/GUIDE.md`](docs/GUIDE.md) (concepts + lifecycle), [`docs/COMMANDS.md`](docs/COMMANDS.md) (complete CLI reference, auto-generated), [`docs/decisions/`](docs/decisions/) (ADRs). Validate that a memory actually changes behavior with `engram validate`; import Claude's native memories with `engram import-claude-memories`.
+
 **Measured, not vibes:** Engram publishes reproducible numbers. On its home domain
 (labeled real-corpus eval): **R@5 = 1.00 at 60–120 ms, ~560 context tokens/query**.
 On the out-of-domain **LongMemEval oracle** (940 chit-chat sessions, retrieval-only,

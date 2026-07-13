@@ -453,3 +453,20 @@ class TestRegisterClaudeMcp:
         cfg = json.loads((tmp_path / ".claude.json").read_text())
         assert cfg["theme"] == "dark"
         assert "other" in cfg["mcpServers"] and "engram" in cfg["mcpServers"]
+
+
+def test_command_reference_is_current():
+    """docs/COMMANDS.md is generated from the parser — fail if it drifted
+    (same anti-drift discipline as the schema-parity test)."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.gen_docs", "--check"],
+        cwd=__import__("pathlib").Path(__file__).parent.parent,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "docs/COMMANDS.md is stale — run `python3 -m scripts.gen_docs`.\n" + result.stderr
+    )
