@@ -95,6 +95,13 @@ def cmd_schedule(args):
     _write_crontab(lines)
     print(f"✓ Programado ({cron}): {cmd}")
     print(fmt_dim("  Ver: crontab -l | quitar: engram schedule <what> --remove"))
+    # A cron job under a macOS-protected folder crashes silently — warn now
+    # rather than let the monitor die unnoticed.
+    from ...maintenance import install_path_tcc_warning
+
+    warn = install_path_tcc_warning()
+    if warn:
+        print(fmt_header("\n" + warn))
 
 
 NOTIFY_SCRIPT = '''set -euo pipefail

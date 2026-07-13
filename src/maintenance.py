@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .database import (
     get_connection,
@@ -1249,6 +1249,91 @@ def get_roi_report(db_path=None) -> dict:
 # ── Self-check: Engram monitoring Engram ─────────────────────────────
 
 
+CRON_SELF_CHECK_MARK = "# engram:self-check"
+# macOS TCC protects these home subfolders; a cron/launchd job can't read a repo
+# or venv living under them without Full Disk Access — the scheduled self-check
+# then crashes at startup and the monitor is silently blind.
+_TCC_PROTECTED_DIRS = ("Desktop", "Documents", "Downloads")
+
+
+def _engram_install_root() -> str:
+    """Repo root the scheduled command cd's into (…/engram)."""
+    import os
+
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _path_is_tcc_protected(path: str) -> bool:
+    import os
+    import sys
+
+    if sys.platform != "darwin":
+        return False
+    home = os.path.expanduser("~")
+    real = os.path.realpath(path)
+    return any(
+        real == os.path.join(home, d) or real.startswith(os.path.join(home, d) + os.sep)
+        for d in _TCC_PROTECTED_DIRS
+    )
+
+
+def install_path_tcc_warning() -> str | None:
+    """Warn text if this install sits where macOS cron can't read it, else None."""
+    if _path_is_tcc_protected(_engram_install_root()):
+        return (
+            "⚠ This install lives under a macOS-protected folder "
+            "(Desktop/Documents/Downloads). cron/launchd cannot read it without "
+            "Full Disk Access, so the scheduled self-check will crash silently. "
+            "Grant Full Disk Access to cron in System Settings › Privacy & Security, "
+            "or move the install elsewhere."
+        )
+    return None
+
+
+def _self_check_scheduled() -> bool:
+    import subprocess
+
+    try:
+        out = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=10)
+        return out.returncode == 0 and CRON_SELF_CHECK_MARK in out.stdout
+    except Exception:
+        return False
+
+
+def record_self_check_heartbeat() -> None:
+    """Stamp 'self-check ran successfully' so a dead scheduler becomes detectable."""
+    from . import config
+
+    config.set_persistent("last_self_check", datetime.now(timezone.utc).isoformat())
+
+
+def scheduler_status() -> dict:
+    """Is the self-check actually running? Lets the monitor detect its own death.
+
+    Returns ``{scheduled, last_success, days_since, protected_path, stale}``.
+    ``stale`` = scheduled but never/long-ago succeeded (a blind monitor).
+    """
+    from . import config
+
+    scheduled = _self_check_scheduled()
+    last = config.get_persistent("last_self_check")
+    days_since: float | None = None
+    if last:
+        try:
+            ts = datetime.fromisoformat(last)
+            days_since = (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0
+        except ValueError:
+            days_since = None
+    stale = scheduled and (last is None or (days_since is not None and days_since > 2.0))
+    return {
+        "scheduled": scheduled,
+        "last_success": last,
+        "days_since": days_since,
+        "protected_path": _path_is_tcc_protected(_engram_install_root()),
+        "stale": stale,
+    }
+
+
 def run_self_check(db_path=None) -> dict:
     """Daily self-maintenance sweep: files inbox items for findings.
 
@@ -1394,5 +1479,35 @@ def run_self_check(db_path=None) -> dict:
                 body="Capture fewer, higher-signal entries; prune with engram gc.",
                 finding_key=f"reuse-low:{itype}",
             )
+
+    # 6. The monitor watching itself: a scheduled self-check that never runs is
+    # a blind monitor (this very check found the cron was crashing for months).
+    try:
+        sched = scheduler_status()
+        if sched["scheduled"] and (sched["stale"] or sched["protected_path"]):
+            body = (
+                "A self-check is scheduled in cron but has not run successfully "
+                f"(last success: {sched['last_success'] or 'never'})."
+            )
+            warn = install_path_tcc_warning()
+            if warn:
+                body += " " + warn
+            else:
+                body += " Check `cat ~/.engram/cron.log` for the failure."
+            _file(
+                kind="alert",
+                severity="high",
+                title="Scheduled self-check isn't running — the monitor is blind",
+                body=body,
+                finding_key="scheduler:blind",
+            )
+    except Exception:
+        logger.debug("scheduler self-check failed", exc_info=True)
+
+    # Heartbeat last, so 'ran successfully' reflects a completed sweep.
+    try:
+        record_self_check_heartbeat()
+    except Exception:
+        logger.debug("heartbeat write failed", exc_info=True)
 
     return {"filed": filed, "count": len(filed)}
