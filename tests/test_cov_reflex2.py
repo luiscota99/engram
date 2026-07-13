@@ -123,10 +123,14 @@ def test_validate_python3_syntax_error_reported():
     assert "invalid syntax" in err or "SyntaxError" in err or "(" in err
 
 
-def test_validate_python3_null_byte_is_generic_failure():
+def test_validate_python3_null_byte_is_a_failure():
+    # A null byte in source is rejected on every Python, but the wrapping
+    # differs: <=3.10 raises ValueError -> "validation failed: ...", while
+    # 3.11+ raises SyntaxError -> the raw "source code string cannot contain
+    # null bytes". Either way it must be a non-None error mentioning the cause.
     err = validate_script_syntax("x = 1\x00", "python3")
     assert err is not None
-    assert err.startswith("validation failed:")
+    assert err.startswith("validation failed:") or "null byte" in err
 
 
 # ── sync_params_schema ────────────────────────────────────────────────
