@@ -364,7 +364,7 @@ MIGRATIONS = {
     18: [
         # read_only: a safety dimension orthogonal to kind. Mutating is the SAFE
         # default (0) — a script only earns free-run treatment by explicit human
-        # mark, never by inference (learned from a prior design's per-tool read_only flag).
+        # mark, never by inference.
         lambda conn: _add_column_if_missing(conn, "reflexes", "read_only", "INTEGER NOT NULL DEFAULT 0"),
     ],
     19: [
