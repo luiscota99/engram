@@ -25,6 +25,12 @@ Install the package in editable mode with dev extras (declared in [`pyproject.to
 pip install -e ".[dev]"
 ```
 
+Optionally enable the git hooks so lint/format run before each commit:
+
+```bash
+pre-commit install
+```
+
 ### Key Dependencies
 
 Declared in [`pyproject.toml`](pyproject.toml) (`[project]` dependencies and `[project.optional-dependencies] dev`):
@@ -79,11 +85,17 @@ pip install -e ".[dev]"
 pytest
 ```
 
-With coverage (optional; see CI):
+CI runs the suite on Python 3.9–3.12 and enforces a **coverage gate of 92%**
+(configured in [`pyproject.toml`](pyproject.toml) `[tool.coverage.report] fail_under`).
+Run it the same way locally before opening a PR:
 
 ```bash
 pytest --cov=src --cov-report=term-missing tests/
 ```
+
+The only modules omitted from the gate are the curses TUI (`src/browse.py`) and
+the `python -m` shim (`src/cli/__main__.py`) — everything else is expected to be
+tested. CI also runs a retrieval benchmark with an **R@5 ≥ 0.90 gate**.
 
 Manual checks:
 
@@ -92,10 +104,37 @@ engram doctor
 engram search "alpha compositing"
 ```
 
+### Generated docs
+
+[`docs/COMMANDS.md`](docs/COMMANDS.md) is **generated** from the argparse parser —
+do not edit it by hand. If you add or change a CLI command, regenerate it:
+
+```bash
+python scripts/gen_docs.py           # rewrite docs/COMMANDS.md
+python scripts/gen_docs.py --check   # CI-style check: fails if out of date
+```
+
 ## Linting and types
 
 - **Ruff:** `ruff check src/ tests/ benchmarks/`
 - **Pyright:** `pyright` (configured in [`pyproject.toml`](pyproject.toml); key modules under `src/mcp/`, `src/cli/`, core search/DB)
+
+## Architecture Decision Records
+
+Non-trivial design choices are recorded as ADRs under
+[`docs/decisions/`](docs/decisions/) (numbered `NNNN-title.md`). If your change
+alters a load-bearing behavior — storage backend, ranking, the action ladder,
+the extraction/trust model — add a new ADR describing the context, the decision,
+and the alternatives you rejected. Small changes don't need one.
+
+## Before you open a PR
+
+- [ ] `ruff check src/ tests/ benchmarks/` is clean
+- [ ] `pyright` reports 0 errors
+- [ ] `pytest --cov=src` passes and stays at/above the 92% gate
+- [ ] If you touched the CLI, `python scripts/gen_docs.py --check` passes
+- [ ] New user-facing operations exist in **both** the CLI and MCP surfaces
+- [ ] User-facing changes are reflected in [`README.md`](README.md) and [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Reporting Issues
 
