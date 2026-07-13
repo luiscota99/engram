@@ -37,9 +37,14 @@ more correct over time. Every task has three rungs, cheapest first:
 
 ```
 REFLEX   ~50 tokens    approved deterministic script   ← earned by 5+ proven uses + human approval
-RECALL   ~200 tokens   follow retrieved prior art      ← earned by capture + reuse
+RECALL   ~80 tokens    follow retrieved prior art      ← earned by capture + reuse
 REASON   1000s tokens  full LLM derivation             ← the default for anything new
 ```
+
+The reflex/recall figures are **measured** `engram route` output
+(`python benchmarks/ladder_cost.py`); REASON's "1000s" is the counterfactual
+cost of unaided reasoning that the lower rungs avoid — not an Engram
+measurement. The load-bearing, testable claim is the ordering: reflex ≪ recall ≪ reason.
 
 - **`engram route "task"`** (MCP: `memory_route`) — one budgeted call answers
   "what is the cheapest correct way to do this": a reflex to invoke, prior art

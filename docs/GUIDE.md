@@ -35,11 +35,17 @@ Every task has three rungs, cheapest first. Ask for the cheapest correct one:
 engram route "rollback the failed deploy"
 ```
 
-| Rung | Cost | What it means |
-|------|------|---------------|
-| **reflex** | ~50 tok | An approved script exists — invoke `reflex_<name>`, don't re-derive |
-| **recall** | ~200 tok | Prior art (skill/pattern) matches — follow it |
-| **reason** | 1000s tok | No prior art — reason, then capture so next time is cheaper |
+| Rung | `route` output* | What it means |
+|------|-----------------|---------------|
+| **reflex** | ~50 tok | An approved script exists — invoke `reflex_<name>` (a ~12-tok tool call), don't re-derive |
+| **recall** | ~80 tok | Prior art (skill/pattern) matches — follow it (reading full detail via `read_item` adds more) |
+| **reason** | ~40 tok | No prior art — the *task* then costs the 1000s of reasoning tokens Engram helps you avoid |
+
+*Measured, not asserted: the reflex/recall/reason figures are the real
+`engram route` output size (reproduce: `benchmarks/ladder_cost.py`). The "1000s
+of tokens" for reason is the **counterfactual** cost of unaided reasoning that
+recall/reflex spare you — it is not an Engram measurement and is not claimed as
+one. The honest, testable claim is the *ordering*: reflex ≪ recall ≪ reason.
 
 Known mistakes matching the task ride along as pitfall warnings on every rung.
 Proven memory (see Validation) is badged `✓validated`.

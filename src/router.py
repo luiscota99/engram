@@ -3,9 +3,11 @@
 The ladder, cheapest first:
 
 1. **reflex** — an approved, deterministic script exists for this exact
-   workflow. Invoke the ``reflex_<name>`` MCP tool (~50 tokens, zero variance).
+   workflow. Invoke the ``reflex_<name>`` MCP tool (~50-tok route hint + a
+   ~12-tok tool call; measured, see benchmarks/ladder_cost.py). Zero variance.
 2. **recall** — a proven skill/pattern matches. Follow its steps instead of
-   re-deriving them (~200 tokens of guidance vs thousands of reasoning tokens).
+   re-deriving them (~80-tok route hint; the 'thousands' avoided is the
+   counterfactual cost of unaided reasoning, not an Engram measurement).
 3. **reason** — no prior art. Reason from scratch, then capture the outcome so
    the *next* occurrence lands on a higher rung.
 
