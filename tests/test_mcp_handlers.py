@@ -106,3 +106,134 @@ def test_memory_search_default_limit_is_5(test_db):
     with patch("src.mcp.handlers.memory_search", return_value=[]) as ms:
         handle_memory_search({"query": "anything"})
     assert ms.call_args.kwargs["limit"] == 5
+
+
+# --- Broad smoke coverage: every read-mostly handler returns a str, no crash ---
+
+
+@pytest.mark.parametrize(
+    "tool_name,args",
+    [
+        ("memory_recent", {}),
+        ("memory_recent", {"count": 3, "type": "mistake"}),
+        ("memory_stats", {}),
+        ("memory_list", {}),
+        ("memory_list", {"type": "skill"}),
+        ("memory_list_pinned", {}),
+        ("memory_llm_status", {}),
+        ("memory_embedding_status", {}),
+        ("memory_health", {}),
+        ("memory_suggest_capture", {}),
+        ("memory_suggest_consolidations", {}),
+        ("memory_get_stale_files", {}),
+        ("memory_query_codebase", {"query": "database"}),
+        ("memory_route", {"task": "deploy the app"}),
+        ("memory_recent", {"count": 0}),
+        # Guard rails: missing required args must return an "Error:"/message str, not crash.
+        ("memory_record_usage", {}),
+        ("memory_read_item", {}),
+        ("memory_read_item", {"item_type": "mistake", "item_id": 99999}),
+        ("memory_route", {}),
+        ("memory_propose_decision", {}),
+        ("memory_add", {"type": "bogus"}),
+        ("memory_add", {"type": "mistake"}),
+        ("memory_merge_entries", {}),
+        ("memory_find_similar", {}),
+        ("memory_pin", {}),
+        ("memory_unpin", {}),
+    ],
+)
+def test_read_handlers_return_str_without_crashing(mcp_db, tool_name, args):
+    result = TOOL_HANDLERS[tool_name](args)
+    assert isinstance(result, str)
+    assert result  # never an empty string
+
+
+def test_add_mistake_roundtrip_search_read_and_record(mcp_db):
+    """add(mistake) → search finds it → read_item returns JSON → record_usage boosts."""
+    add_result = TOOL_HANDLERS["memory_add"](
+        {
+            "type": "mistake",
+            "date": "2026-07-13",
+            "context": "Mixing L2 and cosine vector norms",
+            "mistake": "Compared un-normalized vectors under L2 distance",
+            "fix": "Normalize embeddings before storing",
+            "root_cause": "Two Ollama endpoints return different norms",
+            "prevention": "Assert unit norm on the write path",
+        }
+    )
+    assert "logged successfully" in add_result
+    # Extract the id: "Mistake #<id> logged successfully."
+    mid = int(add_result.split("#")[1].split(" ")[0])
+
+    search_result = TOOL_HANDLERS["memory_search"]({"query": "vector norms", "type": "mistake"})
+    assert "L2" in search_result or "norm" in search_result.lower()
+
+    read_result = TOOL_HANDLERS["memory_read_item"]({"item_type": "mistake", "item_id": mid})
+    parsed = json.loads(read_result)
+    assert isinstance(parsed, dict)
+
+    usage_result = TOOL_HANDLERS["memory_record_usage"](
+        {"item_type": "mistake", "item_id": mid, "success": True}
+    )
+    assert "recorded usage" in usage_result
+
+
+def test_add_pattern_and_skill_roundtrip(mcp_db):
+    pat = TOOL_HANDLERS["memory_add"](
+        {
+            "type": "pattern",
+            "name": "N+1 query blowup",
+            "symptoms": "Latency scales with row count",
+            "root_cause": "Per-row query in a loop",
+            "standard_fix": "Batch with a single JOIN",
+        }
+    )
+    assert "logged successfully" in pat
+
+    skill = TOOL_HANDLERS["memory_add"](
+        {
+            "type": "skill",
+            "name": "Bisect a regression",
+            "domain": "engineering",
+            "trigger": "A test passed last week and fails now",
+            "workflow": "git bisect between the known-good and known-bad commits",
+        }
+    )
+    assert "skill" in skill.lower()
+
+
+def test_pin_unpin_roundtrip(mcp_db):
+    add_result = TOOL_HANDLERS["memory_add"](
+        {
+            "type": "pattern",
+            "name": "Pinnable pattern",
+            "symptoms": "s",
+            "root_cause": "r",
+            "standard_fix": "f",
+        }
+    )
+    pid = int(add_result.split("#")[1].split(" ")[0])
+
+    pin_result = TOOL_HANDLERS["memory_pin"]({"item_type": "pattern", "item_id": pid})
+    assert isinstance(pin_result, str) and pin_result
+
+    listed = TOOL_HANDLERS["memory_list_pinned"]({})
+    assert "Pinnable pattern" in listed or str(pid) in listed
+
+    unpin_result = TOOL_HANDLERS["memory_unpin"]({"item_type": "pattern", "item_id": pid})
+    assert isinstance(unpin_result, str) and unpin_result
+
+
+def test_init_session_then_get_and_check_workflow(mcp_db):
+    session_id = "roundtrip-session"
+    init_result = TOOL_HANDLERS["memory_init_session"](
+        {"session_id": session_id, "title": "Roundtrip", "date": "2026-07-13", "domain": "engineering"}
+    )
+    assert isinstance(init_result, str) and init_result
+
+    get_result = TOOL_HANDLERS["memory_get_session"]({"session_id": session_id})
+    assert isinstance(get_result, str) and get_result
+
+    wf_result = TOOL_HANDLERS["memory_check_workflow_state"]({"session_id": session_id})
+    assert isinstance(wf_result, str) and wf_result

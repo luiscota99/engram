@@ -542,7 +542,9 @@ def handle_memory_index_file(args: McpToolArgs) -> str:
 
 
 def handle_memory_query_codebase(args: McpToolArgs) -> str:
-    project_path = args["project_path"]
+    project_path = args.get("project_path")
+    if not project_path:
+        return "Error: project_path is required."
     query = args.get("query", "")
 
     project = get_or_create_project(project_path)
@@ -566,7 +568,9 @@ def handle_memory_query_codebase(args: McpToolArgs) -> str:
 
 
 def handle_memory_get_stale_files(args: McpToolArgs) -> str:
-    project_path = args["project_path"]
+    project_path = args.get("project_path")
+    if not project_path:
+        return "Error: project_path is required."
 
     import hashlib
     import os as _os
@@ -600,7 +604,9 @@ def handle_memory_get_stale_files(args: McpToolArgs) -> str:
 
 
 def handle_memory_list(args: McpToolArgs) -> str:
-    item_type = args["type"]
+    item_type = args.get("type")
+    if not item_type:
+        return "Error: type is required (e.g. mistakes, patterns, skills)."
     with get_connection() as conn:
         if item_type == "mistakes":
             rows = conn.execute(
