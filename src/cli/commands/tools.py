@@ -29,6 +29,7 @@ def cmd_browse(args):
 def cmd_retrieval_benchmark(args):
     """Delegate to ``benchmarks/engram_retrieval_bench.py`` (sets ``sys.argv``)."""
     import importlib.util
+    from importlib.machinery import SourceFileLoader
     from pathlib import Path
 
     engram_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -40,12 +41,16 @@ def cmd_retrieval_benchmark(args):
     try:
         rest = list(args.bench_args or [])
         sys.argv = [str(script)] + rest
-        spec = importlib.util.spec_from_file_location("engram_retrieval_bench", script)
-        if spec is None or spec.loader is None:
+        # SourceFileLoader (concrete) declares exec_module in every typeshed
+        # version; the abstract spec.loader does not on 3.12 stubs (pyright
+        # reportAttributeAccessIssue — CI 3.12 only, invisible on a 3.9 host).
+        loader = SourceFileLoader("engram_retrieval_bench", str(script))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        if spec is None:
             print("Error: could not load retrieval benchmark module.")
             sys.exit(1)
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        loader.exec_module(mod)
         mod.main()
     finally:
         sys.argv = old_argv
