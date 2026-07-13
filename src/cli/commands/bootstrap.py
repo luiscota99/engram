@@ -350,6 +350,60 @@ def _setup_mcp_config(engram_root: str) -> tuple[bool, str]:
         return False, f"Warning: Could not update MCP config: {e}"
 
 
+RECALL_HOOK_COMMAND = "engram hook recall"
+
+
+def write_claude_recall_hook(project_root: str) -> tuple[bool, str]:
+    """Merge the auto-recall UserPromptSubmit hook into ``.claude/settings.json``.
+
+    Enforcement, not advice: with this hook installed, Claude Code runs
+    ``engram hook recall`` on every prompt and injects relevant memories into
+    context — recall no longer depends on the agent choosing to search.
+    Idempotent: never duplicates an existing entry, preserves other settings.
+    Returns ``(changed, message)``.
+    """
+    claude_dir = os.path.join(project_root, ".claude")
+    settings_path = os.path.join(claude_dir, "settings.json")
+
+    settings: dict = {}
+    if os.path.isfile(settings_path):
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                settings = loaded
+        except (OSError, ValueError):
+            return (False, f"! Left {settings_path} untouched (unreadable/invalid JSON).")
+
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        return (False, "! Left .claude/settings.json 'hooks' untouched (unexpected shape).")
+    ups = hooks.setdefault("UserPromptSubmit", [])
+    if not isinstance(ups, list):
+        return (False, "! Left .claude/settings.json UserPromptSubmit untouched (unexpected shape).")
+
+    already = any(
+        isinstance(group, dict)
+        and any(
+            isinstance(h, dict) and h.get("command") == RECALL_HOOK_COMMAND
+            for h in group.get("hooks", [])
+        )
+        for group in ups
+    )
+    if already:
+        return (False, "✓ Auto-recall hook already present in .claude/settings.json")
+
+    ups.append({"hooks": [{"type": "command", "command": RECALL_HOOK_COMMAND}]})
+    try:
+        os.makedirs(claude_dir, exist_ok=True)
+        with open(settings_path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+            f.write("\n")
+    except OSError as e:
+        return (False, f"! Could not write .claude/settings.json ({e}).")
+    return (True, "✓ Installed auto-recall hook → .claude/settings.json (UserPromptSubmit)")
+
+
 def cmd_bootstrap(args):
     import urllib.request as _urllib_req
 
@@ -420,6 +474,10 @@ def cmd_bootstrap(args):
                 f.write("## Engram Usage\n\nEngram is available but **off by default** for this project.\n\n")
                 f.write("Activate by saying:\n- `use engram` — enables full memory search\n- `no engram` — keeps disabled\n")
         print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}  [{mode} mode]")
+
+        # Auto-recall enforcement hook for Claude Code (UserPromptSubmit)
+        _, hook_msg = write_claude_recall_hook(project_root)
+        print(f"  {hook_msg}")
 
     # MCP config
     setup_mcp = getattr(args, "setup_mcp", None)

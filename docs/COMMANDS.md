@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 57 commands.
+All commands are invoked as `engram <command>`. 58 commands.
 
 ### `engram add`
 
@@ -143,6 +143,14 @@ Build and visualize file dependency graph
 ### `engram health`
 
 Show a health report for the memory database
+
+### `engram hook`
+
+Agent-harness hooks (auto-recall). Reads a hook payload on stdin.
+
+  - `<hook_action>` — one of `recall`
+
+- **`engram hook recall`**
 
 ### `engram import-claude-memories`
 

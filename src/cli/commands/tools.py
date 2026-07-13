@@ -56,6 +56,41 @@ def cmd_retrieval_benchmark(args):
         sys.argv = old_argv
 
 
+def cmd_hook_recall(args):
+    """Auto-recall hook: emit relevant memories as injectable agent context.
+
+    Reads a Claude Code hook payload (JSON) from stdin and prints a
+    ``UserPromptSubmit`` additionalContext JSON block, or nothing when there is
+    no prompt / no match. ``--prompt`` bypasses stdin (for testing or manual use).
+    """
+    import json
+
+    from ...hooks import build_recall_context, recall_from_payload
+
+    prompt = getattr(args, "prompt", None)
+    if prompt:
+        text = " ".join(prompt) if isinstance(prompt, list) else str(prompt)
+        ctx = build_recall_context(text)
+        if ctx:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": ctx,
+                }
+            }, ensure_ascii=False))
+        return
+
+    stdin_text = ""
+    if not sys.stdin.isatty():
+        try:
+            stdin_text = sys.stdin.read()
+        except Exception:
+            stdin_text = ""
+    out = recall_from_payload(stdin_text)
+    if out:
+        print(out)
+
+
 def cmd_run(args):
     prompt_text = " ".join(args.prompt)
     claw_path = args.claw_path or config.claw_path()

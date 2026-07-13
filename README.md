@@ -302,6 +302,12 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 
 ### Measuring fit and whether Engram helped
 
+**Enforcing use (recall is otherwise advisory):** `engram bootstrap` installs a
+Claude Code `UserPromptSubmit` hook (`engram hook recall`) that searches memory
+for each prompt and injects the top matches as context automatically — so recall
+happens whether or not the agent remembers to search. Injected memories are
+labeled as reference data, not instructions.
+
 Turn on search auditing once (`engram audit on`), then ask **`engram roi`** at any
 time for a measured answer: searches served and hit rate, memories actually
 reused, reflex-rung tokens avoided, and an honest verdict — it will tell you

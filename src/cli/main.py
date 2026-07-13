@@ -70,6 +70,7 @@ from .commands.sync import (
 from .commands.tools import (
     cmd_benchmark,
     cmd_browse,
+    cmd_hook_recall,
     cmd_retrieval_benchmark,
     cmd_run,
     cmd_simulate,
@@ -600,6 +601,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--session-id")
     p_run.add_argument("--claw-path")
     p_run.set_defaults(func=cmd_run)
+
+    p_hook = sub.add_parser("hook", help="Agent-harness hooks (auto-recall). Reads a hook payload on stdin.")
+    hook_sub = p_hook.add_subparsers(dest="hook_action")
+    p_hook_recall = hook_sub.add_parser("recall", help="Emit relevant memories as injectable context (UserPromptSubmit)")
+    p_hook_recall.add_argument("--prompt", nargs="+", help="Bypass stdin with an explicit prompt (testing/manual)")
+    p_hook_recall.set_defaults(func=cmd_hook_recall)
 
     return parser
 
