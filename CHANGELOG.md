@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Cold-start of a CPU-only Ollama could fail a whole reembed batch.** Loading an embedding model takes several seconds (~8s for `nomic-embed-text` on CPU); when that latency landed on the first request of a batch it blew the per-request timeout, and two such failures tripped the 20s dead-host cooldown — so the rest of the sweep was marked `failed` without ever being tried, leaving residual vector drift. Added `embeddings.warm_up()` (a long-timeout priming call that also clears any stale cooldown) and call it at the start of `reembed_stale()`; `embed_text()` now accepts an explicit `timeout`. Captured as a mistake in the reference DB.
 - **Migration output corrupted the MCP JSON-RPC stream**: `database.py`/`migrations.py` printed progress to stdout, which the MCP server uses for framing — the first tool call after a schema upgrade broke the session. Routed to logging.
 - **Dedup fingerprints diverged between CLI and MCP** (MCP omitted `prevention` for mistakes): shared canonical content builders in `memory_ops`.
 - `git rev-parse` was forked on every search for project affinity — memoized per path.

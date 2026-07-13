@@ -484,3 +484,33 @@ def test_clear_embedding_cache_empties_lru():
     assert len(emb._embed_cache) == 1
     emb.clear_embedding_cache()
     assert len(emb._embed_cache) == 0
+
+
+# ── warm_up: prime the model before a batch (cold-start cascade fix) ──
+
+def test_warm_up_disabled_returns_false(monkeypatch):
+    monkeypatch.setenv("ENGRAM_EMBED_URL", "disabled")
+    assert emb.warm_up() is False
+
+
+def test_warm_up_success_clears_cooldown():
+    _, base = emb.resolve_embed_backend()
+    emb._dead_hosts[emb._host_key(base)] = time.time() + 100  # pretend host is dead
+    emb._host_fails[emb._host_key(base)] = 5
+    with patch("urllib.request.urlopen", return_value=_mock_response({"embedding": [0.3] * 768})):
+        assert emb.warm_up() is True
+    # a deliberate warm-up must lift a stale cooldown so the batch can proceed
+    assert emb._host_key(base) not in emb._dead_hosts
+    assert emb._host_key(base) not in emb._host_fails
+
+
+def test_warm_up_failure_returns_false():
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("boom")):
+        assert emb.warm_up() is False
+
+
+def test_embed_text_forwards_custom_timeout():
+    with patch("urllib.request.urlopen", return_value=_mock_response({"embedding": [0.1] * 768})) as m:
+        emb.embed_text("hi", timeout=emb.WARMUP_TIMEOUT)
+    # the long warm-up timeout must reach urlopen, not the default _EMBED_TIMEOUT
+    assert m.call_args.kwargs.get("timeout") == emb.WARMUP_TIMEOUT

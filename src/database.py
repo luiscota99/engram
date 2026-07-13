@@ -954,6 +954,14 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
             full_text = f"{fts_row['title']}\n{fts_row['content']}\n{fts_row['tags'] or ''}"
             embeddable.append((row, full_text))
 
+        # Prime the model before the sweep: a cold load landing mid-batch would
+        # blow the per-request timeout and trip the dead-host cooldown, failing
+        # the rest of the items (observed on CPU-only Ollama).
+        if embeddable:
+            from . import embeddings as _emb
+
+            _emb.warm_up(model=embedding_model)
+
         embeddings: list = []
         for start in range(0, len(embeddable), EMBED_SWEEP_CHUNK):
             chunk = embeddable[start:start + EMBED_SWEEP_CHUNK]

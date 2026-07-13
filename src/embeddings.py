@@ -237,6 +237,33 @@ def _mark_host_success(base_url: str) -> None:
     _dead_hosts.pop(key, None)
 
 
+# Loading an embedding model into a cold Ollama takes several seconds (CPU-only:
+# measured ~8s for nomic-embed-text). If that latency lands on the first request
+# of a batch it can blow the per-request timeout; two such failures trip the
+# dead-host cooldown and the rest of the batch is marked failed without trying.
+# Priming the model once up front — with a generous timeout — avoids the whole
+# cascade. Learned the hard way running `engram doctor --repair` / `reembed`.
+WARMUP_TIMEOUT = 90.0
+
+
+def warm_up(model: str | None = None) -> bool:
+    """Prime the embedding backend so a cold model load can't wedge a batch.
+
+    Clears any stale dead-host cooldown (a deliberate batch should not be
+    short-circuited by an earlier blip), then makes one embedding request with a
+    long timeout to force the model load. Returns True if the backend responded.
+    Safe to call when embeddings are disabled or the host is down — returns False.
+    """
+    kind, base_url = resolve_embed_backend()
+    if kind == "disabled":
+        return False
+    key = _host_key(base_url)
+    _dead_hosts.pop(key, None)
+    _host_fails.pop(key, None)
+    vec = embed_text("warmup", model=model, timeout=WARMUP_TIMEOUT)
+    return vec is not None
+
+
 def resolve_embed_backend() -> tuple[str, str]:
     """Return ``(kind, base_url)`` where kind is ``ollama``, ``openai``, or ``disabled``.
 
@@ -354,7 +381,7 @@ def _get_model() -> str:
     return model
 
 
-def embed_text(text: str, model: str | None = None) -> list[float] | None:
+def embed_text(text: str, model: str | None = None, timeout: float | None = None) -> list[float] | None:
     """Generate an embedding using the local Ollama instance.
 
     Parameters
@@ -364,6 +391,9 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
     model:
         Override the model for this call.  If omitted, uses ``_get_model()``
         which respects ``ENGRAM_EMBED_MODEL``.
+    timeout:
+        Per-request timeout in seconds. Defaults to ``_EMBED_TIMEOUT``; callers
+        priming a cold model (see :func:`warm_up`) pass a larger value.
 
     Returns the embedding vector, or ``None`` if Ollama is unavailable.
     """
@@ -416,7 +446,7 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
 
     req = urllib.request.Request(url, data=data, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=_EMBED_TIMEOUT) as response:
+        with urllib.request.urlopen(req, timeout=timeout or _EMBED_TIMEOUT) as response:
             result = json.loads(response.read().decode())
             if kind == "openai":
                 items = result.get("data") or []
