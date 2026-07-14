@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 59 commands.
+All commands are invoked as `engram <command>`. 61 commands.
 
 ### `engram add`
 
@@ -220,6 +220,14 @@ One-shot setup: detect Cursor/Claude Code/Antigravity and wire Engram into all o
 
   - `--all` — Set up every integration even if not detected
 
+### `engram link`
+
+Create a typed relation between two memories (e.g. mistake:12 pattern:4 causes)
+
+  - `<source>` — Source item as type:id (e.g. mistake:12)
+  - `<target>` — Target item as type:id (e.g. pattern:4)
+  - `<relation>` — supersedes | refines | causes | contradicts | depends_on | related
+
 ### `engram link-pattern`
 
 Link pattern to a conversation
@@ -307,6 +315,12 @@ Manage reflexes (list / approve / run)
 - **`engram reflex approve`**
 - **`engram reflex list`**
 - **`engram reflex run`**
+
+### `engram relations`
+
+Show typed relationships touching an item (e.g. skill:3)
+
+  - `<item>` — Item as type:id
 
 ### `engram retrieval-benchmark`
 

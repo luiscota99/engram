@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -372,6 +372,22 @@ CREATE TABLE IF NOT EXISTS skill_tests (
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_skill_tests_item ON skill_tests(item_type, item_id);
+
+-- Typed relationships between memory items (schema v20). Small closed vocabulary
+-- of edge types; source = manual | merge (auto-derived).
+CREATE TABLE IF NOT EXISTS memory_relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_type TEXT NOT NULL,
+    from_id INTEGER NOT NULL,
+    to_type TEXT NOT NULL,
+    to_id INTEGER NOT NULL,
+    relation TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(from_type, from_id, to_type, to_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_relations_from ON memory_relations(from_type, from_id);
+CREATE INDEX IF NOT EXISTS idx_relations_to ON memory_relations(to_type, to_id);
 
 -- Inbox: alerts and decision requests for the human (schema v17).
 -- Agents and monitors PROPOSE here; only the user decides. finding_key

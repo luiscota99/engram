@@ -168,7 +168,45 @@ def handle_memory_read_item(args: McpToolArgs) -> str:
     # Auto-track: reading the full item means you're using it
     record_usage(item_type, item_id)
 
+    # Attach typed relationships so recall can follow the graph (supersedes,
+    # causes, contradicts, …) — cheap, and only present when edges exist.
+    try:
+        from src.relations import get_relations
+
+        rels = get_relations(item_type, int(item_id))
+        if rels:
+            item = {**item, "relations": [
+                {"direction": r["direction"], "relation": r["relation"],
+                 "item_type": r["other_type"], "item_id": r["other_id"], "title": r["other_title"]}
+                for r in rels
+            ]}
+    except Exception:
+        pass
+
     return json.dumps(item, separators=(",", ":"), ensure_ascii=False)
+
+
+def handle_memory_link(args: McpToolArgs) -> str:
+    """Create a typed relationship between two memory items."""
+    from src.relations import RELATION_TYPES, add_relation
+
+    from_type = args.get("from_type")
+    from_id = args.get("from_id")
+    to_type = args.get("to_type")
+    to_id = args.get("to_id")
+    relation = args.get("relation")
+    if not all([from_type, from_id, to_type, to_id, relation]):
+        return "Error: from_type, from_id, to_type, to_id, and relation are all required."
+    if relation not in RELATION_TYPES:
+        return f"Error: unknown relation '{relation}'. Choose from: {', '.join(sorted(RELATION_TYPES))}."
+    try:
+        fid, tid = int(str(from_id)), int(str(to_id))
+    except (TypeError, ValueError):
+        return "Error: from_id and to_id must be integers."
+    err = add_relation(str(from_type), fid, str(to_type), tid, str(relation))
+    if err:
+        return f"Error: {err}"
+    return f"Linked {from_type} #{fid} —{relation}→ {to_type} #{tid}."
 
 
 def handle_memory_propose_decision(args: McpToolArgs) -> str:
@@ -1209,6 +1247,7 @@ TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_embedding_status": handle_memory_embedding_status,
     "memory_health": handle_memory_health,
     "memory_roi": handle_memory_roi,
+    "memory_link": handle_memory_link,
     "memory_suggest_consolidations": handle_memory_suggest_consolidations,
     "memory_gc": handle_memory_gc,
     "memory_export_skill": handle_memory_export_skill,

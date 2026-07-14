@@ -383,6 +383,25 @@ MIGRATIONS = {
         );""",
         "CREATE INDEX IF NOT EXISTS idx_skill_tests_item ON skill_tests(item_type, item_id);",
     ],
+    20: [
+        # Typed relationships between memory items — the useful, LLM-era-appropriate
+        # slice of a knowledge graph (a small closed vocabulary of edge types),
+        # without an OWL/RDF stack. `source` distinguishes manual links from
+        # auto-derived ones (e.g. a merge recording 'supersedes').
+        """CREATE TABLE IF NOT EXISTS memory_relations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_type TEXT NOT NULL,
+            from_id INTEGER NOT NULL,
+            to_type TEXT NOT NULL,
+            to_id INTEGER NOT NULL,
+            relation TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(from_type, from_id, to_type, to_id, relation)
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_relations_from ON memory_relations(from_type, from_id);",
+        "CREATE INDEX IF NOT EXISTS idx_relations_to ON memory_relations(to_type, to_id);",
+    ],
     17: [
         lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
         """CREATE TABLE IF NOT EXISTS inbox (
@@ -491,6 +510,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    20: [
+        "DROP TABLE IF EXISTS memory_relations;",
+    ],
     19: [
         "DROP TABLE IF EXISTS skill_tests;",
     ],

@@ -44,9 +44,11 @@ from .commands.maintenance import (
 from .commands.memory import (
     cmd_add,
     cmd_consolidate,
+    cmd_link,
     cmd_link_pattern,
     cmd_list,
     cmd_recent,
+    cmd_relations,
     cmd_search,
     cmd_session_help,
     cmd_stats,
@@ -212,6 +214,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_link.add_argument("--date")
     p_link.add_argument("--notes")
     p_link.set_defaults(func=cmd_link_pattern)
+
+    p_rel = sub.add_parser("link", help="Create a typed relation between two memories (e.g. mistake:12 pattern:4 causes)")
+    p_rel.add_argument("source", help="Source item as type:id (e.g. mistake:12)")
+    p_rel.add_argument("target", help="Target item as type:id (e.g. pattern:4)")
+    p_rel.add_argument("relation", help="supersedes | refines | causes | contradicts | depends_on | related")
+    p_rel.set_defaults(func=cmd_link)
+
+    p_rels = sub.add_parser("relations", help="Show typed relationships touching an item (e.g. skill:3)")
+    p_rels.add_argument("item", help="Item as type:id")
+    p_rels.set_defaults(func=cmd_relations)
 
     p_cons = sub.add_parser("consolidate", help="Consolidate multiple skills into one")
     p_cons.add_argument("--delete-ids", required=True)

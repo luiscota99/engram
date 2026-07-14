@@ -415,6 +415,58 @@ def cmd_stats(args):
     print(f"\n  DB path: {fmt_dim(get_db_path())}")
 
 
+def _parse_item_ref(ref: str) -> tuple[str, int] | None:
+    """Parse a 'type:id' reference (e.g. 'mistake:12'). None if malformed."""
+    if ":" not in ref:
+        return None
+    itype, _, rid = ref.partition(":")
+    itype = itype.strip().lower()
+    aliases = {
+        "mistakes": "mistake", "patterns": "pattern", "skills": "skill",
+        "conversations": "conversation", "prompts": "prompt", "sessions": "session",
+    }
+    itype = aliases.get(itype, itype)
+    try:
+        return itype, int(rid.strip())
+    except ValueError:
+        return None
+
+
+def cmd_link(args):
+    """Create a typed relationship: engram link mistake:12 pattern:4 causes."""
+    from ...relations import RELATION_TYPES, add_relation
+
+    src = _parse_item_ref(args.source)
+    dst = _parse_item_ref(args.target)
+    if not src or not dst:
+        print("Usage: engram link <type:id> <type:id> <relation>  (e.g. mistake:12 pattern:4 causes)")
+        sys.exit(1)
+    if args.relation not in RELATION_TYPES:
+        print(f"Unknown relation '{args.relation}'. Choose from: {', '.join(sorted(RELATION_TYPES))}.")
+        sys.exit(1)
+    err = add_relation(src[0], src[1], dst[0], dst[1], args.relation)
+    if err:
+        print(f"Error: {err}")
+        sys.exit(1)
+    print(f"✓ Linked {src[0]} #{src[1]} —{args.relation}→ {dst[0]} #{dst[1]}")
+
+
+def cmd_relations(args):
+    """Show all typed relationships touching an item: engram relations skill:3."""
+    from ...relations import format_relations, get_relations
+
+    ref = _parse_item_ref(args.item)
+    if not ref:
+        print("Usage: engram relations <type:id>  (e.g. skill:3)")
+        sys.exit(1)
+    rels = get_relations(ref[0], ref[1])
+    if not rels:
+        print(fmt_dim(f"No relationships for {ref[0]} #{ref[1]}."))
+        return
+    print(fmt_header(f"Relationships for {ref[0]} #{ref[1]}:"))
+    print(format_relations(rels))
+
+
 def cmd_link_pattern(args):
     with get_connection() as conn:
         pattern = conn.execute("SELECT id FROM patterns WHERE name = ?", (args.name,)).fetchone()

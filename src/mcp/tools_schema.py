@@ -695,6 +695,21 @@ TOOLS = [
         }
     },
     {
+        "name": "memory_link",
+        "description": "Create a typed relationship between two memory items so recall can follow the graph. Directional: from --relation--> to. Use when one memory supersedes/refines/causes/contradicts/depends_on another (or generic 'related'). Relationships appear when you memory_read_item either endpoint.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from_type": {"type": "string", "description": "mistake|pattern|skill|conversation|prompt|session"},
+                "from_id": {"type": "integer"},
+                "to_type": {"type": "string", "description": "mistake|pattern|skill|conversation|prompt|session"},
+                "to_id": {"type": "integer"},
+                "relation": {"type": "string", "enum": ["supersedes", "refines", "causes", "contradicts", "depends_on", "related"]}
+            },
+            "required": ["from_type", "from_id", "to_type", "to_id", "relation"]
+        }
+    },
+    {
         "name": "memory_suggest_consolidations",
         "description": "Find clusters of near-duplicate memories that could be merged using memory_consolidate_skills or memory_merge_entries. Returns grouped candidates by similarity.",
         "inputSchema": {

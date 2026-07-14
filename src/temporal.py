@@ -87,4 +87,17 @@ def invalidate_memory(
                     item_id,
                 ),
             )
+
+    # Record the supersession as a typed edge so recall can traverse it — the
+    # keeper `supersedes` the item just invalidated. Auto-derived, zero friction.
+    if superseded_by:
+        try:
+            from .relations import add_relation
+
+            add_relation(
+                item_type, int(superseded_by), item_type, item_id, "supersedes",
+                source="merge", db_path=db_path, validate_exists=False,
+            )
+        except Exception:
+            logger.debug("failed to record supersedes edge", exc_info=True)
     return True
