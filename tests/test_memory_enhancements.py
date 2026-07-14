@@ -19,7 +19,11 @@ from src.search import search
 
 
 def test_schema_version_is_current():
-    assert SCHEMA_VERSION == 19
+    # Self-maintaining: SCHEMA_VERSION must match the latest migration, so a new
+    # migration without bumping the version (or vice-versa) fails here.
+    from src.migrations import MIGRATIONS
+
+    assert SCHEMA_VERSION == max(MIGRATIONS)
 
 
 def test_pin_and_search_prepend(test_db):
