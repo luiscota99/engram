@@ -31,6 +31,13 @@ RECALL_BANNER = (
 DEFAULT_RECALL_LIMIT = 3
 
 
+def _tokens(text: str) -> set[str]:
+    """Meaningful lexical tokens (>=4 chars) for the relevance gates."""
+    import re
+
+    return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) >= 4}
+
+
 def build_recall_context(
     prompt: str,
     *,
@@ -64,11 +71,24 @@ def build_recall_context(
     if not results:
         return ""
 
+    # Relevance gate: hybrid search always returns SOMETHING (nearest neighbor),
+    # so a conversational turn ("done", "si adelante") would inject unrelated
+    # memories — observed live: a TCP-server skill for "help me grant access".
+    # Require real lexical overlap between the prompt and each hit; injecting
+    # nothing beats injecting noise (same precision-over-recall stance as the
+    # guard). Purely-semantic paraphrase matches are the accepted cost.
+    prompt_tokens = _tokens(prompt)
+    if not prompt_tokens:
+        return ""
+
     lines = [RECALL_BANNER, ""]
+    kept = 0
     for r in results:
         itype = (r.get("item_type") or "item").upper()
         title = (r.get("title") or "").strip() or "(untitled)"
         snippet = " ".join((r.get("snippet") or "").split())
+        if not (prompt_tokens & _tokens(f"{title} {snippet}")):
+            continue
         if len(snippet) > 200:
             snippet = snippet[:200] + "…"
         item_id = r.get("item_id")
@@ -76,6 +96,9 @@ def build_recall_context(
         lines.append(head)
         if snippet:
             lines.append(f"    {snippet}")
+        kept += 1
+    if not kept:
+        return ""
     return "\n".join(lines)
 
 
@@ -93,8 +116,6 @@ def build_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> l
     if not action_text:
         return []
 
-    import re
-
     from .search import search
 
     try:
@@ -109,12 +130,9 @@ def build_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> l
         return []
 
     # A guard warns "you may be repeating a mistake" — a false positive is worse
-    # than a miss, so require real LEXICAL overlap (shared terms), not mere
-    # semantic proximity. Otherwise every unrelated action ("ls -la") would match
-    # the nearest neighbor. Recall (level 2) stays broad; the guard is precise.
-    def _tokens(text: str) -> set[str]:
-        return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) >= 4}
-
+    # than a miss, so require real LEXICAL overlap (shared terms, module-level
+    # _tokens), not mere semantic proximity. Otherwise every unrelated action
+    # ("ls -la") would match the nearest neighbor.
     query_tokens = _tokens(action_text)
     if not query_tokens:
         return []

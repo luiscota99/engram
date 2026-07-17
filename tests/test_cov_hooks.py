@@ -248,3 +248,35 @@ def test_cmd_guard_clean_when_no_match(guarded, tmp_path):
     f.write_text("completely unrelated content about spreadsheets")
     out = _capture(cmd_guard, SimpleNamespace(files=[str(f)], staged=False, strict=False))
     assert "no known mistakes" in out.lower()
+
+
+# ── Recall relevance gate: injecting nothing beats injecting noise ───
+
+def test_recall_conversational_prompt_injects_nothing(seeded):
+    # hybrid search always returns a nearest neighbor; a conversational turn
+    # must not surface it ("si adelante" → TCP-server skill, observed live)
+    assert hooks.build_recall_context("ok go ahead") == ""
+    assert hooks.build_recall_context("si") == ""
+
+
+def test_recall_irrelevant_prompt_injects_nothing(seeded):
+    # meaningful tokens, but none shared with the stored memory
+    assert hooks.build_recall_context("schedule dentist appointment tomorrow") == ""
+
+
+def test_recall_relevant_prompt_still_injects(seeded):
+    ctx = hooks.build_recall_context("mixed vector norms again")
+    assert ctx and "MISTAKE" in ctx
+
+
+def test_recall_payload_conversational_returns_empty(seeded):
+    payload = json.dumps({"prompt": "done", "cwd": None})
+    assert hooks.recall_from_payload(payload) == ""
+
+
+def test_recall_filters_per_hit_not_all_or_nothing(seeded):
+    # a second, unrelated memory must be filtered while the relevant one stays
+    _add_mistake(seeded["path"], "dentist appointment scheduling failure", context="calendar")
+    ctx = hooks.build_recall_context("vector norms mismatch")
+    assert "vector norms" in ctx
+    assert "dentist" not in ctx
