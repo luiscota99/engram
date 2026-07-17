@@ -222,3 +222,28 @@ def test_memory_gc_declined_elicitation_cancels():
             out = handle_memory_gc({"mode": "archive"})
     gc.assert_not_called()
     assert "Cancelled" in out
+
+
+def test_signal_handlers_override_inherited_sig_ign():
+    """Spawners often start children with SIGINT=SIG_IGN and Python respects it,
+    so the client's shutdown SIGINT did nothing and orphan servers accumulated.
+    The server must install its own handlers, overriding the inheritance."""
+    import signal
+
+    from src.mcp import protocol
+
+    old_int = signal.getsignal(signal.SIGINT)
+    old_term = signal.getsignal(signal.SIGTERM)
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)  # simulate the bad inheritance
+        protocol._install_signal_handlers()
+        handler = signal.getsignal(signal.SIGINT)
+        assert handler not in (signal.SIG_IGN, signal.SIG_DFL)
+        assert signal.getsignal(signal.SIGTERM) is handler
+        import pytest as _pytest
+
+        with _pytest.raises(SystemExit):
+            handler(signal.SIGINT, None)
+    finally:
+        signal.signal(signal.SIGINT, old_int)
+        signal.signal(signal.SIGTERM, old_term)

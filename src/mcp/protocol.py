@@ -194,8 +194,33 @@ def handle_request(msg: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _install_signal_handlers() -> None:
+    """Make SIGINT/SIGTERM actually terminate the server.
+
+    Spawners often start children with SIGINT set to SIG_IGN (POSIX shells do it
+    for backgrounded jobs), and Python *respects* an inherited SIG_IGN — it never
+    installs its KeyboardInterrupt handler. The observed result: the MCP client's
+    shutdown SIGINT does nothing ("SIGINT failed, sending SIGTERM" in client
+    logs), cleanup times out, and orphaned servers accumulate holding DB
+    connections — which then starves fresh servers into intermittent timeouts.
+    Installing explicit handlers overrides the inherited disposition.
+    """
+    import signal
+
+    def _terminate(signum, frame):  # noqa: ARG001
+        logger.info("Engram MCP server exiting on signal %s (pid=%s)", signum, os.getpid())
+        raise SystemExit(0)
+
+    try:
+        signal.signal(signal.SIGINT, _terminate)
+        signal.signal(signal.SIGTERM, _terminate)
+    except (ValueError, OSError):  # non-main thread / unsupported platform
+        logger.debug("could not install signal handlers", exc_info=True)
+
+
 def run_stdio_server():
     """Run the MCP server over stdio (stdin/stdout)."""
+    _install_signal_handlers()
     init_db()
     logger.info("Engram MCP server started (pid=%s)", os.getpid())
 
