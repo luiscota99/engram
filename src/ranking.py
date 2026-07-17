@@ -381,6 +381,7 @@ def rank_results(
     rrf_scores: dict[str, float] | None = None,
     item_dates: dict | None = None,
     temporal_intent: dict | None = None,
+    feedback_map: dict | None = None,
 ) -> list[dict]:
     """Apply utility scoring to a list of results and sort descending.
 
@@ -403,6 +404,10 @@ def rank_results(
     rrf_scores:
         Normalized reciprocal-rank fusion scores per ``result_key``, when hybrid
         search merged semantic + lexical lists.
+    feedback_map:
+        Dict mapping (item_type, item_id_int) → (helped, unhelpful) explicit
+        feedback totals. Affects ranking only — an item with no feedback is
+        merely dormant and scores exactly as before.
     """
     inferred_type = infer_type_from_query(query)
     stale_rowids = stale_rowids or set()
@@ -421,7 +426,14 @@ def rank_results(
         rk = result_key(r)
         rrf = RRF_WEIGHT * rrf_scores.get(rk, 0.0) if rrf_scores else 0.0
         r["rrf_normalized"] = round(rrf_scores.get(rk, 0.0), 6) if rrf_scores else 0.0
-        r["utility_score"] = base + rrf
+        fb = 0.0
+        if feedback_map:
+            helped, unhelpful = feedback_map.get(key_row, (0, 0))
+            if helped or unhelpful:
+                from .feedback import feedback_score
+
+                fb = feedback_score(helped, unhelpful)
+        r["utility_score"] = base + rrf + fb
 
     if temporal_intent and temporal_intent.get("has_temporal") and item_dates:
         _apply_temporal_boost(results, item_dates, temporal_intent)

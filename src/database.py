@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -406,6 +406,21 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     UNIQUE(project_path, session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_path, updated_at);
+
+-- Retrieval feedback (schema v22) — reward/discourage signal for RANKING only.
+-- helpful=+1 rewards, helpful=-1 demotes; never deletes (the user decides that,
+-- via inbox proposals). One table for all item types: rank-time aggregation is
+-- a single batch query.
+CREATE TABLE IF NOT EXISTS retrieval_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    helpful INTEGER NOT NULL CHECK (helpful IN (1, -1)),
+    query TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_item ON retrieval_feedback(item_type, item_id);
 
 -- Inbox: alerts and decision requests for the human (schema v17).
 -- Agents and monitors PROPOSE here; only the user decides. finding_key

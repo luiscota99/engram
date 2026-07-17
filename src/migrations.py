@@ -422,6 +422,23 @@ MIGRATIONS = {
         );""",
         "CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_path, updated_at);",
     ],
+    22: [
+        # Retrieval feedback — the reward/discourage signal for RANKING only.
+        # helpful=+1 rewards, helpful=-1 demotes; neither ever deletes or
+        # archives (dormant knowledge is fine — deletion is the user's call,
+        # proposed via the inbox). One events table for every item type, so
+        # rank-time aggregation is a single query — no per-type fetch drift.
+        """CREATE TABLE IF NOT EXISTS retrieval_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_type TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            helpful INTEGER NOT NULL CHECK (helpful IN (1, -1)),
+            query TEXT,
+            source TEXT NOT NULL DEFAULT 'manual',
+            created_at TEXT DEFAULT (datetime('now'))
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_feedback_item ON retrieval_feedback(item_type, item_id);",
+    ],
     17: [
         lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
         """CREATE TABLE IF NOT EXISTS inbox (
@@ -530,6 +547,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    22: [
+        "DROP TABLE IF EXISTS retrieval_feedback;",
+    ],
     21: [
         "DROP TABLE IF EXISTS checkpoints;",
     ],

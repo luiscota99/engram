@@ -26,6 +26,7 @@ from src.database import (
     record_usage,
     unpin_item,
 )
+from src.feedback import add_feedback
 from src.maintenance import find_consolidation_candidates, run_gc, run_health_check, run_sleep
 from src.memory_ops import (
     add_decision,
@@ -150,10 +151,41 @@ def handle_memory_record_usage(args: McpToolArgs) -> str:
     if not item_type or not item_id:
         return "Error: item_type and item_id are required."
 
+    # success=False used to be silently ignored (the count bumped anyway,
+    # rewarding a memory that failed). A failed application is negative
+    # feedback: demote in ranking, don't bump usage.
+    if not success:
+        if add_feedback(item_type, int(item_id), helpful=False, source="mcp"):
+            return (
+                f"Recorded that {item_type} ID {item_id} did not help — demoted in "
+                "future ranking (never deleted; the user decides that)."
+            )
+        return f"Failed to record feedback for {item_type} ID {item_id}."
+
     result = record_usage(item_type, item_id, success)
     if result:
         return f"Successfully recorded usage for {item_type} ID {item_id}. Its search rank has been boosted."
     return f"Failed to record usage for {item_type} ID {item_id}."
+
+
+def handle_memory_feedback(args: McpToolArgs) -> str:
+    item_type = args.get("item_type")
+    item_id = args.get("item_id")
+    helpful = args.get("helpful")
+    if not item_type or not item_id or helpful is None:
+        return "Error: item_type, item_id and helpful (true/false) are required."
+
+    ok = add_feedback(
+        item_type, int(item_id), helpful=bool(helpful),
+        query=args.get("query") or "", source="mcp",
+    )
+    if not ok:
+        return f"Error: no {item_type} with ID {item_id}."
+    verdict = "rewarded" if helpful else "demoted"
+    return (
+        f"{item_type} ID {item_id} {verdict} in future ranking. Feedback only "
+        "affects ordering — deletion is always proposed to the user, never automatic."
+    )
 
 
 def handle_memory_read_item(args: McpToolArgs) -> str:
@@ -1229,6 +1261,7 @@ def handle_memory_sleep(args: McpToolArgs) -> str:
 
 TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_add": handle_memory_add,
+    "memory_feedback": handle_memory_feedback,
     "memory_record_usage": handle_memory_record_usage,
     "memory_read_item": handle_memory_read_item,
     "memory_propose_decision": handle_memory_propose_decision,

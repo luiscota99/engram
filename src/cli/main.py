@@ -45,6 +45,7 @@ from .commands.maintenance import (
 from .commands.memory import (
     cmd_add,
     cmd_consolidate,
+    cmd_feedback,
     cmd_link,
     cmd_link_pattern,
     cmd_list,
@@ -234,6 +235,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_rels = sub.add_parser("relations", help="Show typed relationships touching an item (e.g. skill:3)")
     p_rels.add_argument("item", help="Item as type:id")
     p_rels.set_defaults(func=cmd_relations)
+
+    p_fb = sub.add_parser("feedback", help="Reward or demote a memory in future ranking (never deletes)")
+    p_fb.add_argument("item", help="Item as type:id (e.g. skill:3)")
+    p_fb.add_argument("--helped", action="store_true", help="This memory helped — boost it")
+    p_fb.add_argument("--unhelpful", action="store_true", help="This memory was noise — demote it in ranking")
+    p_fb.add_argument("--query", help="The query/task it (mis)matched, for the audit trail")
+    p_fb.set_defaults(func=cmd_feedback)
 
     # ── Brains: per-agent scoped memory (mini brains) ───────────────
     p_brain = sub.add_parser("brain", help="Per-agent scoped memory ('mini brains') under ~/.engram/brains")

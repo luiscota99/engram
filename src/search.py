@@ -282,6 +282,18 @@ def search(
                     last_used_map[key] = row["last_used_at"]
                     item_dates[key] = row["item_date"]
 
+        # 3b. Batch-fetch explicit retrieval feedback — one query for ALL types
+        # (single shared table, so no per-type participation drift).
+        from .feedback import feedback_totals
+
+        try:
+            feedback_map = feedback_totals(
+                [(r["item_type"], int(r["item_id"])) for r in results], conn=conn
+            )
+        except Exception:
+            logger.exception("feedback totals fetch failed; ranking without feedback")
+            feedback_map = {}
+
         # 4. Project affinity
         affinities = {}
         if project_path:
@@ -297,6 +309,7 @@ def search(
     # 5. Rank using multi-factor scoring (+ RRF hybrid boost)
     results = rank_results(
         results=results,
+        feedback_map=feedback_map,
         usage_counts=usage_counts,
         last_used_map=last_used_map,
         affinities=affinities,

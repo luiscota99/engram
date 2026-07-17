@@ -467,6 +467,27 @@ def cmd_unlink(args):
         print("No such relation to remove.")
 
 
+def cmd_feedback(args):
+    """Reward or demote an item in ranking: engram feedback skill:3 --helped."""
+    from ...feedback import add_feedback
+
+    ref = _parse_item_ref(args.item)
+    if not ref:
+        print("Usage: engram feedback <type:id> --helped|--unhelpful [--query '...']")
+        sys.exit(1)
+    if args.helped == args.unhelpful:  # neither or both
+        print("Pick exactly one of --helped / --unhelpful.")
+        sys.exit(1)
+    ok = add_feedback(
+        ref[0], ref[1], helpful=bool(args.helped), query=args.query or "", source="cli"
+    )
+    if not ok:
+        print(f"Error: no {ref[0]} with id {ref[1]}.")
+        sys.exit(1)
+    verdict = "rewarded" if args.helped else "demoted"
+    print(f"✓ {ref[0]} #{ref[1]} {verdict} in future ranking (never deleted — that stays your call).")
+
+
 def cmd_relations(args):
     """Show all typed relationships touching an item: engram relations skill:3."""
     from ...relations import format_relations, get_relations

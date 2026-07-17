@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 64 commands.
+All commands are invoked as `engram <command>`. 65 commands.
 
 ### `engram add`
 
@@ -119,6 +119,15 @@ Export Engram skills as Cursor SKILL.md files
   - `--min-usage`
   - `--from-patterns`
   - `--dry-run`
+
+### `engram feedback`
+
+Reward or demote a memory in future ranking (never deletes)
+
+  - `<item>` — Item as type:id (e.g. skill:3)
+  - `--helped` — This memory helped — boost it
+  - `--unhelpful` — This memory was noise — demote it in ranking
+  - `--query` — The query/task it (mis)matched, for the audit trail
 
 ### `engram gc`
 

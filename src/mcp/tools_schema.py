@@ -151,6 +151,44 @@ TOOLS = [
         }
     },
     {
+        "name": "memory_feedback",
+        "description": "Reward or demote a memory in future ranking. Call with helpful=true when a recalled memory genuinely helped the task; helpful=false when it was noise (surfaced but irrelevant or misleading). Feedback only affects ranking precision — it never deletes anything; deletion is proposed to the user separately. Item ids appear in [TYPE #id] recall banners.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "item_type": {
+                    "type": "string",
+                    "enum": [
+                        "mistake",
+                        "pattern",
+                        "skill",
+                        "conversation",
+                        "prompt",
+                        "session"
+                    ],
+                    "description": "The memory item's type"
+                },
+                "item_id": {
+                    "type": "integer",
+                    "description": "The memory item's id (shown as [TYPE #id] in recall context)"
+                },
+                "helpful": {
+                    "type": "boolean",
+                    "description": "true = this memory helped; false = it was noise for this task"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional: the task/query it (mis)matched, for the audit trail"
+                }
+            },
+            "required": [
+                "item_type",
+                "item_id",
+                "helpful"
+            ]
+        }
+    },
+    {
         "name": "memory_resume",
         "description": "Where did the last session leave off in this project? Returns the latest crash-proof checkpoint: last prompt, the agent's final reply (the handoff), git position, and commits made since. Use FIRST when resuming prior work — far cheaper than searching or reading transcripts.",
         "inputSchema": {

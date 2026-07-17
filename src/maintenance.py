@@ -1372,6 +1372,33 @@ def run_self_check(db_path=None) -> dict:
                 finding_key=f"reflex-flaky:{rid}",
             )
 
+    # 2b. Net-negative feedback → PROPOSE archival; the user decides. Dormant
+    # (never-used, zero-feedback) items are never proposed — you can't leverage
+    # all knowledge all the time, and non-use is not a signal. Only items with
+    # explicit "unhelpful" marks outweighing "helped" qualify.
+    try:
+        from .feedback import net_negative_items
+
+        for item in net_negative_items(db_path=db_path):
+            net = item["helped"] - item["unhelpful"]
+            _file(
+                kind="decision",
+                severity="info",
+                title=(
+                    f"{item['item_type']} #{item['item_id']} keeps surfacing as noise "
+                    f"(net feedback {net:+d}) — archive it?"
+                ),
+                body=(
+                    f"Marked unhelpful {item['unhelpful']}x vs helped {item['helped']}x. "
+                    f"It is already demoted in ranking either way. To archive it, ask "
+                    f"your agent for memory_invalidate({item['item_type']}, "
+                    f"{item['item_id']}). Rejecting keeps it and stops this question."
+                ),
+                finding_key=f"feedback-negative:{item['item_type']}:{item['item_id']}",
+            )
+    except Exception:
+        logger.debug("negative-feedback scan in self-check failed", exc_info=True)
+
     # 3. Hygiene: unfilled auto-demotion mistakes, pending embeddings, drift
     with get_connection(db_path) as conn:
         placeholders = conn.execute(
