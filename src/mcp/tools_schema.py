@@ -151,6 +151,24 @@ TOOLS = [
         }
     },
     {
+        "name": "memory_resume",
+        "description": "Where did the last session leave off in this project? Returns the latest crash-proof checkpoint: last prompt, the agent's final reply (the handoff), git position, and commits made since. Use FIRST when resuming prior work — far cheaper than searching or reading transcripts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {
+                    "type": "string",
+                    "description": "Project directory (default: the server's working directory)"
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "How many recent checkpoints to include (default: 1)",
+                    "default": 1
+                }
+            }
+        }
+    },
+    {
         "name": "memory_add",
         "description": "Add a memory entry (unified writer for all types). Draft the payload and get user approval before calling; never store raw source code — describe it instead.",
         "inputSchema": {

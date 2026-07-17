@@ -6,6 +6,7 @@ import json
 import os
 from typing import Any, Callable, Mapping
 
+from src.checkpoint import build_resume_report
 from src.codebase_query import fetch_codebase_rows_for_query
 from src.database import (
     check_duplicate_before_add,
@@ -279,6 +280,17 @@ def handle_memory_recent(args: McpToolArgs) -> str:
     if not results:
         return "No entries yet."
     return format_and_truncate_results(results)
+
+
+def handle_memory_resume(args: McpToolArgs) -> str:
+    project = args.get("project_path") or os.getcwd()
+    report = build_resume_report(project, limit=args.get("count", 1) or 1)
+    if not report:
+        return (
+            "No checkpoints recorded for this project yet — they appear "
+            "automatically once the Stop hook is installed (engram bootstrap)."
+        )
+    return report
 
 
 def handle_memory_add(args: McpToolArgs) -> str:
@@ -1223,6 +1235,7 @@ TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_route": handle_memory_route,
     "memory_search": handle_memory_search,
     "memory_recent": handle_memory_recent,
+    "memory_resume": handle_memory_resume,
     "memory_add_mistake": handle_memory_add_mistake,
     "memory_add_pattern": handle_memory_add_pattern,
     "memory_add_skill": handle_memory_add_skill,

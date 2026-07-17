@@ -111,6 +111,39 @@ def cmd_hook_guard(args):
         print(out)
 
 
+def cmd_hook_checkpoint(args):
+    """Stop hook: upsert a crash-proof session checkpoint after every turn.
+
+    Reads a Claude Code Stop payload (JSON) from stdin and records the last
+    user prompt, last assistant reply, and git HEAD for (project, session).
+    Prints nothing and never fails the turn it records.
+    """
+    from ...checkpoint import checkpoint_from_stop_payload
+
+    stdin_text = ""
+    if not sys.stdin.isatty():
+        try:
+            stdin_text = sys.stdin.read()
+        except Exception:
+            stdin_text = ""
+    checkpoint_from_stop_payload(stdin_text)
+
+
+def cmd_resume(args):
+    """Print "where we left off" for a project from its session checkpoints."""
+    from ...checkpoint import build_resume_report
+
+    project = getattr(args, "project", None) or os.getcwd()
+    report = build_resume_report(project, limit=getattr(args, "count", 1) or 1)
+    if not report:
+        print(
+            "No checkpoints for this project yet. They appear automatically "
+            "once the Stop hook is installed (engram bootstrap)."
+        )
+        return
+    print(report)
+
+
 def cmd_guard(args):
     """Scan files (or the staged diff) against known mistakes/patterns.
 

@@ -402,6 +402,26 @@ MIGRATIONS = {
         "CREATE INDEX IF NOT EXISTS idx_relations_from ON memory_relations(from_type, from_id);",
         "CREATE INDEX IF NOT EXISTS idx_relations_to ON memory_relations(to_type, to_id);",
     ],
+    21: [
+        # Crash-proof session checkpoints — one row per (project, session),
+        # upserted by the Stop hook on every agent turn. Operational state,
+        # NOT a memory item type: never FTS-indexed, never embedded; read
+        # only via `engram resume` / memory_resume.
+        """CREATE TABLE IF NOT EXISTS checkpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_path TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            last_prompt TEXT NOT NULL DEFAULT '',
+            last_summary TEXT NOT NULL DEFAULT '',
+            git_head TEXT NOT NULL DEFAULT '',
+            git_branch TEXT NOT NULL DEFAULT '',
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(project_path, session_id)
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_path, updated_at);",
+    ],
     17: [
         lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
         """CREATE TABLE IF NOT EXISTS inbox (
@@ -510,6 +530,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    21: [
+        "DROP TABLE IF EXISTS checkpoints;",
+    ],
     20: [
         "DROP TABLE IF EXISTS memory_relations;",
     ],

@@ -75,8 +75,10 @@ from .commands.tools import (
     cmd_benchmark,
     cmd_browse,
     cmd_guard,
+    cmd_hook_checkpoint,
     cmd_hook_guard,
     cmd_hook_recall,
+    cmd_resume,
     cmd_retrieval_benchmark,
     cmd_run,
     cmd_simulate,
@@ -645,6 +647,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_hook_guard = hook_sub.add_parser("guard", help="Warn about known mistakes before an action (PreToolUse)")
     p_hook_guard.add_argument("--strict", action="store_true", help="Ask the user to confirm instead of only warning")
     p_hook_guard.set_defaults(func=cmd_hook_guard)
+    p_hook_checkpoint = hook_sub.add_parser("checkpoint", help="Record a crash-proof session checkpoint (Stop)")
+    p_hook_checkpoint.set_defaults(func=cmd_hook_checkpoint)
+
+    p_resume = sub.add_parser("resume", help="Where did the last session leave off? (from Stop-hook checkpoints)")
+    p_resume.add_argument("--project", help="Project path (default: current directory)")
+    p_resume.add_argument("-n", "--count", type=int, default=1, help="How many recent checkpoints to show (default 1)")
+    p_resume.set_defaults(func=cmd_resume)
 
     p_guard = sub.add_parser("guard", help="Scan files or the staged diff against known mistakes/patterns (pre-commit)")
     p_guard.add_argument("files", nargs="*", help="Files to scan")

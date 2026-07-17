@@ -352,6 +352,7 @@ def _setup_mcp_config(engram_root: str) -> tuple[bool, str]:
 
 RECALL_HOOK_COMMAND = "engram hook recall"
 GUARD_HOOK_COMMAND = "engram hook guard"
+CHECKPOINT_HOOK_COMMAND = "engram hook checkpoint"
 
 
 def merge_claude_hook(
@@ -419,6 +420,11 @@ def write_claude_guard_hook(project_root: str) -> tuple[bool, str]:
     return merge_claude_hook(
         project_root, "PreToolUse", GUARD_HOOK_COMMAND, matcher="Edit|Write|Bash"
     )
+
+
+def write_claude_checkpoint_hook(project_root: str) -> tuple[bool, str]:
+    """Checkpoint: crash-proof "where we left off" written after every turn (Stop)."""
+    return merge_claude_hook(project_root, "Stop", CHECKPOINT_HOOK_COMMAND)
 
 
 def cmd_bootstrap(args):
@@ -492,12 +498,14 @@ def cmd_bootstrap(args):
                 f.write("Activate by saying:\n- `use engram` — enables full memory search\n- `no engram` — keeps disabled\n")
         print(f"✓ Created {os.path.join('.antigravity', 'instructions.md')}  [{mode} mode]")
 
-        # Enforcement hooks for Claude Code: auto-recall (UserPromptSubmit) and
-        # the pre-action guard (PreToolUse).
+        # Enforcement hooks for Claude Code: auto-recall (UserPromptSubmit),
+        # the pre-action guard (PreToolUse), and crash-proof checkpoints (Stop).
         _, recall_msg = write_claude_recall_hook(project_root)
         print(f"  {recall_msg}")
         _, guard_msg = write_claude_guard_hook(project_root)
         print(f"  {guard_msg}")
+        _, checkpoint_msg = write_claude_checkpoint_hook(project_root)
+        print(f"  {checkpoint_msg}")
 
     # MCP config
     setup_mcp = getattr(args, "setup_mcp", None)

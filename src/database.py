@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -388,6 +388,24 @@ CREATE TABLE IF NOT EXISTS memory_relations (
 );
 CREATE INDEX IF NOT EXISTS idx_relations_from ON memory_relations(from_type, from_id);
 CREATE INDEX IF NOT EXISTS idx_relations_to ON memory_relations(to_type, to_id);
+
+-- Crash-proof session checkpoints (schema v21) — one row per (project, session),
+-- upserted by the Stop hook every agent turn. Operational state, not a memory
+-- item type: never FTS-indexed or embedded; read only via `engram resume`.
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_path TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    last_prompt TEXT NOT NULL DEFAULT '',
+    last_summary TEXT NOT NULL DEFAULT '',
+    git_head TEXT NOT NULL DEFAULT '',
+    git_branch TEXT NOT NULL DEFAULT '',
+    turn_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(project_path, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_path, updated_at);
 
 -- Inbox: alerts and decision requests for the human (schema v17).
 -- Agents and monitors PROPOSE here; only the user decides. finding_key

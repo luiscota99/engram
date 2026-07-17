@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 63 commands.
+All commands are invoked as `engram <command>`. 64 commands.
 
 ### `engram add`
 
@@ -166,8 +166,9 @@ Show a health report for the memory database
 
 Agent-harness hooks (auto-recall, guard). Reads a hook payload on stdin.
 
-  - `<hook_action>` — one of `recall, guard`
+  - `<hook_action>` — one of `recall, guard, checkpoint`
 
+- **`engram hook checkpoint`**
 - **`engram hook guard`**
 - **`engram hook recall`**
 
@@ -331,6 +332,13 @@ Manage reflexes (list / approve / run)
 Show typed relationships touching an item (e.g. skill:3)
 
   - `<item>` — Item as type:id
+
+### `engram resume`
+
+Where did the last session leave off? (from Stop-hook checkpoints)
+
+  - `--project` — Project path (default: current directory)
+  - `-n, --count` — How many recent checkpoints to show (default 1)
 
 ### `engram retrieval-benchmark`
 
