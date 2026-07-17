@@ -2,6 +2,7 @@
 Database diagnostics and integrity repair tool.
 """
 
+import os
 import urllib.error
 import urllib.request
 
@@ -88,6 +89,39 @@ def run_diagnostics(repair=False):
 
     with get_connection() as conn:
         print(fmt_header("Engram Diagnostics\n"))
+
+        # 0. Ranking configuration — which weights is this store actually
+        # running? A forgotten/unproven weights file is a silent ranking
+        # change, exactly the kind of thing doctor exists to surface.
+        try:
+            import json as _json
+
+            from .ranking_weights import persisted_weights_path
+
+            wpath = persisted_weights_path()
+            if os.path.exists(wpath):
+                try:
+                    with open(wpath, encoding="utf-8") as f:
+                        wdata = _json.load(f)
+                    if wdata.get("proven"):
+                        prov = wdata.get("provenance", {})
+                        print(
+                            f"✓ Ranking weights: fitted set installed "
+                            f"(holdout ΔMRR {prov.get('delta_mrr', '?')}, n={prov.get('n_holdout', '?')})."
+                        )
+                    else:
+                        print(fmt_error(
+                            f"Ranking weights file at {wpath} is NOT proven — it is being "
+                            "ignored at load, but someone put it there; inspect or remove it."
+                        ))
+                        issues_found += 1
+                except ValueError:
+                    print(fmt_error(f"Ranking weights file at {wpath} is unreadable JSON (ignored at load)."))
+                    issues_found += 1
+            else:
+                print("✓ Ranking weights: code defaults (no fitted set installed).")
+        except Exception:
+            pass
 
         # 1. Orphaned Tags
         orphans = conn.execute(

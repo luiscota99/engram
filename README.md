@@ -20,13 +20,15 @@ AI assistants are brilliant but stateless. They forget every lesson learned as s
 - **Skills** — "There's already a proven workflow for this. Follow steps 1-5 instead of figuring it out again."
 - **Codebase Knowledge** — "I've mapped this project. Here are the key file summaries without re-reading everything."
 
-**Recent capabilities:**
+**Recent capabilities (July 2026 — see [CHANGELOG](CHANGELOG.md) for the full story):**
 
-- **Pinned memories** — pin critical entries so they always surface at the top of search (`memory_pin`, `memory_list_pinned`).
-- **Write-time dedup** — `memory_add` blocks near-duplicate inserts unless you pass `force=true`.
-- **Auto-extract** — draft memories from chat or task/outcome pairs (`memory_auto_extract`; LLM + regex fallback).
-- **LLM maintenance** — consolidation audit and assisted GC (`engram llm audit`, `engram llm gc`); check status with `memory_llm_status` or `engram llm status`.
-- **Temporal facts** — supersede stale entries and track time-bounded facts (schema v11; `memory_invalidate`).
+- **Crash-proof session resume** — a Stop hook checkpoints every agent turn; `engram resume` (MCP: `memory_resume`) answers "where did the last session leave off?" even after a crash or spend-limit cutoff (schema v21).
+- **Retrieval feedback** — `engram feedback <type:id> --helped|--unhelpful` (MCP: `memory_feedback`) rewards or demotes memories **in ranking only**; deletion is always proposed to the user via the inbox, never automatic (v22). Non-use is never penalized.
+- **Per-memory forgetting curves** — FSRS-4.5 stability per item, grown by proven use and helped feedback, shrunk by lapses; unproven items keep the classic fixed half-life (v25).
+- **Self-growing real benchmark** — `engram bench-label` mines real queries from the search-audit log; you confirm labels; the real-corpus eval grows with actual usage.
+- **Measured ranking weights** — `benchmarks/fit_ranking.py` fits the ranking constants against labeled evals behind an instrument gate, pre-registered holdout rules, and fit-blindness warnings; `engram weights apply` adopts only provenance-stamped, proven candidates.
+- **Single-owner search index + multi-process hardening** — the dual FTS write path (a live corruption generator) was removed (v23); WAL-correct backups, serialized migrations, race-safe inbox, fail-closed confirmation gates (v24).
+- **Pinned memories, write-time dedup, auto-extract, LLM maintenance, temporal facts** — the earlier foundation (v10–v11).
 
 Architecture decisions are documented in [`docs/decisions/`](docs/decisions/).
 
@@ -302,15 +304,18 @@ engram run "Optimizing image pipeline" --role Analyst --session-id "IMG-01"
 
 ### Measuring fit and whether Engram helped
 
-**Enforcing use (recall is otherwise advisory):** `engram bootstrap` installs two
+**Enforcing use (recall is otherwise advisory):** `engram bootstrap` installs three
 Claude Code hooks so using memory isn't left to the agent's discretion:
 
 - **Auto-recall** (`UserPromptSubmit` → `engram hook recall`) searches memory for
   each prompt and injects the top matches as context automatically — recall
-  happens whether or not the agent remembers to search.
+  happens whether or not the agent remembers to search. A relevance gate injects
+  nothing rather than noise.
 - **Guard** (`PreToolUse` → `engram hook guard`) surfaces known *mistakes/patterns*
   relevant to an Edit/Write/Bash before it runs. Warn-only by default; it requires
   real lexical overlap, so unrelated actions don't trigger false warnings.
+- **Checkpoint** (`Stop` → `engram hook checkpoint`) records a crash-proof
+  "where we left off" after every agent turn; `engram resume` reads it back.
 
 Injected memories are labeled as reference data, not instructions. For the repo
 boundary, add `engram guard --staged` as a `pre-commit` hook (it reads your local

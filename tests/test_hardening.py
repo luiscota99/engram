@@ -275,3 +275,46 @@ def test_retrieval_benchmark_refuses_default_db(tmp_path):
     )
     assert proc.returncode == 2
     assert "ENGRAM_DB_PATH" in proc.stdout
+
+
+# ── self-improvement loop: self-check proposes labeling and re-fits ──
+
+def test_self_check_proposes_labeling_when_unlabeled_accumulate(db, tmp_path, monkeypatch):
+    import json as _json
+
+    from src.maintenance import SELF_CHECK_UNLABELED_MIN, run_self_check
+
+    audit = tmp_path / "audit.jsonl"
+    lines = [
+        _json.dumps({"source": "cli", "query": f"real unlabeled question number {i} here"})
+        for i in range(SELF_CHECK_UNLABELED_MIN + 2)
+    ]
+    audit.write_text("\n".join(lines), encoding="utf-8")
+    monkeypatch.setenv("ENGRAM_AUDIT_LOG", str(audit))
+
+    run_self_check(db_path=db)
+    with get_connection(db) as c:
+        row = c.execute(
+            "SELECT title FROM inbox WHERE finding_key = 'bench:unlabeled-queries'"
+        ).fetchone()
+    assert row is not None
+    assert "ready to label" in row["title"]
+
+
+def test_self_check_no_labeling_proposal_below_threshold(db, tmp_path, monkeypatch):
+    import json as _json
+
+    from src.maintenance import run_self_check
+
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(
+        _json.dumps({"source": "cli", "query": "just one lonely real question"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ENGRAM_AUDIT_LOG", str(audit))
+    run_self_check(db_path=db)
+    with get_connection(db) as c:
+        n = c.execute(
+            "SELECT COUNT(*) FROM inbox WHERE finding_key = 'bench:unlabeled-queries'"
+        ).fetchone()[0]
+    assert n == 0

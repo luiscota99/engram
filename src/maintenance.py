@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from .database import (
@@ -1334,6 +1335,79 @@ def scheduler_status() -> dict:
     }
 
 
+# Self-improvement thresholds: enough unlabeled real queries to make a
+# labeling session worthwhile, and enough real labels to make fitting the
+# ranking weights on them statistically non-embarrassing.
+SELF_CHECK_UNLABELED_MIN = 10
+SELF_CHECK_LABELS_FOR_FIT = 30
+
+
+def _repo_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _self_improvement_checks(_file) -> None:
+    """File eval-readiness proposals (bench-label / re-fit). Never raises."""
+    import hashlib
+
+    from . import config
+    from .label_mining import load_label_set, mine_candidates
+
+    audit_path = config.audit_log_path()
+    labels_path = os.path.join(_repo_root(), "evals", "real_queries.json")
+    labels = load_label_set(labels_path)
+
+    # a) Real queries waiting for labels → propose a labeling session.
+    if audit_path and os.path.exists(audit_path):
+        unlabeled = mine_candidates(audit_path, labels, limit=SELF_CHECK_UNLABELED_MIN)
+        if len(unlabeled) >= SELF_CHECK_UNLABELED_MIN:
+            _file(
+                kind="decision",
+                severity="info",
+                title=(
+                    f"{len(unlabeled)}+ real queries are ready to label — grow the "
+                    f"real-corpus benchmark?"
+                ),
+                body=(
+                    "Run: engram bench-label  (interactive, ~1 min per label). "
+                    f"Current real label set: {len(labels)} queries; the ranking-weight "
+                    "fit gets trustworthy on real data as this grows."
+                ),
+                finding_key="bench:unlabeled-queries",
+            )
+
+    # b) Label set big enough and no proven fit covers it → propose a re-fit.
+    if len(labels) >= SELF_CHECK_LABELS_FOR_FIT and os.path.exists(labels_path):
+        with open(labels_path, "rb") as f:
+            labels_hash = hashlib.sha256(f.read()).hexdigest()
+        cand_path = os.path.join(_repo_root(), "benchmarks", "fit", "candidate_weights.json")
+        covered = False
+        try:
+            with open(cand_path, encoding="utf-8") as f:
+                cand = json.load(f)
+            covered = bool(cand.get("proven")) and (
+                cand.get("provenance", {}).get("phase0", {}).get("dataset_hash") == labels_hash
+            )
+        except (OSError, ValueError):
+            covered = False
+        if not covered:
+            _file(
+                kind="decision",
+                severity="info",
+                title=(
+                    f"Real label set reached {len(labels)} queries with no proven fit "
+                    f"covering it — re-fit the ranking weights?"
+                ),
+                body=(
+                    "Run (scratch DB, real labels): "
+                    "ENGRAM_DB_PATH=/tmp/fit.db python benchmarks/fit_ranking.py validate "
+                    "--queries evals/real_queries.json && ... fit && ... analyze. "
+                    "Adopt only if the holdout verdict is PUBLISHABLE: engram weights apply."
+                ),
+                finding_key=f"fit:stale:{labels_hash[:12]}",
+            )
+
+
 # Retention windows. Deliberately generous — retention exists so operational
 # logs can't grow unboundedly, not to shed knowledge. Memories, feedback
 # (training data), and session transcripts are never pruned here.
@@ -1619,6 +1693,15 @@ def run_self_check(db_path=None) -> dict:
             )
     except Exception:
         logger.debug("scheduler self-check failed", exc_info=True)
+
+    # 6b. Self-improvement loop: the system watches its own eval readiness.
+    # When enough real queries sit unlabeled, propose a labeling session;
+    # when the real label set is big enough and no proven fit covers it,
+    # propose a re-fit. Proposals only — the user labels, the user adopts.
+    try:
+        _self_improvement_checks(_file)
+    except Exception:
+        logger.debug("self-improvement checks failed", exc_info=True)
 
     # 7. Retention: prune unbounded operational tables and rotate the audit
     # log. Never memories/feedback/transcripts — logs, not knowledge.
