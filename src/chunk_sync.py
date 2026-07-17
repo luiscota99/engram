@@ -228,8 +228,13 @@ def import_chunks(conn, sync_dir: str | Path | None = None) -> dict:
         fields = rec.get("f") or {}
         try:
             spec.create(conn, fields, list(rec.get("tags") or []))
-        except (KeyError, TypeError):
-            skipped += 1  # malformed foreign record — skip, never abort the batch
+        except Exception:
+            # Malformed foreign record, or a UNIQUE collision (e.g. two
+            # machines coined different patterns under one name — observed
+            # in review: patterns.name/skills.name/prompts.name are UNIQUE
+            # and an uncaught IntegrityError aborted the whole batch).
+            # Skip and count; one bad record never blocks the rest.
+            skipped += 1
             continue
         local_keys.add(key)
         imported[rec["t"]] = imported.get(rec["t"], 0) + 1

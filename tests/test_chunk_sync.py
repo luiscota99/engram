@@ -1,7 +1,6 @@
 """Chunk sync: export → import round-trip across two databases, idempotently."""
 import gzip
 import json
-import os
 
 import pytest
 
@@ -17,14 +16,16 @@ from src.memory_ops import (
 
 
 @pytest.fixture
-def two_dbs(tmp_path):
+def two_dbs(tmp_path, monkeypatch):
     """Two independent DBs (machine A and machine B) plus a shared sync dir."""
     paths = {}
     for name in ("a", "b"):
         p = str(tmp_path / f"{name}.db")
         init_db(p)
         paths[name] = p
-    os.environ["ENGRAM_DB_PATH"] = paths["a"]
+    # monkeypatch, not raw os.environ: unrestored env leaks poison later
+    # test files (observed live with the injection-ledger test).
+    monkeypatch.setenv("ENGRAM_DB_PATH", paths["a"])
     yield {"a": paths["a"], "b": paths["b"], "sync": tmp_path / "shared"}
 
 
@@ -122,3 +123,22 @@ def test_corrupt_lines_never_block_import(two_dbs):
         assert result["imported"] == 1          # the good record
         assert result["skipped"] >= 1           # the malformed one
         assert conn.execute("SELECT count(*) FROM patterns").fetchone()[0] == 1
+
+
+def test_unique_name_collision_skips_not_aborts(two_dbs):
+    """Two machines coin different patterns under the same UNIQUE name: the
+    colliding record is skipped, the rest of the batch imports (review find:
+    an uncaught IntegrityError previously aborted the whole import)."""
+    sync_dir = two_dbs["sync"]
+    with get_connection(two_dbs["a"]) as conn_a:
+        create_pattern(conn_a, name="API Mismatch", symptoms="s-A", root_cause="r-A", standard_fix="f-A")
+        create_mistake(conn_a, date="2026-07-17", context="c", mistake="survives", fix="f")
+        conn_a.commit()
+        export_chunks(conn_a, sync_dir)
+    with get_connection(two_dbs["b"]) as conn_b:
+        create_pattern(conn_b, name="API Mismatch", symptoms="s-B", root_cause="r-B", standard_fix="f-B")
+        conn_b.commit()
+        result = import_chunks(conn_b, sync_dir)
+        assert result["skipped"] >= 1                      # the name collision
+        assert result["by_type"].get("mistake") == 1       # the rest imported
+        assert conn_b.execute("SELECT count(*) FROM patterns").fetchone()[0] == 1
