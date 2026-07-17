@@ -84,6 +84,7 @@ from .commands.tools import (
     cmd_retrieval_benchmark,
     cmd_run,
     cmd_simulate,
+    cmd_weights,
 )
 from .commands.validate import cmd_validate
 
@@ -658,6 +659,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_hook_guard.set_defaults(func=cmd_hook_guard)
     p_hook_checkpoint = hook_sub.add_parser("checkpoint", help="Record a crash-proof session checkpoint (Stop)")
     p_hook_checkpoint.set_defaults(func=cmd_hook_checkpoint)
+
+    p_weights = sub.add_parser("weights", help="Show/apply/clear fitted ranking weights (fit with benchmarks/fit_ranking.py)")
+    weights_sub = p_weights.add_subparsers(dest="weights_action")
+    weights_sub.add_parser("show", help="Effective ranking weights")
+    p_w_apply = weights_sub.add_parser("apply", help="Install a PROVEN candidate weights file")
+    p_w_apply.add_argument("file", help="Path to candidate_weights.json from the fit harness")
+    weights_sub.add_parser("clear", help="Remove persisted weights (back to code defaults)")
+    p_weights.set_defaults(func=cmd_weights)
 
     p_bench_label = sub.add_parser("bench-label", help="Label recent real queries from the audit log into the real-corpus benchmark")
     p_bench_label.add_argument("-n", "--count", type=int, default=5, help="How many unlabeled queries to offer (default 5)")

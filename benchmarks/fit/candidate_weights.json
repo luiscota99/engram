@@ -1,0 +1,58 @@
+{
+  "proven": true,
+  "provenance": {
+    "delta_mrr": 0.0215,
+    "delta_r5": 0.0,
+    "delta_r5_bootstrap_lb": 0.0,
+    "held_no_signal": [
+      "recency_half_life_days",
+      "usage_boost_weight",
+      "stale_embedding_penalty",
+      "affinity_created",
+      "affinity_used",
+      "affinity_relevant",
+      "intent_mult_pattern",
+      "feedback_helped_weight",
+      "feedback_unhelpful_weight"
+    ],
+    "mode": "real",
+    "n_holdout": 31,
+    "n_train": 69,
+    "phase0": {
+      "baseline_mrr": 0.917,
+      "baseline_r5": 1.0,
+      "dataset_hash": "3a39f26f6db61d69430ba7a5cad767a75f570af45bd75c5e8fe6fc6dfabcd51a",
+      "db_hash": "7c82fdecca3905a83401a77debdd40a0faec98ed421e0684ec61f8c035c212a3",
+      "embedding": {
+        "embed_model": "default",
+        "embed_url": "default"
+      },
+      "gate_passed": true,
+      "n_queries": 100,
+      "seed": 20260717
+    },
+    "seed": 20260717
+  },
+  "weights": {
+    "affinity_created": 40.0,
+    "affinity_relevant": 10.0,
+    "affinity_used": 25.0,
+    "base_score_lexical": 99.596295,
+    "bm25_weight": 0.902341,
+    "feedback_helped_weight": 12.0,
+    "feedback_unhelpful_weight": 18.0,
+    "intent_mult_conversation": 1.598492,
+    "intent_mult_mistake": 1.348106,
+    "intent_mult_pattern": 1.3,
+    "intent_mult_prompt": 1.565143,
+    "intent_mult_skill": 1.307598,
+    "recency_floor": 0.67685,
+    "recency_half_life_days": 90.0,
+    "recency_span": 0.498572,
+    "rrf_weight": 127.873793,
+    "stale_embedding_penalty": 10.0,
+    "tag_match_boost": 39.170127,
+    "type_match_boost": 8.711707,
+    "usage_boost_weight": 10.0
+  }
+}

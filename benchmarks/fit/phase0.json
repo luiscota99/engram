@@ -1,0 +1,13 @@
+{
+  "baseline_mrr": 0.917,
+  "baseline_r5": 1.0,
+  "dataset_hash": "3a39f26f6db61d69430ba7a5cad767a75f570af45bd75c5e8fe6fc6dfabcd51a",
+  "db_hash": "7c82fdecca3905a83401a77debdd40a0faec98ed421e0684ec61f8c035c212a3",
+  "embedding": {
+    "embed_model": "default",
+    "embed_url": "default"
+  },
+  "gate_passed": true,
+  "n_queries": 100,
+  "seed": 20260717
+}

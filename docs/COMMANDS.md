@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 66 commands.
+All commands are invoked as `engram <command>`. 67 commands.
 
 ### `engram add`
 
@@ -502,3 +502,13 @@ Prove a memory changes behavior (baseline-fails/treatment-passes)
 
 - **`engram validate add`**
 - **`engram validate run`**
+
+### `engram weights`
+
+Show/apply/clear fitted ranking weights (fit with benchmarks/fit_ranking.py)
+
+  - `<weights_action>` — one of `show, apply, clear`
+
+- **`engram weights apply`**
+- **`engram weights clear`**
+- **`engram weights show`**

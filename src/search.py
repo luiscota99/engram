@@ -150,6 +150,7 @@ def search(
     skip_audit=False,
     audit_source="search",
     include_superseded=False,
+    rank_inputs_sink: dict | None = None,
 ):
     """Hybrid Search: FTS5 lexical + KNN semantic, ranked by multi-factor utility score.
 
@@ -315,6 +316,36 @@ def search(
         # 7. (fetched here to reuse the connection; prepended after ranking below)
         pinned = get_pinned_items(item_type=item_type, limit=limit, conn=conn)
 
+    # 5a. Rank-input capture for the offline weight fitter: everything
+    # rank_results consumes, snapshotted BEFORE ranking mutates the dicts, so
+    # the fitter can re-rank the same candidates under candidate weights
+    # without re-running retrieval (and a parity gate can verify replay ==
+    # live under current weights — see benchmarks/fit_ranking.py).
+    temporal_intent = detect_temporal_intent(query or "")
+    if rank_inputs_sink is not None:
+        import copy
+
+        rank_inputs_sink.update(
+            {
+                "query": query or "",
+                "temporal_intent": temporal_intent,
+                "candidates": copy.deepcopy(results),
+                "usage_counts": dict(usage_counts),
+                "last_used_map": dict(last_used_map),
+                "affinities": dict(affinities),
+                "stale_rowids": set(stale_rowids),
+                "detected_tags": list(detected_tags or []),
+                "rrf_scores": dict(rrf_scores) if rrf_scores else None,
+                "item_dates": dict(item_dates),
+                "feedback_map": dict(feedback_map),
+                "stability_by_key": dict(stability_by_key),
+                "pinned": copy.deepcopy(pinned),
+                "filter_tags": list(filter_tags) if filter_tags else [],
+                "include_superseded": include_superseded,
+                "limit": limit,
+            }
+        )
+
     # 5. Rank using multi-factor scoring (+ RRF hybrid boost)
     results = rank_results(
         results=results,
@@ -328,7 +359,7 @@ def search(
         detected_tags=detected_tags,
         rrf_scores=rrf_scores if rrf_scores else None,
         item_dates=item_dates,
-        temporal_intent=detect_temporal_intent(query or ""),
+        temporal_intent=temporal_intent,
     )
 
     # 6. BM25 reranking — adjusts utility scores using keyword overlap signal

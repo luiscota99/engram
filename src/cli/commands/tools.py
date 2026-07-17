@@ -144,6 +144,55 @@ def cmd_resume(args):
     print(report)
 
 
+def cmd_weights(args):
+    """Manage fitted ranking weights: engram weights show|apply|clear.
+
+    apply installs a PROVEN candidate (from benchmarks/fit_ranking.py) into
+    the store dir, where ranking loads it at import. Unproven files refuse —
+    provenance is the harness's signature, not a formality.
+    """
+    import json
+    import shutil
+
+    from ...ranking_weights import current_weights, persisted_weights_path
+
+    action = getattr(args, "weights_action", None) or "show"
+    path = persisted_weights_path()
+    if action == "show":
+        print(fmt_header("Ranking weights (effective):"))
+        for name, val in sorted(current_weights().items()):
+            print(f"  {name} = {val:g}")
+        print(f"\n  Persisted file: {path} {'(present)' if os.path.exists(path) else '(none — code defaults)'}")
+        return
+    if action == "clear":
+        if os.path.exists(path):
+            os.remove(path)
+            print(f"✓ Removed {path} — code defaults apply from the next process.")
+        else:
+            print("No persisted weights to clear.")
+        return
+    # apply
+    src_file = str(getattr(args, "file", "") or "")
+    try:
+        with open(src_file, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, TypeError) as e:
+        print(f"Error: cannot read weights file: {e}")
+        sys.exit(1)
+    if not isinstance(data, dict) or not isinstance(data.get("weights"), dict):
+        print("Error: not a weights file (expected {weights: {...}, proven: bool}).")
+        sys.exit(1)
+    if not data.get("proven"):
+        print(
+            "Refused: this candidate is not marked proven — it did not pass the "
+            "fit harness's holdout decision rule (or was edited by hand)."
+        )
+        sys.exit(1)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    shutil.copyfile(src_file, path)
+    print(f"✓ Installed fitted weights → {path} (applies from the next process; engram weights show to inspect).")
+
+
 def cmd_bench_label(args):
     """Grow the real-corpus benchmark from real usage: engram bench-label.
 

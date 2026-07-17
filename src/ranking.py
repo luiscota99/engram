@@ -243,15 +243,16 @@ def _recency_factor(last_used_at: str | None, stability: float | None = None) ->
         return 0.5
 
 
+# Coefficient of the log usage boost (fittable; see src/ranking_weights.py).
+USAGE_BOOST_WEIGHT = 10.0
+
+
 def _usage_boost(usage_count: int) -> float:
     """Logarithmic usage boost to prevent high-use items from drowning others.
 
-    usage_count=0  →  0.0
-    usage_count=1  →  10.0
-    usage_count=10 →  23.0
-    usage_count=100 → 46.1
+    At the default weight 10: usage=1 → 10.0, usage=10 → 23.0, usage=100 → 46.1.
     """
-    return 10.0 * math.log1p(max(0, usage_count))
+    return USAGE_BOOST_WEIGHT * math.log1p(max(0, usage_count))
 
 
 def _tag_boost(result_tags_str: str | None, detected_tags: list[str]) -> float:
@@ -493,3 +494,13 @@ def _apply_temporal_boost(results: list[dict], item_dates: dict, intent: dict) -
                 r["utility_score"] *= TEMPORAL_DATE_MATCH_BOOST
                 r["temporal_boost"] = "date_match"
                 break
+
+
+# Fitted-weight adoption (provenance-gated; see src/ranking_weights.py).
+# Import-time so every surface — CLI, MCP, hooks — ranks identically.
+try:
+    from .ranking_weights import load_and_apply_persisted as _load_fitted_weights
+
+    _load_fitted_weights()
+except Exception:  # a broken weights file must never break ranking
+    pass
