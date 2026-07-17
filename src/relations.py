@@ -23,6 +23,8 @@ RELATION_TYPES = {
     "contradicts": "`from` conflicts with `to` (resolve which is right)",
     "depends_on": "`from` requires `to` to hold",
     "related": "`from` and `to` are relevant to each other (generic)",
+    "not_related": "`from` and `to` were judged NOT related — a recorded distinction "
+                   "so a spurious link isn't re-suggested",
 }
 
 _ITEM_TABLES = {
@@ -124,6 +126,72 @@ def get_relations(item_type: str, item_id: int, db_path=None) -> list[dict]:
                 "other_title": _title_for(conn, row["from_type"], row["from_id"]),
                 "source": row["source"],
             })
+    return out
+
+
+def remove_relation(
+    from_type: str, from_id: int, to_type: str, to_id: int, relation: str, db_path=None
+) -> bool:
+    """Delete one edge. Returns True if a row was removed."""
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM memory_relations WHERE from_type=? AND from_id=? "
+            "AND to_type=? AND to_id=? AND relation=?",
+            (from_type, from_id, to_type, to_id, relation),
+        )
+        return cur.rowcount > 0
+
+
+def _has_relation(conn, a: tuple, b: tuple, relation: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM memory_relations WHERE from_type=? AND from_id=? "
+        "AND to_type=? AND to_id=? AND relation=? LIMIT 1",
+        (a[0], a[1], b[0], b[1], relation),
+    ).fetchone() is not None
+
+
+def find_relationship_questions(db_path=None, limit: int = 10) -> list[dict]:
+    """Edges worth a human decision: links between items in DISJOINT domains
+    (no shared tags) — "why is this related to that?". These are the spurious /
+    incidental / one-directional links the user should confirm or reject.
+
+    A recorded ``not_related`` on the pair (either direction) resolves it, so it
+    is never asked again. Each result carries the two endpoints + the resolve
+    commands the inbox will present.
+    """
+    from .database import get_tags_for_item
+
+    out: list[dict] = []
+    seen: set = set()
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT from_type, from_id, to_type, to_id, relation FROM memory_relations "
+            "WHERE relation != 'not_related' ORDER BY created_at DESC"
+        ).fetchall()
+        for r in rows:
+            a = (r["from_type"], r["from_id"])
+            b = (r["to_type"], r["to_id"])
+            key = tuple(sorted([a, b]))
+            if key in seen:
+                continue
+            if _has_relation(conn, a, b, "not_related") or _has_relation(conn, b, a, "not_related"):
+                continue
+            ta = set(get_tags_for_item(conn, a[0], a[1]))
+            tb = set(get_tags_for_item(conn, b[0], b[1]))
+            # Both tagged, but no shared tag → cross-domain link → question.
+            if not (ta and tb) or (ta & tb):
+                continue
+            seen.add(key)
+            out.append({
+                "from_type": a[0], "from_id": a[1],
+                "to_type": b[0], "to_id": b[1],
+                "relation": r["relation"],
+                "from_title": _title_for(conn, a[0], a[1]),
+                "to_title": _title_for(conn, b[0], b[1]),
+                "from_tags": sorted(ta), "to_tags": sorted(tb),
+            })
+            if len(out) >= limit:
+                break
     return out
 
 

@@ -1480,6 +1480,37 @@ def run_self_check(db_path=None) -> dict:
                 finding_key=f"reuse-low:{itype}",
             )
 
+    # 5b. Cross-domain relationship questions — links between items whose tag
+    # domains don't overlap ("why is the MTG memory linked to that?"). The user
+    # decides: confirm (keep the edge) or reject (record `not_related`, a durable
+    # negative edge so the question is never re-asked and the pair is never
+    # re-suggested as related).
+    try:
+        from .relations import find_relationship_questions
+
+        for q in find_relationship_questions(db_path=db_path, limit=5):
+            a = f"{q['from_type']}:{q['from_id']}"
+            b = f"{q['to_type']}:{q['to_id']}"
+            _file(
+                kind="decision",
+                severity="info",
+                title=(
+                    f"Are these really related? [{q['from_type']} #{q['from_id']}] "
+                    f"'{(q['from_title'] or '')[:50]}' —{q['relation']}→ "
+                    f"[{q['to_type']} #{q['to_id']}] '{(q['to_title'] or '')[:50]}'"
+                ),
+                body=(
+                    f"Their tag domains don't overlap ({', '.join(q['from_tags'][:4])} vs "
+                    f"{', '.join(q['to_tags'][:4])}).\n"
+                    f"YES, keep it:  (no action — the edge stays)\n"
+                    f"NO, not related:  engram unlink {a} {b} {q['relation']} && "
+                    f"engram link {a} {b} not_related"
+                ),
+                finding_key=f"rel-question:{a}:{b}:{q['relation']}",
+            )
+    except Exception:
+        logger.debug("relationship-question scan failed", exc_info=True)
+
     # 6. The monitor watching itself: a scheduled self-check that never runs is
     # a blind monitor (this very check found the cron was crashing for months).
     try:

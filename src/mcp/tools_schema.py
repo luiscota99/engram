@@ -704,7 +704,7 @@ TOOLS = [
                 "from_id": {"type": "integer"},
                 "to_type": {"type": "string", "description": "mistake|pattern|skill|conversation|prompt|session"},
                 "to_id": {"type": "integer"},
-                "relation": {"type": "string", "enum": ["supersedes", "refines", "causes", "contradicts", "depends_on", "related"]}
+                "relation": {"type": "string", "enum": ["supersedes", "refines", "causes", "contradicts", "depends_on", "related", "not_related"]}
             },
             "required": ["from_type", "from_id", "to_type", "to_id", "relation"]
         }

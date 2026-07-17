@@ -56,6 +56,7 @@ from .commands.memory import (
     cmd_suggest,
     cmd_suggest_capture,
     cmd_suggest_consolidate,
+    cmd_unlink,
 )
 from .commands.reflex import cmd_promote, cmd_reflex, cmd_route
 from .commands.session import (
@@ -221,6 +222,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_rel.add_argument("target", help="Target item as type:id (e.g. pattern:4)")
     p_rel.add_argument("relation", help="supersedes | refines | causes | contradicts | depends_on | related")
     p_rel.set_defaults(func=cmd_link)
+
+    p_unlink = sub.add_parser("unlink", help="Remove a typed relation between two memories")
+    p_unlink.add_argument("source", help="Source item as type:id")
+    p_unlink.add_argument("target", help="Target item as type:id")
+    p_unlink.add_argument("relation", help="The relation to remove")
+    p_unlink.set_defaults(func=cmd_unlink)
 
     p_rels = sub.add_parser("relations", help="Show typed relationships touching an item (e.g. skill:3)")
     p_rels.add_argument("item", help="Item as type:id")

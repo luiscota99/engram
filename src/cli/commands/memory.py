@@ -451,6 +451,22 @@ def cmd_link(args):
     print(f"✓ Linked {src[0]} #{src[1]} —{args.relation}→ {dst[0]} #{dst[1]}")
 
 
+def cmd_unlink(args):
+    """Remove a typed relationship: engram unlink mistake:12 pattern:4 causes."""
+    from ...relations import remove_relation
+
+    src = _parse_item_ref(args.source)
+    dst = _parse_item_ref(args.target)
+    if not src or not dst:
+        print("Usage: engram unlink <type:id> <type:id> <relation>")
+        sys.exit(1)
+    removed = remove_relation(src[0], src[1], dst[0], dst[1], args.relation)
+    if removed:
+        print(f"✓ Removed {src[0]} #{src[1]} —{args.relation}→ {dst[0]} #{dst[1]}")
+    else:
+        print("No such relation to remove.")
+
+
 def cmd_relations(args):
     """Show all typed relationships touching an item: engram relations skill:3."""
     from ...relations import format_relations, get_relations

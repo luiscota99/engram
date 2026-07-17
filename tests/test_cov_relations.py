@@ -138,3 +138,87 @@ def test_mcp_link_rejects_unknown_relation(db):
         {"from_type": "mistake", "from_id": 1, "to_type": "pattern", "to_id": 1, "relation": "enables"}
     )
     assert msg.startswith("Error:")
+
+
+# ── not_related + unlink + relationship questions (user decides) ─────
+
+def _tag(db, item_type, item_id, tags):
+    from src.database import link_tags
+
+    with get_connection(db) as conn:
+        link_tags(conn, item_type, item_id, tags)
+
+
+def test_unlink_removes_edge(db):
+    relations.add_relation("mistake", 1, "pattern", 1, "related", db_path=db)
+    assert relations.remove_relation("mistake", 1, "pattern", 1, "related", db_path=db) is True
+    assert relations.get_relations("mistake", 1, db_path=db) == []
+    # removing again reports nothing removed
+    assert relations.remove_relation("mistake", 1, "pattern", 1, "related", db_path=db) is False
+
+
+def test_cross_domain_link_becomes_question(db):
+    _tag(db, "mistake", 1, ["mtg", "commander"])
+    _tag(db, "pattern", 1, ["database", "performance"])
+    relations.add_relation("mistake", 1, "pattern", 1, "related", db_path=db)
+    qs = relations.find_relationship_questions(db_path=db)
+    assert len(qs) == 1
+    assert qs[0]["from_id"] == 1 and qs[0]["to_type"] == "pattern"
+    assert "mtg" in qs[0]["from_tags"] and "database" in qs[0]["to_tags"]
+
+
+def test_shared_tag_link_is_not_questioned(db):
+    _tag(db, "mistake", 1, ["database", "sqlite"])
+    _tag(db, "pattern", 1, ["database", "performance"])
+    relations.add_relation("mistake", 1, "pattern", 1, "related", db_path=db)
+    assert relations.find_relationship_questions(db_path=db) == []
+
+
+def test_untagged_items_are_not_questioned(db):
+    # no tags on either side → no domain signal → don't nag the user
+    relations.add_relation("mistake", 1, "pattern", 1, "related", db_path=db)
+    assert relations.find_relationship_questions(db_path=db) == []
+
+
+def test_not_related_answer_suppresses_question_forever(db):
+    _tag(db, "mistake", 1, ["mtg"])
+    _tag(db, "pattern", 1, ["database"])
+    relations.add_relation("mistake", 1, "pattern", 1, "related", db_path=db)
+    assert len(relations.find_relationship_questions(db_path=db)) == 1
+    # user answers NO: remove the edge, record the durable negative
+    relations.remove_relation("mistake", 1, "pattern", 1, "related", db_path=db)
+    relations.add_relation("mistake", 1, "pattern", 1, "not_related", db_path=db)
+    assert relations.find_relationship_questions(db_path=db) == []
+
+
+def test_not_related_suppresses_in_either_direction(db):
+    _tag(db, "mistake", 1, ["mtg"])
+    _tag(db, "pattern", 1, ["database"])
+    relations.add_relation("mistake", 1, "pattern", 1, "related", db_path=db)
+    # negative recorded in the REVERSE direction still resolves the pair
+    relations.add_relation("pattern", 1, "mistake", 1, "not_related", db_path=db)
+    assert relations.find_relationship_questions(db_path=db) == []
+
+
+def test_self_check_files_relationship_question_to_inbox(db):
+    from src.maintenance import run_self_check
+
+    _tag(db, "mistake", 1, ["mtg"])
+    _tag(db, "pattern", 1, ["database"])
+    relations.add_relation("mistake", 1, "pattern", 1, "related", db_path=db)
+    filed = run_self_check(db_path=db)["filed"]
+    assert "rel-question:mistake:1:pattern:1:related" in filed
+    # idempotent: an open question is not re-filed
+    filed2 = run_self_check(db_path=db)["filed"]
+    assert "rel-question:mistake:1:pattern:1:related" not in filed2
+
+
+def test_cli_unlink(db, capsys):
+    from src.cli.commands.memory import cmd_link, cmd_unlink
+
+    cmd_link(SimpleNamespace(source="mistake:1", target="pattern:1", relation="related"))
+    capsys.readouterr()
+    cmd_unlink(SimpleNamespace(source="mistake:1", target="pattern:1", relation="related"))
+    assert "Removed" in capsys.readouterr().out
+    cmd_unlink(SimpleNamespace(source="mistake:1", target="pattern:1", relation="related"))
+    assert "No such relation" in capsys.readouterr().out

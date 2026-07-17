@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 62 commands.
+All commands are invoked as `engram <command>`. 63 commands.
 
 ### `engram add`
 
@@ -460,6 +460,14 @@ Bidirectional sync between Engram and Cursor skills
   - `--auto`
   - `--export-missing`
   - `--import-missing`
+
+### `engram unlink`
+
+Remove a typed relation between two memories
+
+  - `<source>` — Source item as type:id
+  - `<target>` — Target item as type:id
+  - `<relation>` — The relation to remove
 
 ### `engram validate`
 
