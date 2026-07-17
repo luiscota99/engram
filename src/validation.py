@@ -46,7 +46,7 @@ def add_skill_test(
             "VALUES (?, ?, ?, ?, ?)",
             (item_type, int(item_id), scenario, assertion, grader),
         )
-        return cur.lastrowid
+        return int(cur.lastrowid or 0)
 
 
 def _memory_content(item_type: str, item_id: int, db_path=None) -> str:
@@ -109,11 +109,22 @@ def run_skill_test(test_id: int, *, db_path=None) -> dict:
 
     baseline = call_chat_completion(
         [{"role": "user", "content": row["scenario"]}], task="audit"
-    ) or ""
+    )
     treatment = call_chat_completion(
         [{"role": "user", "content": f"{row['scenario']}\n\nRelevant knowledge:\n{content}"}],
         task="audit",
-    ) or ""
+    )
+    # A failed/timed-out generation is "we don't know", never "the memory
+    # doesn't work" — grading an empty string as a real answer converted
+    # LLM timeouts into INEFFECTIVE verdicts (observed live, llama3.2 on
+    # CPU exceeding the client timeout).
+    if baseline is None or treatment is None:
+        _record(test_id, "untested", None, None, db_path=db_path)
+        return {
+            "id": test_id,
+            "result": "untested",
+            "reason": "LLM generation failed or timed out (try ENGRAM_LLM_TIMEOUT=180)",
+        }
 
     b_ok = _grade(baseline, row["assertion"], row["grader"])
     t_ok = _grade(treatment, row["assertion"], row["grader"])

@@ -16,7 +16,9 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
-_LLM_TIMEOUT = 60
+# Generation timeout (seconds). CPU-only Ollama needs headroom: a cold
+# llama3.2 load plus a multi-sentence answer regularly exceeds 60s.
+_LLM_TIMEOUT = int(os.environ.get("ENGRAM_LLM_TIMEOUT", "60"))
 _DEFAULT_MODEL = "llama3.2"
 
 _TASK_MODEL_ENV: dict[str, str] = {

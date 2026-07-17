@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **First real inbox triage session, and the fixes it forced.** Consolidation proposals now respect `not_related` edges (a rejected merge stayed rejected in the link questions but was re-proposed forever by the consolidation finder — same durable-answer contract now applies to both, one batched lookup). Validation runs no longer convert LLM timeouts into INEFFECTIVE verdicts — a failed generation is "we don't know" (UNTESTED), never "the memory doesn't work" (observed live: llama3.2 on CPU exceeding the client timeout produced a false negative on the harness's first-ever test). `ENGRAM_LLM_TIMEOUT` env var for slow local models. Triage outcomes (data, not code): 18 import-twin duplicates merged (15 pairs + the bootstrapping triplet → skill count 56→38), 3 MTG skills relocated to a dedicated `mtg` brain, 7 distinct-but-similar pairs durably marked `not_related`, the auto-demotion mistake's placeholders filled with the real root cause, and the first `skill_tests` row exists (Skill #73, honestly UNTESTED until a faster LLM run).
+
 ### Added
 
 - **The self-check drives the improvement loop.** Two new daily proposals (decisions, deduped, user-approved as always): when ≥10 real queries sit unlabeled in the audit log, it proposes an `engram bench-label` session; when the real label set reaches 30 queries with no proven fit covering that exact dataset hash, it proposes re-running the weight-fit harness. The system now watches its own eval readiness — label → fit → propose → the user adopts. `engram doctor` also reports the ranking-weights status up front (code defaults / proven fitted set with holdout ΔMRR / an unproven file that someone left behind), so a silent ranking change is a diagnosed condition. README refreshed: July capabilities (v21–v25, bench-label, fit harness) and the three enforcement hooks.

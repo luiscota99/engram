@@ -229,6 +229,19 @@ def find_consolidation_candidates(
     all_clusters = []
 
     with get_connection(db_path) as conn:
+        # A user-recorded `not_related` edge is a durable answer: never
+        # re-propose consolidating that pair (same contract as the
+        # cross-domain link questions). Fetched once — no per-pair queries.
+        not_related_pairs = {
+            frozenset((
+                (r["from_type"], str(r["from_id"])),
+                (r["to_type"], str(r["to_id"])),
+            ))
+            for r in conn.execute(
+                "SELECT from_type, from_id, to_type, to_id FROM memory_relations "
+                "WHERE relation = 'not_related'"
+            ).fetchall()
+        }
         for itype in types:
             rows = conn.execute(
                 """SELECT f.rowid, f.item_id, f.title
@@ -267,6 +280,12 @@ def find_consolidation_candidates(
             for i in range(len(emb_rowids)):
                 for j in range(i + 1, len(emb_rowids)):
                     ri, rj = emb_rowids[i], emb_rowids[j]
+                    pair = frozenset((
+                        (itype, str(item_map[ri]["item_id"])),
+                        (itype, str(item_map[rj]["item_id"])),
+                    ))
+                    if pair in not_related_pairs:
+                        continue  # user already said: distinct, stop asking
                     sim = _cosine_similarity(embeddings[ri], embeddings[rj])
                     if sim >= threshold:
                         uf.union(ri, rj)
