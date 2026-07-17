@@ -54,6 +54,19 @@ def integrity_report(db_path=None) -> dict:
             "LEFT JOIN memory_fts mf ON mf.rowid = es.fts_rowid WHERE mf.rowid IS NULL"
         ).fetchone()[0]
 
+        # Single-owner FTS invariants (v23). Aggregate counts can mask
+        # offsetting drift, so also check the failure shapes directly:
+        # duplicate (item_type, id) groups and non-TEXT item_id rows — the
+        # signature of a second writer (this class of corruption shipped
+        # once, via the v6 triggers; it must never return silently).
+        fts_dup_groups = conn.execute(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM memory_fts "
+            "GROUP BY item_type, CAST(item_id AS TEXT) HAVING COUNT(*) > 1)"
+        ).fetchone()[0]
+        fts_type_drift = conn.execute(
+            "SELECT COUNT(*) FROM memory_fts WHERE typeof(item_id) != 'text'"
+        ).fetchone()[0]
+
     return {
         "orphaned_tags": orphaned_tags,
         "core_count": core_count,
@@ -63,6 +76,8 @@ def integrity_report(db_path=None) -> dict:
         "vec_drift": abs(fts_count - vec_count),
         "failed_embeddings": failed_embeddings,
         "orphaned_status": orphaned_status,
+        "fts_dup_groups": fts_dup_groups,
+        "fts_type_drift": fts_type_drift,
     }
 
 

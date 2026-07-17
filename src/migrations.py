@@ -439,6 +439,18 @@ MIGRATIONS = {
         );""",
         "CREATE INDEX IF NOT EXISTS idx_feedback_item ON retrieval_feedback(item_type, item_id);",
     ],
+    23: [
+        # Single-owner FTS writes: drop the v6 triggers. They and index_in_fts()
+        # both indexed items, with mismatched item_id types (trigger: INTEGER,
+        # code: TEXT) — every add produced a degraded duplicate row, and the
+        # update trigger DELETEd the good text row and reinserted a bare
+        # integer one, so routine usage bumps destroyed tags + vector links.
+        # Fresh DBs never had these triggers; index_in_fts (which alone
+        # maintains vec_memory + embedding_status) is the one owner. All
+        # insert paths were verified to call it (2026-07-17 audit).
+        lambda conn: _drop_fts_triggers(conn),
+        lambda conn: _repair_fts_type_drift(conn),
+    ],
     17: [
         lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
         """CREATE TABLE IF NOT EXISTS inbox (
@@ -504,6 +516,59 @@ def _rebuild_fts_with_porter(conn) -> None:
     _swap_fts_table(conn, ", tokenize='porter unicode61'", "memory_fts_v16")
 
 
+def _drop_fts_triggers(conn) -> None:
+    """v23: remove every fts_* trigger — index_in_fts() is the sole FTS owner."""
+    names = [
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'fts\\_%' ESCAPE '\\'"
+        ).fetchall()
+    ]
+    for name in names:
+        conn.execute(f'DROP TRIGGER IF EXISTS "{name}"')
+    if names:
+        logger.info(f"  ✓ Dropped {len(names)} legacy FTS triggers (single-owner writes).")
+
+
+def _repair_fts_type_drift(conn) -> None:
+    """v23: repair the damage the dual write path left behind.
+
+    1. Integer-typed rows WITH a text sibling are pure duplicates → delete.
+    2. Orphan integer-typed rows (the good row was already destroyed by the
+       update trigger) → re-key as TEXT in place so lookups and cleanup
+       DELETEs match again. Their vector is regenerated later (the row has no
+       vec_memory/embedding_status entry, which doctor/self-check report as
+       drift and `engram reembed`/`doctor --repair` fix) — a migration must
+       not call the embedding endpoint.
+    """
+    dups = conn.execute(
+        """SELECT f.rowid FROM memory_fts f
+           WHERE typeof(f.item_id) = 'integer'
+             AND EXISTS (SELECT 1 FROM memory_fts g
+                         WHERE g.item_type = f.item_type
+                           AND typeof(g.item_id) = 'text'
+                           AND g.item_id = CAST(f.item_id AS TEXT))"""
+    ).fetchall()
+    for (rowid,) in dups:
+        conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rowid,))
+
+    orphans = conn.execute(
+        "SELECT rowid, item_type, item_id, title, content, tags FROM memory_fts "
+        "WHERE typeof(item_id) = 'integer'"
+    ).fetchall()
+    for rowid, item_type, item_id, title, content, tags in orphans:
+        conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rowid,))
+        conn.execute(
+            "INSERT INTO memory_fts (item_type, item_id, title, content, tags) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (item_type, str(item_id), title or "", content or "", tags or ""),
+        )
+    if dups or orphans:
+        logger.info(
+            f"  ✓ FTS repair: removed {len(dups)} duplicate rows, "
+            f"re-keyed {len(orphans)} orphan integer rows."
+        )
+
+
 def _add_column_if_missing(conn, table: str, column: str, decl: str) -> None:
     cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
@@ -547,6 +612,11 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    23: [
+        # No-op by design: the dropped triggers were a corruption source; a
+        # downgrade must not resurrect them, and the dedup repair is strictly
+        # corrective. Older code works fine against trigger-less FTS.
+    ],
     22: [
         "DROP TABLE IF EXISTS retrieval_feedback;",
     ],
@@ -653,7 +723,7 @@ def downgrade_to(conn, current_version: int, target_version: int) -> bool:
                 else:
                     conn.execute(query)
             except Exception as e:
-                logger.info(f"  ⚠ Downgrade step skipped ({e}): {query[:80]}")
+                logger.info(f"  ⚠ Downgrade step skipped ({e}): {str(query)[:80]}")
         conn.execute(
             "UPDATE schema_meta SET value = ? WHERE key = 'version'",
             (str(version - 1),),

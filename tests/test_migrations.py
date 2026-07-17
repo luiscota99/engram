@@ -250,3 +250,116 @@ def test_v12_normalizes_stored_vectors(tmp_path):
         vec = list(struct.unpack(f"{len(raw)//4}f", raw)) if isinstance(raw, (bytes, bytearray)) else json.loads(raw)
         norm = math.sqrt(sum(x * x for x in vec))
         assert abs(norm - 1.0) < 1e-3
+
+
+# ── v23: single-owner FTS writes (triggers dropped, drift repaired) ──
+
+def test_v23_drops_all_fts_triggers(migration_db):
+    """v6 created FTS triggers; v23 must remove every one of them."""
+    conn = _open_conn(migration_db)
+    try:
+        run_migrations(conn, 1, SCHEMA_VERSION)
+        conn.commit()
+        triggers = [
+            r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'fts_%'"
+            ).fetchall()
+        ]
+        assert triggers == []
+    finally:
+        conn.close()
+
+
+def test_v23_repairs_duplicate_and_orphan_integer_rows(migration_db):
+    """Seed the exact corruption the dual write path produced, then migrate."""
+    conn = _open_conn(migration_db)
+    try:
+        run_migrations(conn, 1, 22)
+        conn.commit()
+        # dup pair: good text row + degraded integer twin (observed live 2026-07-17)
+        conn.execute(
+            "INSERT INTO memory_fts (item_type, item_id, title, content, tags) "
+            "VALUES ('mistake', '7', 'good row', 'full content', 'tag1 tag2')"
+        )
+        conn.execute(
+            "INSERT INTO memory_fts (item_type, item_id, title, content, tags) "
+            "VALUES ('mistake', 7, 'good row', 'degraded', '')"
+        )
+        # orphan: only the integer row survives (update trigger ate the text row)
+        conn.execute(
+            "INSERT INTO memory_fts (item_type, item_id, title, content, tags) "
+            "VALUES ('skill', 3, 'orphan skill', 'trigger content', '')"
+        )
+        conn.commit()
+
+        run_migrations(conn, 22, 23)
+        conn.commit()
+
+        rows = conn.execute(
+            "SELECT item_type, item_id, typeof(item_id) AS ty, title, tags "
+            "FROM memory_fts ORDER BY item_type, item_id"
+        ).fetchall()
+        # every row is text-typed, no duplicates
+        assert all(r["ty"] == "text" for r in rows)
+        keys = [(r["item_type"], r["item_id"]) for r in rows]
+        assert len(keys) == len(set(keys))
+        # the good text row survived with its tags; the dup twin is gone
+        mistake = [r for r in rows if r["item_type"] == "mistake"]
+        assert len(mistake) == 1 and mistake[0]["tags"] == "tag1 tag2"
+        # the orphan was re-keyed to text, content preserved
+        skill = [r for r in rows if r["item_type"] == "skill"]
+        assert len(skill) == 1 and skill[0]["item_id"] == "3"
+        assert skill[0]["title"] == "orphan skill"
+    finally:
+        conn.close()
+
+
+def test_add_then_update_keeps_single_text_fts_row(tmp_path, monkeypatch):
+    """Regression for the corruption generator: a core-table UPDATE (usage
+    bump) must not duplicate or degrade the item's FTS row."""
+    db = str(tmp_path / "single_owner.db")
+    monkeypatch.setenv("ENGRAM_DB_PATH", db)
+    from src.database import get_connection, init_db, record_usage
+    from src.memory_ops import create_mistake
+
+    init_db(db)
+    with get_connection(db) as conn:
+        create_mistake(
+            conn, date="2026-07-17", context="ctx",
+            mistake="single owner check", fix="a fix", tags="alpha beta",
+        )
+    record_usage("mistake", 1, db_path=db)  # UPDATE on the core table
+
+    with get_connection(db) as conn:
+        rows = conn.execute(
+            "SELECT typeof(item_id) AS ty, tags FROM memory_fts "
+            "WHERE item_type='mistake' AND CAST(item_id AS TEXT)='1'"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["ty"] == "text"
+    assert "alpha" in rows[0]["tags"]
+
+
+def test_integrity_report_flags_second_writer(tmp_path, monkeypatch):
+    """doctor's invariants must catch dup groups and non-text ids directly."""
+    db = str(tmp_path / "invariants.db")
+    monkeypatch.setenv("ENGRAM_DB_PATH", db)
+    from src.database import get_connection, init_db
+    from src.doctor import integrity_report
+
+    init_db(db)
+    clean = integrity_report(db_path=db)
+    assert clean["fts_dup_groups"] == 0 and clean["fts_type_drift"] == 0
+
+    with get_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO memory_fts (item_type, item_id, title, content, tags) "
+            "VALUES ('mistake', '9', 'a', 'b', '')"
+        )
+        conn.execute(
+            "INSERT INTO memory_fts (item_type, item_id, title, content, tags) "
+            "VALUES ('mistake', 9, 'a', 'b', '')"
+        )
+    dirty = integrity_report(db_path=db)
+    assert dirty["fts_dup_groups"] == 1
+    assert dirty["fts_type_drift"] == 1

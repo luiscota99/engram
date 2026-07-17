@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis

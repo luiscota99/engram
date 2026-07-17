@@ -1448,6 +1448,22 @@ def run_self_check(db_path=None) -> dict:
                 body="Run: engram doctor --repair  (rebuilds the lexical index from core tables)",
                 finding_key="integrity:fts-drift",
             )
+        if integ.get("fts_dup_groups", 0) > 0 or integ.get("fts_type_drift", 0) > 0:
+            _file(
+                kind="alert",
+                severity="high",
+                title=(
+                    f"FTS single-owner invariant violated: "
+                    f"{integ['fts_dup_groups']} duplicate item groups, "
+                    f"{integ['fts_type_drift']} non-text item_id rows"
+                ),
+                body=(
+                    "A second writer is indexing memory_fts (this corruption class "
+                    "shipped once via the v6 triggers, removed in v23). "
+                    "Run: engram doctor --repair, then find and remove the writer."
+                ),
+                finding_key="integrity:fts-single-owner",
+            )
         if integ["orphaned_tags"] > 0 or integ["orphaned_status"] > 0:
             _file(
                 kind="alert",
