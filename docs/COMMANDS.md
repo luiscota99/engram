@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 67 commands.
+All commands are invoked as `engram <command>`. 68 commands.
 
 ### `engram add`
 
@@ -349,6 +349,13 @@ Manage reflexes (list / approve / run)
 Show typed relationships touching an item (e.g. skill:3)
 
   - `<item>` — Item as type:id
+
+### `engram restore`
+
+Restore the memory DB from a SQLite backup (validated; current DB snapshotted first)
+
+  - `<file>` — Backup file (e.g. ~/.engram/backups/pre-migration-v25.db)
+  - `--yes` — Skip the interactive confirmation
 
 ### `engram resume`
 

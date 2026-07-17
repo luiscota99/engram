@@ -2,6 +2,8 @@
 Database backup and export tools for Engram.
 """
 
+from __future__ import annotations
+
 import datetime
 import json
 import os
@@ -26,6 +28,21 @@ def export_to_json(conn):
         "prompts",
         "reflexes",
         "reflex_runs",
+        # July 2026 audit: the export used to silently omit these — a backup
+        # that drops tags, pins, relations, or the inbox is not a backup.
+        "sessions",
+        "session_transcripts",
+        "tags",
+        "item_tags",
+        "item_projects",
+        "item_pins",
+        "memory_relations",
+        "memory_facts",
+        "skill_tests",
+        "inbox",
+        "checkpoints",
+        "retrieval_feedback",
+        "memory_dynamics",
     ]
     for table in tables:
         try:
@@ -76,3 +93,79 @@ def run_backup(git_sync=False):
             print("  (Note: ~/.engram is not a git repository. Skipping Git sync.)")
 
     return filepath
+
+
+def restore_database(backup_path: str, db_path: str | None = None) -> dict:
+    """Restore the memory DB from a SQLite backup file — validated, snapshotted.
+
+    The July 2026 audit's finding: backups existed, restore didn't — untested
+    by construction. This is the other half. Safety order:
+
+    1. Validate the backup: it must open, pass integrity_check, and contain a
+       schema_meta version (any version — migrations run forward on next use).
+    2. Snapshot the CURRENT db (``pre-restore-<ts>.db``, backup API, WAL-safe)
+       so a restore is itself reversible.
+    3. Replace atomically via the SQLite backup API (never a file copy).
+
+    Returns {restored_from, pre_restore_snapshot, backup_schema_version}.
+    Raises ValueError on an invalid backup — the current DB is untouched.
+    """
+    try:
+        import sqlean as sqlite3  # matches the connection layer's driver
+    except ImportError:
+        import sqlite3
+
+    db_path = db_path or get_db_path()
+    if not os.path.exists(backup_path):
+        raise ValueError(f"Backup file not found: {backup_path}")
+
+    # 1. Validate
+    src = sqlite3.connect(backup_path)  # type: ignore[attr-defined]
+    try:
+        ok = src.execute("PRAGMA integrity_check").fetchone()[0]
+        if ok != "ok":
+            raise ValueError(f"Backup fails integrity_check: {ok}")
+        row = src.execute(
+            "SELECT value FROM schema_meta WHERE key = 'version'"
+        ).fetchone()
+        if not row:
+            raise ValueError("Backup has no schema_meta version — not an Engram DB")
+        backup_version = int(row[0])
+    except sqlite3.Error as e:  # type: ignore[attr-defined]
+        raise ValueError(f"Not a readable SQLite database: {e}") from e
+    finally:
+        src.close()
+
+    # 2. Snapshot current (only if it exists)
+    snapshot = None
+    if os.path.exists(db_path):
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        snap_dir = os.path.join(os.path.dirname(db_path), "backups")
+        os.makedirs(snap_dir, exist_ok=True)
+        snapshot = os.path.join(snap_dir, f"pre-restore-{ts}.db")
+        cur = sqlite3.connect(db_path)  # type: ignore[attr-defined]
+        try:
+            dst = sqlite3.connect(snapshot)  # type: ignore[attr-defined]
+            try:
+                cur.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            cur.close()
+
+    # 3. Restore via backup API into the live path
+    src = sqlite3.connect(backup_path)  # type: ignore[attr-defined]
+    try:
+        dst = sqlite3.connect(db_path)  # type: ignore[attr-defined]
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    return {
+        "restored_from": backup_path,
+        "pre_restore_snapshot": snapshot,
+        "backup_schema_version": backup_version,
+    }

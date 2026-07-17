@@ -1101,8 +1101,21 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
     }
 
 
+# Side tables that reference items by soft (item_type, item_id) pairs — no
+# real FK can enforce these, so delete_item must clean them and
+# integrity_report must watch them (July 2026 audit).
+SOFT_FK_TABLES = (
+    "item_projects",
+    "item_pins",
+    "skill_tests",
+    "retrieval_feedback",
+    "memory_dynamics",
+)
+
+
 def delete_item(conn, item_type, item_id):
-    """Deeply delete an item from its core table, tags, FTS, and vector index."""
+    """Deeply delete an item: core table, tags, FTS, vectors, and every
+    soft-FK side table (projects, pins, tests, feedback, dynamics, relations)."""
     table = table_for(item_type)
     if not table:
         raise ValueError(f"Unknown item type: {item_type}")
@@ -1123,6 +1136,18 @@ def delete_item(conn, item_type, item_id):
         if sqlite_vec is not None:
             conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rowid,))
         conn.execute("DELETE FROM embedding_status WHERE fts_rowid = ?", (rowid,))
+
+    # 4. Soft-FK side tables (typed relations reference items on both ends)
+    for side in SOFT_FK_TABLES:
+        conn.execute(
+            f"DELETE FROM {side} WHERE item_type = ? AND item_id = ?",
+            (item_type, int(item_id)),
+        )
+    conn.execute(
+        "DELETE FROM memory_relations WHERE (from_type = ? AND from_id = ?) "
+        "OR (to_type = ? AND to_id = ?)",
+        (item_type, int(item_id), item_type, int(item_id)),
+    )
 
 
 PINNABLE_TYPES = frozenset({"mistake", "pattern", "skill", "conversation", "prompt"})

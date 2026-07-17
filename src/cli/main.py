@@ -39,6 +39,7 @@ from .commands.maintenance import (
     cmd_migrate,
     cmd_migrate_embeddings,
     cmd_reembed,
+    cmd_restore,
     cmd_roi,
     cmd_sleep,
 )
@@ -491,6 +492,11 @@ def build_parser() -> argparse.ArgumentParser:
     fix_group.add_argument("--repair", action="store_true")
     fix_group.add_argument("--fix", action="store_true", dest="repair")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_restore = sub.add_parser("restore", help="Restore the memory DB from a SQLite backup (validated; current DB snapshotted first)")
+    p_restore.add_argument("file", help="Backup file (e.g. ~/.engram/backups/pre-migration-v25.db)")
+    p_restore.add_argument("--yes", action="store_true", help="Skip the interactive confirmation")
+    p_restore.set_defaults(func=cmd_restore)
 
     p_backup = sub.add_parser("backup", help="Export database to JSON format")
     p_backup.add_argument("--git", action="store_true")

@@ -1599,6 +1599,17 @@ def run_self_check(db_path=None) -> dict:
                 ),
                 finding_key="integrity:fts-single-owner",
             )
+        if integ.get("soft_fk_orphans", 0) > 0:
+            _file(
+                kind="alert",
+                severity="warning",
+                title=(
+                    f"{integ['soft_fk_orphans']} soft-FK orphan rows reference "
+                    f"deleted memories (pins/projects/tests/feedback/dynamics)"
+                ),
+                body="A delete path is skipping side-table cleanup. Run: engram doctor --repair",
+                finding_key="integrity:soft-fk-orphans",
+            )
         if integ["orphaned_tags"] > 0 or integ["orphaned_status"] > 0:
             _file(
                 kind="alert",

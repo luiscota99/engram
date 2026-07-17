@@ -318,3 +318,95 @@ def test_self_check_no_labeling_proposal_below_threshold(db, tmp_path, monkeypat
             "SELECT COUNT(*) FROM inbox WHERE finding_key = 'bench:unlabeled-queries'"
         ).fetchone()[0]
     assert n == 0
+
+
+# ── restore path + delete_item deep cleanup + soft-FK invariants ─────
+
+def test_restore_roundtrip_with_pre_restore_snapshot(db, tmp_path):
+    from src.backup import restore_database
+    from src.migrations import backup_before_migration
+
+    with get_connection(db) as c:
+        c.execute("INSERT INTO mistakes (date, context, mistake, fix) "
+                  "VALUES ('2026-07-17','c','the original state','f')")
+    backup = backup_before_migration(db, 90)
+
+    with get_connection(db) as c:  # diverge after the backup
+        c.execute("INSERT INTO mistakes (date, context, mistake, fix) "
+                  "VALUES ('2026-07-17','c','made after backup','f')")
+
+    result = restore_database(backup, db_path=db)
+    assert result["backup_schema_version"] > 0
+    assert result["pre_restore_snapshot"] and os.path.exists(result["pre_restore_snapshot"])
+
+    with get_connection(db) as c:
+        titles = {r["mistake"] for r in c.execute("SELECT mistake FROM mistakes").fetchall()}
+    assert "the original state" in titles
+    assert "made after backup" not in titles  # restored to backup state
+    # and the diverged state survives in the snapshot
+    import sqlite3
+
+    snap = sqlite3.connect(result["pre_restore_snapshot"])
+    n = snap.execute("SELECT COUNT(*) FROM mistakes WHERE mistake='made after backup'").fetchone()[0]
+    snap.close()
+    assert n == 1
+
+
+def test_restore_refuses_garbage_and_non_engram(db, tmp_path):
+    from src.backup import restore_database
+
+    with pytest.raises(ValueError, match="not found"):
+        restore_database(str(tmp_path / "nope.db"), db_path=db)
+    junk = tmp_path / "junk.db"
+    junk.write_text("this is not sqlite")
+    with pytest.raises(ValueError):
+        restore_database(str(junk), db_path=db)
+    import sqlite3
+
+    empty = tmp_path / "empty.db"
+    c = sqlite3.connect(str(empty))
+    c.execute("CREATE TABLE t (x)")
+    c.commit()
+    c.close()
+    with pytest.raises(ValueError, match="schema_meta"):
+        restore_database(str(empty), db_path=db)
+
+
+def test_delete_item_cleans_all_soft_fk_tables(db):
+    from src.database import delete_item, get_or_create_project, link_item_to_project, pin_item
+    from src.doctor import integrity_report
+    from src.feedback import add_feedback
+    from src.memory_ops import create_mistake
+    from src.relations import add_relation
+    from src.stability import GOOD, record_event
+
+    with get_connection(db) as c:
+        create_mistake(c, date="2026-07-17", context="c", mistake="m1", fix="f")
+        create_mistake(c, date="2026-07-17", context="c", mistake="m2", fix="f")
+    proj = get_or_create_project("/tmp/p", db_path=db)
+    link_item_to_project("mistake", 1, proj["id"], db_path=db)
+    pin_item("mistake", 1, db_path=db)
+    add_feedback("mistake", 1, helpful=True, db_path=db)
+    record_event("mistake", 1, GOOD, db_path=db)
+    add_relation("mistake", 1, "mistake", 2, "related", db_path=db)
+
+    with get_connection(db) as c:
+        delete_item(c, "mistake", 1)
+
+    clean = integrity_report(db_path=db)
+    assert clean["soft_fk_orphans"] == 0
+    with get_connection(db) as c:
+        assert c.execute("SELECT COUNT(*) FROM memory_relations").fetchone()[0] == 0
+
+
+def test_integrity_report_counts_soft_fk_orphans(db):
+    from src.doctor import integrity_report
+
+    with get_connection(db) as c:
+        # orphan rows referencing a memory that never existed
+        c.execute("INSERT INTO item_pins (item_type, item_id) VALUES ('mistake', 999)")
+        c.execute(
+            "INSERT INTO retrieval_feedback (item_type, item_id, helpful) VALUES ('skill', 999, 1)"
+        )
+    r = integrity_report(db_path=db)
+    assert r["soft_fk_orphans"] == 2

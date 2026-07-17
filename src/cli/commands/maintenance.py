@@ -43,6 +43,41 @@ def cmd_backup(args):
     run_backup(git_sync=args.git)
 
 
+def cmd_restore(args):
+    """Restore the memory DB from a backup: engram restore <file> [--yes].
+
+    Validates the backup, snapshots the current DB first (a restore is itself
+    reversible), then replaces via the SQLite backup API. Destructive to the
+    current state — confirms interactively unless --yes.
+    """
+    import sys
+
+    from ...backup import restore_database
+    from ...database import get_db_path
+
+    target = get_db_path()
+    if not getattr(args, "yes", False):
+        if not sys.stdin.isatty():
+            print("Refusing to restore without confirmation (pass --yes in non-interactive use).")
+            sys.exit(1)
+        answer = input(
+            f"Replace {target} with the contents of {args.file}?\n"
+            f"(The current DB is snapshotted first.) [y/N] "
+        ).strip().lower()
+        if answer not in ("y", "yes"):
+            print("Aborted — nothing changed.")
+            return
+    try:
+        result = restore_database(args.file)
+    except ValueError as e:
+        print(f"Restore refused: {e}")
+        sys.exit(1)
+    print(f"✓ Restored {target} from {result['restored_from']}")
+    print(f"  Backup schema version: v{result['backup_schema_version']} (migrations run forward on next use)")
+    if result["pre_restore_snapshot"]:
+        print(f"  Previous state saved to: {result['pre_restore_snapshot']}")
+
+
 def cmd_efficiency(args):
     """Action-Ladder efficiency report: measured, no invented numbers."""
     _ = args

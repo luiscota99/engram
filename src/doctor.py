@@ -55,6 +55,29 @@ def integrity_report(db_path=None) -> dict:
             "LEFT JOIN memory_fts mf ON mf.rowid = es.fts_rowid WHERE mf.rowid IS NULL"
         ).fetchone()[0]
 
+        # Soft-FK orphans: side tables reference items by (item_type, item_id)
+        # pairs no real FK can enforce. delete_item cleans them since the July
+        # 2026 audit; this invariant catches any path that doesn't. Conditions
+        # are generated from the registry — no hand-copied table lists.
+        from .item_registry import table_for, usage_ranked_types
+
+        type_conditions = " OR ".join(
+            f"(item_type = '{t}' AND item_id NOT IN (SELECT id FROM {table_for(t)}))"
+            for t in usage_ranked_types()
+            if table_for(t)
+        )
+        soft_fk_orphans = 0
+        for side in (
+            "item_projects", "item_pins", "skill_tests",
+            "retrieval_feedback", "memory_dynamics", "item_tags",
+        ):
+            try:
+                soft_fk_orphans += conn.execute(
+                    f"SELECT COUNT(*) FROM {side} WHERE {type_conditions}"
+                ).fetchone()[0]
+            except Exception:
+                continue  # side table absent in pre-migration DBs
+
         # Single-owner FTS invariants (v23). Aggregate counts can mask
         # offsetting drift, so also check the failure shapes directly:
         # duplicate (item_type, id) groups and non-TEXT item_id rows — the
@@ -79,6 +102,7 @@ def integrity_report(db_path=None) -> dict:
         "orphaned_status": orphaned_status,
         "fts_dup_groups": fts_dup_groups,
         "fts_type_drift": fts_type_drift,
+        "soft_fk_orphans": soft_fk_orphans,
     }
 
 
