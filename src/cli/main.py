@@ -73,6 +73,7 @@ from .commands.sync import (
     cmd_sync_skills,
 )
 from .commands.tools import (
+    cmd_bench_label,
     cmd_benchmark,
     cmd_browse,
     cmd_guard,
@@ -657,6 +658,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_hook_guard.set_defaults(func=cmd_hook_guard)
     p_hook_checkpoint = hook_sub.add_parser("checkpoint", help="Record a crash-proof session checkpoint (Stop)")
     p_hook_checkpoint.set_defaults(func=cmd_hook_checkpoint)
+
+    p_bench_label = sub.add_parser("bench-label", help="Label recent real queries from the audit log into the real-corpus benchmark")
+    p_bench_label.add_argument("-n", "--count", type=int, default=5, help="How many unlabeled queries to offer (default 5)")
+    p_bench_label.add_argument("--audit", help="Audit log path (default: the configured audit log)")
+    p_bench_label.add_argument("--queries", help="Label set to grow (default: evals/real_queries.json)")
+    p_bench_label.set_defaults(func=cmd_bench_label)
 
     p_resume = sub.add_parser("resume", help="Where did the last session leave off? (from Stop-hook checkpoints)")
     p_resume.add_argument("--project", help="Project path (default: current directory)")

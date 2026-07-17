@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 65 commands.
+All commands are invoked as `engram <command>`. 66 commands.
 
 ### `engram add`
 
@@ -34,6 +34,14 @@ Turn search auditing on/off (persistent), or show status
 Export database to JSON format
 
   - `--git`
+
+### `engram bench-label`
+
+Label recent real queries from the audit log into the real-corpus benchmark
+
+  - `-n, --count` — How many unlabeled queries to offer (default 5)
+  - `--audit` — Audit log path (default: the configured audit log)
+  - `--queries` — Label set to grow (default: evals/real_queries.json)
 
 ### `engram benchmark`
 

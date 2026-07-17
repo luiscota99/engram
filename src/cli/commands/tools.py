@@ -144,6 +144,67 @@ def cmd_resume(args):
     print(report)
 
 
+def cmd_bench_label(args):
+    """Grow the real-corpus benchmark from real usage: engram bench-label.
+
+    Samples recent unlabeled queries from the audit log, shows each with its
+    current top hits, and the user picks the correct answer (1-3), marks
+    abstention (a), skips (s), or quits (q). Confirmed labels append to
+    evals/real_queries.json. Nothing is labeled without an explicit choice.
+    """
+    from ... import config
+    from ...label_mining import append_labels, build_label, load_label_set, mine_candidates
+    from ...search import search
+
+    audit_path = getattr(args, "audit", None) or config.audit_log_path()
+    if not audit_path or not os.path.exists(audit_path):
+        print("No audit log found — enable with: engram audit on (searches accrue from then).")
+        return
+    queries_path = getattr(args, "queries", None) or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+        "evals", "real_queries.json",
+    )
+    existing = load_label_set(queries_path)
+    candidates = mine_candidates(audit_path, existing, limit=getattr(args, "count", 5) or 5)
+    if not candidates:
+        print("No unlabeled real queries found in the audit log (yet).")
+        return
+    if not sys.stdin.isatty():
+        print(f"{len(candidates)} unlabeled real queries (run interactively to label):")
+        for c in candidates:
+            print(f"  - {c['query'][:100]}")
+        return
+
+    new_labels: list[dict] = []
+    for c in candidates:
+        print(f"\n{fmt_header('Query:')} {c['query'][:200]}")
+        hits = search(c["query"], limit=3, skip_audit=True)
+        for i, h in enumerate(hits, 1):
+            print(f"  {i}. [{(h.get('item_type') or '?').upper()} #{h.get('item_id')}] {(h.get('title') or '')[:90]}")
+        if not hits:
+            print("  (no results)")
+        try:
+            choice = input("Correct answer? [1-3 / a=expects-nothing / s=skip / q=quit] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if choice == "q":
+            break
+        if choice == "a":
+            new_labels.append(build_label(c["query"], existing=existing + new_labels, abstention=True))
+        elif choice in ("1", "2", "3") and int(choice) <= len(hits):
+            new_labels.append(
+                build_label(c["query"], existing=existing + new_labels, item=hits[int(choice) - 1])
+            )
+        # anything else: skip silently
+
+    if not new_labels:
+        print("\nNo labels added.")
+        return
+    total = append_labels(queries_path, new_labels)
+    print(f"\n✓ Added {len(new_labels)} label(s) → {queries_path} ({total} total).")
+    print("  Evaluate: cp the DB snapshot first, then run the bench with --queries on it.")
+
+
 def cmd_guard(args):
     """Scan files (or the staged diff) against known mistakes/patterns.
 
