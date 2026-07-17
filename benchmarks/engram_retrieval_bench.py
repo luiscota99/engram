@@ -394,9 +394,29 @@ def main() -> None:
         metavar="SCORE",
         help="Exit with code 1 if aggregate R@5 is below SCORE (e.g. 0.90)",
     )
+    parser.add_argument(
+        "--allow-default-db",
+        action="store_true",
+        help="Run against the default (real) memory DB instead of refusing",
+    )
     args = parser.parse_args()
 
     db_path = os.environ.get("ENGRAM_DB_PATH")
+
+    # Instrument gate: without ENGRAM_DB_PATH this would silently run the
+    # labeled query set against the user's REAL memory DB — a corpus the
+    # labels don't describe — and report a meaningless score (observed live:
+    # R@5=0.14 that looked like a retrieval regression). Worse, an empty
+    # real DB would get seeded with sample data. Refuse unless explicit.
+    if not db_path and not args.allow_default_db:
+        print(
+            "ERROR: ENGRAM_DB_PATH is not set — this benchmark would run its labeled\n"
+            "queries against your real memory DB and report a meaningless score.\n"
+            "Set a scratch DB, e.g.:\n"
+            "  ENGRAM_DB_PATH=/tmp/engram_bench.db python benchmarks/engram_retrieval_bench.py\n"
+            "or pass --allow-default-db if you really mean the default DB."
+        )
+        sys.exit(2)
 
     if not args.no_seed:
         _ensure_seeded(db_path)

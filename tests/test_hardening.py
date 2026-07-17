@@ -255,3 +255,23 @@ def test_audit_log_rotation(tmp_path, monkeypatch):
     log.write_text("{}")
     monkeypatch.setattr(search_audit, "AUDIT_ROTATE_BYTES", 10_000)
     assert search_audit.rotate_audit_log_if_needed() is False
+
+
+# ── benchmark instrument gate ────────────────────────────────────────
+
+def test_retrieval_benchmark_refuses_default_db(tmp_path):
+    """Without ENGRAM_DB_PATH the bench would score labeled queries against
+    the user's real memory DB and report a meaningless number (observed live:
+    R@5=0.14 masquerading as a retrieval regression). It must refuse."""
+    import subprocess
+    import sys as _sys
+
+    env = {k: v for k, v in os.environ.items() if k != "ENGRAM_DB_PATH"}
+    env["PYTHONPATH"] = "."
+    proc = subprocess.run(
+        [_sys.executable, "benchmarks/engram_retrieval_bench.py"],
+        capture_output=True, text=True, env=env, timeout=60,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    assert proc.returncode == 2
+    assert "ENGRAM_DB_PATH" in proc.stdout
