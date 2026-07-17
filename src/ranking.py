@@ -213,11 +213,16 @@ def rerank_with_bm25(results: list[dict], query: str) -> list[dict]:
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _recency_factor(last_used_at: str | None) -> float:
+def _recency_factor(last_used_at: str | None, stability: float | None = None) -> float:
     """Return a 0.0–1.0 decay multiplier based on last_used_at.
 
-    Uses exponential decay with RECENCY_HALF_LIFE_DAYS half-life.
-    Items never used default to a factor of 0.5 (neutral).
+    Items WITH a forgetting-curve stability (earned through usage/feedback
+    events, schema v25) decay on their personal FSRS power-law curve — a
+    memory that keeps proving itself earns a months-long curve, one that
+    lapsed decays fast. Items without one keep the original fixed
+    RECENCY_HALF_LIFE_DAYS exponential, so cold memories and seeded
+    benchmark DBs score exactly as before. Items never used default to 0.5
+    (neutral).
     """
     if not last_used_at:
         return 0.5
@@ -229,6 +234,10 @@ def _recency_factor(last_used_at: str | None) -> float:
         else:
             now = datetime.now()
         days_old = max(0, (now - last).days)
+        if stability is not None and stability > 0:
+            from .stability import retrievability
+
+            return retrievability(days_old, stability)
         return math.pow(0.5, days_old / RECENCY_HALF_LIFE_DAYS)
     except (ValueError, TypeError):
         return 0.5
@@ -262,6 +271,7 @@ def calculate_utility_score(
     inferred_type: str | None = None,
     embedding_is_stale: bool = False,
     detected_tags: list[str] | None = None,
+    stability: float | None = None,
 ) -> float:
     """Compute a composite utility score for a single search result.
 
@@ -287,7 +297,9 @@ def calculate_utility_score(
     base = BASE_SCORE_SEMANTIC if result.get("is_semantic") else BASE_SCORE_LEXICAL
 
     # Recency nudges relevance, never dominates it (floor at RECENCY_FLOOR)
-    decayed_base = base * (RECENCY_FLOOR + RECENCY_SPAN * _recency_factor(last_used_at))
+    decayed_base = base * (
+        RECENCY_FLOOR + RECENCY_SPAN * _recency_factor(last_used_at, stability)
+    )
 
     # Log-scale usage boost (doesn't decay — demonstrated value persists)
     usage = _usage_boost(usage_count)
@@ -382,6 +394,7 @@ def rank_results(
     item_dates: dict | None = None,
     temporal_intent: dict | None = None,
     feedback_map: dict | None = None,
+    stability_by_key: dict | None = None,
 ) -> list[dict]:
     """Apply utility scoring to a list of results and sort descending.
 
@@ -408,6 +421,10 @@ def rank_results(
         Dict mapping (item_type, item_id_int) → (helped, unhelpful) explicit
         feedback totals. Affects ranking only — an item with no feedback is
         merely dormant and scores exactly as before.
+    stability_by_key:
+        Dict mapping (item_type, item_id_int) → FSRS stability (days). Items
+        present decay on their personal forgetting curve; absent items keep
+        the fixed half-life.
     """
     inferred_type = infer_type_from_query(query)
     stale_rowids = stale_rowids or set()
@@ -422,6 +439,7 @@ def rank_results(
             inferred_type=inferred_type,
             embedding_is_stale=r.get("rowid") in stale_rowids,
             detected_tags=detected_tags,
+            stability=(stability_by_key or {}).get(key_row),
         )
         rk = result_key(r)
         rrf = RRF_WEIGHT * rrf_scores.get(rk, 0.0) if rrf_scores else 0.0

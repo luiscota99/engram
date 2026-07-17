@@ -458,6 +458,23 @@ MIGRATIONS = {
         """CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_open_finding
            ON inbox(finding_key) WHERE status = 'open' AND finding_key IS NOT NULL;""",
     ],
+    25: [
+        # Per-memory forgetting curves (FSRS-4.5): stability/difficulty state
+        # evolved by usage (recall@good), helped feedback (recall@easy) and
+        # unhelpful feedback (lapse — never increases stability). One table
+        # for all item types (no per-type column sprawl); items without a row
+        # keep the fixed-half-life ranking behavior unchanged.
+        """CREATE TABLE IF NOT EXISTS memory_dynamics (
+            item_type TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            stability REAL NOT NULL,
+            difficulty REAL NOT NULL DEFAULT 5.0,
+            last_event_at TEXT NOT NULL DEFAULT (datetime('now')),
+            reps INTEGER NOT NULL DEFAULT 0,
+            lapses INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (item_type, item_id)
+        );""",
+    ],
     17: [
         lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
         """CREATE TABLE IF NOT EXISTS inbox (
@@ -619,6 +636,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    25: [
+        "DROP TABLE IF EXISTS memory_dynamics;",
+    ],
     24: [
         "DROP INDEX IF EXISTS idx_inbox_open_finding;",
     ],

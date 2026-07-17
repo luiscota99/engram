@@ -286,13 +286,22 @@ def search(
         # (single shared table, so no per-type participation drift).
         from .feedback import feedback_totals
 
+        candidate_keys = [(r["item_type"], int(r["item_id"])) for r in results]
         try:
-            feedback_map = feedback_totals(
-                [(r["item_type"], int(r["item_id"])) for r in results], conn=conn
-            )
+            feedback_map = feedback_totals(candidate_keys, conn=conn)
         except Exception:
             logger.exception("feedback totals fetch failed; ranking without feedback")
             feedback_map = {}
+
+        # 3c. Batch-fetch per-item forgetting-curve stability (FSRS, v25).
+        # Absent items keep the fixed-half-life behavior.
+        from .stability import stability_map as fetch_stability
+
+        try:
+            stability_by_key = fetch_stability(candidate_keys, conn=conn)
+        except Exception:
+            logger.exception("stability fetch failed; ranking with fixed half-life")
+            stability_by_key = {}
 
         # 4. Project affinity
         affinities = {}
@@ -310,6 +319,7 @@ def search(
     results = rank_results(
         results=results,
         feedback_map=feedback_map,
+        stability_by_key=stability_by_key,
         usage_counts=usage_counts,
         last_used_map=last_used_map,
         affinities=affinities,

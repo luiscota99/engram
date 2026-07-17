@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -422,6 +422,19 @@ CREATE TABLE IF NOT EXISTS retrieval_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_item ON retrieval_feedback(item_type, item_id);
 
+-- Per-memory forgetting curves (schema v25, FSRS-4.5). Evolved by usage and
+-- feedback events; items without a row keep fixed-half-life ranking behavior.
+CREATE TABLE IF NOT EXISTS memory_dynamics (
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    stability REAL NOT NULL,
+    difficulty REAL NOT NULL DEFAULT 5.0,
+    last_event_at TEXT NOT NULL DEFAULT (datetime('now')),
+    reps INTEGER NOT NULL DEFAULT 0,
+    lapses INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (item_type, item_id)
+);
+
 -- Inbox: alerts and decision requests for the human (schema v17).
 -- Agents and monitors PROPOSE here; only the user decides. finding_key
 -- dedups recurring findings (daily self-check must not re-file open items).
@@ -793,6 +806,11 @@ def record_usage(item_type, item_id, success=True, db_path=None):
             f"UPDATE {table} SET usage_count = usage_count + 1, last_used_at = datetime('now') WHERE id = ?",
             (item_id,),
         )
+        # A use is a successful recall: grow the item's forgetting-curve
+        # stability (FSRS rating "good"). Never raises.
+        from .stability import GOOD, record_event
+
+        record_event(item_type, int(item_id), GOOD, conn=conn)
     return True
 
 

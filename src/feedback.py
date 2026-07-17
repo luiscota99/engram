@@ -53,6 +53,12 @@ def add_feedback(
                VALUES (?, ?, ?, ?, ?)""",
             (item_type, int(item_id), 1 if helpful else -1, (query or "")[:500], source),
         )
+        # Feedback also drives the item's forgetting curve: helped is a
+        # strong recall (FSRS "easy"), unhelpful is a lapse — and a lapse
+        # can only ever shrink stability, never grow it.
+        from .stability import AGAIN, EASY, record_event
+
+        record_event(item_type, int(item_id), EASY if helpful else AGAIN, conn=conn)
     return True
 
 
