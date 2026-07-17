@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 68 commands.
+All commands are invoked as `engram <command>`. 71 commands.
 
 ### `engram add`
 
@@ -483,6 +483,18 @@ Find near-duplicate memories to consolidate
   - `--type` — one of `mistake, pattern, skill`
   - `-n, --limit`
 
+### `engram sync-export`
+
+Export new memories as an append-only chunk (git-friendly share)
+
+  - `--dir` — Sync directory (default ~/.engram/sync)
+
+### `engram sync-import`
+
+Import memories from a sync dir's chunks (idempotent)
+
+  - `--dir` — Sync directory (default ~/.engram/sync)
+
 ### `engram sync-skills`
 
 Bidirectional sync between Engram and Cursor skills
@@ -492,6 +504,12 @@ Bidirectional sync between Engram and Cursor skills
   - `--auto`
   - `--export-missing`
   - `--import-missing`
+
+### `engram sync-status`
+
+Compare local DB vs sync dir without changing anything
+
+  - `--dir` — Sync directory (default ~/.engram/sync)
 
 ### `engram unlink`
 

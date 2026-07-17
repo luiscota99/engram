@@ -14,6 +14,7 @@ from .commands.bootstrap import (
     cmd_seed,
 )
 from .commands.brain import cmd_brain_list, cmd_brain_new, cmd_brain_path
+from .commands.chunk_sync import add_parsers as add_chunk_sync_parsers
 from .commands.codebase import (
     cmd_clean_codebase,
     cmd_graph,
@@ -353,6 +354,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_import_cursor.add_argument("path")
     p_import_cursor.add_argument("--dry-run", action="store_true")
     p_import_cursor.set_defaults(func=cmd_import_cursor_skills)
+
+    add_chunk_sync_parsers(sub)
 
     p_sync = sub.add_parser("sync-skills", help="Bidirectional sync between Engram and Cursor skills")
     p_sync.add_argument("--path", default="~/.cursor/skills")
