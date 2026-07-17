@@ -52,12 +52,24 @@ def client_supports_elicitation() -> bool:
     return "elicitation" in _client_capabilities
 
 
+class ElicitationFailed(RuntimeError):
+    """A confirmation was requested but the round-trip broke.
+
+    Distinct from "client doesn't support elicitation" (None): here the user
+    was (or may have been) shown a prompt and never answered. Gates on
+    mutating/destructive actions must fail CLOSED on this — proceeding would
+    run an action after an unanswered confirmation.
+    """
+
+
 def elicit_confirmation(message: str, *, title: str = "Confirm") -> bool | None:
     """Ask the user to confirm an action via MCP elicitation (server→client request).
 
     Returns True/False for an explicit accept/decline, or None when the client
-    does not support elicitation or the round-trip fails — callers must treat
-    None as "no gate available" and preserve their pre-elicitation behavior.
+    does not support elicitation — callers treat None as "no gate available"
+    and preserve their pre-elicitation behavior. Raises ``ElicitationFailed``
+    when the client *does* support elicitation but the round-trip fails
+    (pipe closed, error response, write failure) — callers must not proceed.
     """
     global _server_req_counter
     if not client_supports_elicitation():
@@ -90,7 +102,7 @@ def elicit_confirmation(message: str, *, title: str = "Confirm") -> bool | None:
         while True:
             raw = sys.stdin.readline()
             if not raw:
-                return None  # client closed the pipe
+                raise ElicitationFailed("client closed the pipe mid-confirmation")
             line = raw.strip()
             if not line:
                 continue
@@ -100,7 +112,7 @@ def elicit_confirmation(message: str, *, title: str = "Confirm") -> bool | None:
                 continue
             if msg.get("id") == req_id and ("result" in msg or "error" in msg):
                 if "error" in msg:
-                    return None
+                    raise ElicitationFailed(f"client returned an error: {msg['error']}")
                 result = msg.get("result") or {}
                 if result.get("action") != "accept":
                     return False
@@ -108,9 +120,11 @@ def elicit_confirmation(message: str, *, title: str = "Confirm") -> bool | None:
                 return bool(content.get("confirm"))
             # Not our response — requeue for the main loop.
             _pending_lines.append(line)
-    except Exception:
+    except ElicitationFailed:
+        raise
+    except Exception as e:
         logger.exception("Elicitation round-trip failed")
-        return None
+        raise ElicitationFailed(str(e)) from e
 
 
 def handle_request(msg: Mapping[str, Any]) -> dict[str, Any] | None:

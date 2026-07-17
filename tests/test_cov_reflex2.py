@@ -393,14 +393,18 @@ def test_handle_call_unknown_reflex(test_db):
     assert out == "Error: no reflex named 'nope'."
 
 
-def test_handle_call_elicitation_error_proceeds(test_db):
+def test_handle_call_elicitation_error_refuses(test_db):
+    """Fail CLOSED: a broken confirmation round-trip must not run the script.
+    (Was fail-open before the July 2026 audit — a confirmation the user never
+    answered let the mutating reflex run anyway.)"""
     rid = _insert_approved_reflex(
         test_db["path"], name="mutator2", script='echo "did $PARAM_X"'
     )
     assert rid  # mutating (read_only=0) → elicitation attempted
-    with patch("src.mcp.protocol.elicit_confirmation", side_effect=RuntimeError("no client")):
+    with patch("src.mcp.protocol.elicit_confirmation", side_effect=RuntimeError("broke mid-prompt")):
         out = handle_reflex_call("reflex_mutator2", {"x": "it"}, db_path=test_db["path"])
-    assert "did it" in out
+    assert "not run" in out
+    assert "did it" not in out
 
 
 def test_handle_call_reports_failure(test_db):

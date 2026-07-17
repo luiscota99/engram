@@ -383,19 +383,23 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
 
     is_monitor = row.get("kind") == "monitor"
     demoted = False
+    pending_alert: tuple[str, str, str] | None = None
     with get_connection(db_path) as c:
         cur = c.execute(
             "INSERT INTO reflex_runs (reflex_id, started_at, duration_ms, status) VALUES (?, ?, ?, ?)",
             (reflex_id, started, duration_ms, status),
         )
-        _journal_changes(c, cur.lastrowid, output)
+        _journal_changes(c, int(cur.lastrowid or 0), output)
         if is_monitor and status != "ok":
             # A monitor firing is a FINDING on the watched system, not a broken
             # script: file an alert (deduped while open) instead of demoting —
             # demotion would disable the smoke detector for detecting smoke.
             from .inbox import file_item
 
-            file_item(
+            # notify=False: delivery is a subprocess; running it here would
+            # hold the write lock for its lifetime and deadlock its own
+            # bookkeeping against this open transaction. Dispatch after commit.
+            filed = file_item(
                 kind="alert",
                 severity="high",
                 title=f"Monitor {row['name']} fired ({status})",
@@ -403,7 +407,14 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
                 source=row["name"],
                 finding_key=f"monitor:{row['name']}",
                 conn=c,
+                notify=False,
             )
+            if filed is not None:
+                pending_alert = (
+                    f"Monitor {row['name']} fired ({status})",
+                    _clip_output(output),
+                    row["name"],
+                )
             c.execute(
                 "UPDATE reflexes SET run_count = run_count + 1, last_run_at = ?, "
                 "last_status = ? WHERE id = ?",
@@ -454,6 +465,12 @@ def run_reflex(reflex_id: int, params: dict | None = None, *, db_path=None) -> d
             (row["skill_id"],),
         )
 
+    # Transaction committed — deliver the monitor alert without a write lock.
+    if pending_alert is not None:
+        from .inbox import maybe_notify
+
+        maybe_notify("high", pending_alert[0], pending_alert[1], pending_alert[2], db_path=db_path)
+
     result = {
         "ok": status == "ok",
         "status": status,
@@ -491,15 +508,27 @@ def get_promotion_candidates(*, min_uses: int = PROMOTION_MIN_USES, db_path=None
         return [dict(r) for r in rows]
 
 
+# Success rate is judged over a recent window, not all-time history: with
+# all-time, a repaired reflex needed 12+ straight successes to clear the
+# flaky threshold and the self-check re-flagged it forever.
+SUCCESS_RATE_WINDOW = 10
+
+
 def get_reflex_success_rates(*, db_path=None, conn=None) -> dict[int, dict]:
-    """Per-reflex run stats from reflex_runs: {reflex_id: {runs, ok, rate, avg_ms}}."""
+    """Per-reflex run stats over the last SUCCESS_RATE_WINDOW runs each:
+    {reflex_id: {runs, ok, rate, avg_ms}}."""
     with connection_scope(conn, db_path) as c:
         try:
             rows = c.execute(
                 """SELECT reflex_id, COUNT(*) AS runs,
                           SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok,
                           AVG(duration_ms) AS avg_ms
-                   FROM reflex_runs GROUP BY reflex_id"""
+                   FROM (SELECT reflex_id, status, duration_ms,
+                                ROW_NUMBER() OVER (PARTITION BY reflex_id ORDER BY id DESC) AS rn
+                         FROM reflex_runs)
+                   WHERE rn <= ?
+                   GROUP BY reflex_id""",
+                (SUCCESS_RATE_WINDOW,),
             ).fetchall()
         except Exception:
             return {}
@@ -558,8 +587,19 @@ def handle_reflex_call(tool_name: str, args: dict, db_path=None) -> str:
             )
             if decision is False:
                 return f"Reflex {name} cancelled by user."
+            # decision is None → client doesn't support elicitation: the
+            # documented no-gate path; prior behavior applies.
         except Exception:
-            logger.debug("elicitation unavailable for reflex %s; proceeding", name, exc_info=True)
+            # Fail CLOSED (typically ElicitationFailed): a confirmation was
+            # requested but never answered — client crashed mid-prompt, pipe
+            # closed. Running the mutating script anyway would invert
+            # "agents propose, the user decides".
+            logger.warning("elicitation round-trip failed for reflex %s; refusing", name, exc_info=True)
+            return (
+                f"Reflex {name} not run: a confirmation was requested but the "
+                f"elicitation round-trip failed. Run it explicitly instead: "
+                f"engram reflex run {name}"
+            )
     result = run_reflex(row["id"], params=dict(args or {}), db_path=db_path)
     if result["ok"]:
         return f"Reflex {name} completed.\n\n{result['output']}"

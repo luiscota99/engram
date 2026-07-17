@@ -1334,6 +1334,48 @@ def scheduler_status() -> dict:
     }
 
 
+# Retention windows. Deliberately generous — retention exists so operational
+# logs can't grow unboundedly, not to shed knowledge. Memories, feedback
+# (training data), and session transcripts are never pruned here.
+RETENTION_REFLEX_RUNS_PER_REFLEX = 50
+RETENTION_CHECKPOINT_DAYS = 90
+RETENTION_DECIDED_INBOX_DAYS = 90
+
+
+def run_retention(db_path=None) -> dict:
+    """Prune unbounded operational tables. Returns per-table deletion counts.
+
+    Covers: reflex_runs (keep the last N per reflex), checkpoints (stale
+    sessions beyond the window; `engram resume` reads the latest anyway), and
+    decided inbox items past the window. Never touches memory items,
+    retrieval_feedback, or session_transcripts.
+    """
+    counts = {}
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """DELETE FROM reflex_runs WHERE id IN (
+                   SELECT id FROM (
+                       SELECT id, ROW_NUMBER() OVER (
+                           PARTITION BY reflex_id ORDER BY id DESC) AS rn
+                       FROM reflex_runs)
+                   WHERE rn > ?)""",
+            (RETENTION_REFLEX_RUNS_PER_REFLEX,),
+        )
+        counts["reflex_runs"] = cur.rowcount
+        cur = conn.execute(
+            "DELETE FROM checkpoints WHERE updated_at < datetime('now', ?)",
+            (f"-{RETENTION_CHECKPOINT_DAYS} days",),
+        )
+        counts["checkpoints"] = cur.rowcount
+        cur = conn.execute(
+            "DELETE FROM inbox WHERE status != 'open' "
+            "AND COALESCE(decided_at, created_at) < datetime('now', ?)",
+            (f"-{RETENTION_DECIDED_INBOX_DAYS} days",),
+        )
+        counts["inbox"] = cur.rowcount
+    return counts
+
+
 def run_self_check(db_path=None) -> dict:
     """Daily self-maintenance sweep: files inbox items for findings.
 
@@ -1577,6 +1619,19 @@ def run_self_check(db_path=None) -> dict:
             )
     except Exception:
         logger.debug("scheduler self-check failed", exc_info=True)
+
+    # 7. Retention: prune unbounded operational tables and rotate the audit
+    # log. Never memories/feedback/transcripts — logs, not knowledge.
+    try:
+        pruned = run_retention(db_path=db_path)
+        if any(pruned.values()):
+            logger.info("retention pruned: %s", pruned)
+        from .search_audit import rotate_audit_log_if_needed
+
+        if rotate_audit_log_if_needed():
+            logger.info("audit log rotated (size cap reached)")
+    except Exception:
+        logger.debug("retention pass failed", exc_info=True)
 
     # Heartbeat last, so 'ran successfully' reflects a completed sweep.
     try:

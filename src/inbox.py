@@ -48,22 +48,25 @@ def file_item(
     proposed_params: dict | None = None,
     db_path=None,
     conn=None,
+    notify: bool = True,
 ) -> int | None:
     """File an inbox item. Returns the row id, or None when deduped.
 
     Dedup: if ``finding_key`` is set and an OPEN item with the same key exists,
     nothing is filed (the standing item already covers the finding).
+
+    Callers that pass their own ``conn`` MUST pass ``notify=False`` and call
+    ``maybe_notify`` after their transaction commits: the notify reflex is a
+    subprocess, and dispatching it inside an open write transaction holds the
+    DB write lock for the subprocess's lifetime (and its own bookkeeping
+    INSERT then deadlocks against the uncommitted outer transaction).
     """
     with connection_scope(conn, db_path) as c:
-        if finding_key:
-            existing = c.execute(
-                "SELECT id FROM inbox WHERE finding_key = ? AND status = 'open'",
-                (finding_key,),
-            ).fetchone()
-            if existing:
-                return None
+        # Dedup is enforced by idx_inbox_open_finding (unique finding_key among
+        # OPEN items, v24): OR IGNORE makes concurrent filers race-safe — the
+        # loser's insert is a no-op and reports None, same as before.
         cursor = c.execute(
-            """INSERT INTO inbox (kind, severity, title, body, source, finding_key,
+            """INSERT OR IGNORE INTO inbox (kind, severity, title, body, source, finding_key,
                                   proposed_reflex_id, proposed_params)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
@@ -77,13 +80,16 @@ def file_item(
                 json.dumps(proposed_params) if proposed_params else None,
             ),
         )
-        item_id = cursor.lastrowid
+        # rowcount==0 → the partial unique index ignored the insert (an open
+        # item with this finding_key exists); lastrowid is stale in that case.
+        item_id = cursor.lastrowid if cursor.rowcount else None
 
-    _maybe_notify(severity, title, body or "", source or "", db_path=db_path)
+    if item_id is not None and notify:
+        maybe_notify(severity, title, body or "", source or "", db_path=db_path)
     return item_id
 
 
-def _maybe_notify(severity: str, title: str, body: str, source: str, *, db_path=None) -> None:
+def maybe_notify(severity: str, title: str, body: str, source: str, *, db_path=None) -> None:
     """Deliver via the user-approved ``notify`` reflex when severity crosses
     the threshold. Never raises; never notifies about the notifier."""
     if source == "notify":
@@ -143,23 +149,27 @@ def decide(
     proposed params — the ONLY path from proposal to execution, and it is
     human-invoked by construction.
     """
+    status = {"approve": "approved", "reject": "rejected", "acknowledge": "acknowledged"}.get(
+        decision
+    )
+    if not status:
+        raise ValueError(f"Unknown decision {decision!r}")
+
     with get_connection(db_path) as c:
         row = c.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
         if not row:
             raise ValueError(f"Inbox item {item_id} not found")
         row = dict(row)
-        if row["status"] != "open":
-            raise ValueError(f"Inbox item {item_id} is already {row['status']}")
-
-        status = {"approve": "approved", "reject": "rejected", "acknowledge": "acknowledged"}.get(
-            decision
-        )
-        if not status:
-            raise ValueError(f"Unknown decision {decision!r}")
-        c.execute(
-            "UPDATE inbox SET status = ?, decided_at = datetime('now') WHERE id = ?",
+        # Guarded transition: two concurrent decide calls must not both win —
+        # the WHERE clause claims the item atomically, and the loser gets the
+        # already-decided error instead of a second execution.
+        claimed = c.execute(
+            "UPDATE inbox SET status = ?, decided_at = datetime('now') "
+            "WHERE id = ? AND status = 'open'",
             (status, item_id),
         )
+        if claimed.rowcount == 0:
+            raise ValueError(f"Inbox item {item_id} is already {row['status']}")
 
     result: dict = {"id": item_id, "status": status, "title": row["title"]}
     if decision == "approve" and run and row["proposed_reflex_id"]:
@@ -167,8 +177,14 @@ def decide(
 
         params = json.loads(row["proposed_params"]) if row["proposed_params"] else {}
         outcome = run_reflex(row["proposed_reflex_id"], params=params, db_path=db_path)
-        with get_connection(db_path) as c:
-            c.execute("UPDATE inbox SET status = 'executed' WHERE id = ?", (item_id,))
-        result["status"] = "executed"
         result["run"] = outcome
+        # 'executed' means it RAN AND SUCCEEDED. A failed/refused/timed-out run
+        # stays 'approved' so the inbox never claims an action happened when it
+        # didn't; the outcome carries the error for the user.
+        if outcome.get("ok"):
+            with get_connection(db_path) as c:
+                c.execute("UPDATE inbox SET status = 'executed' WHERE id = ?", (item_id,))
+            result["status"] = "executed"
+        else:
+            result["run_failed"] = True
     return result

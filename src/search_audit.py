@@ -57,6 +57,29 @@ def append_search_audit(
         pass
 
 
+# One rotation generation at ~5MB keeps ROI reads bounded while preserving a
+# recent window plus one archived file of history.
+AUDIT_ROTATE_BYTES = 5 * 1024 * 1024
+
+
+def rotate_audit_log_if_needed(path: str | None = None) -> bool:
+    """Rotate the audit JSONL to ``<path>.1`` once it exceeds the size cap.
+
+    Append-only logs otherwise grow forever, and summarize_audit_log re-reads
+    the whole file per ROI report. Returns True when a rotation happened.
+    """
+    path = path or config.audit_log_path()
+    if not path:
+        return False
+    try:
+        if os.path.getsize(path) < AUDIT_ROTATE_BYTES:
+            return False
+        os.replace(path, path + ".1")
+        return True
+    except OSError:
+        return False
+
+
 def summarize_audit_log(path: str | None = None) -> dict:
     """Aggregate the search-audit JSONL into ROI-report stats.
 

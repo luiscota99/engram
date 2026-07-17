@@ -4,6 +4,22 @@ from __future__ import annotations
 
 from unittest import mock
 
+import pytest
+
+import src.mcp.protocol as _prot
+
+
+@pytest.fixture(autouse=True)
+def _reset_protocol_globals():
+    """Hermetic module-global state: an `initialize` here must not leak the
+    elicitation capability into other test files (it made every later
+    mutating-reflex test attempt a real stdin round-trip)."""
+    _prot._client_capabilities.clear()
+    _prot._pending_lines.clear()
+    yield
+    _prot._client_capabilities.clear()
+    _prot._pending_lines.clear()
+
 
 def test_tools_call_unknown_tool_returns_json_rpc_error():
     from src.mcp.protocol import handle_request

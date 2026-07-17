@@ -981,13 +981,21 @@ def handle_memory_suggest_consolidations(args: McpToolArgs) -> str:
 def _confirm_destructive(description: str) -> str | None:
     """Gate a destructive operation behind MCP elicitation when the client supports it.
 
-    Returns an abort message if the user declined, or None to proceed. Clients
-    without elicitation get the pre-gate behavior (proceed).
+    Returns an abort message if the user declined (or the confirmation
+    round-trip failed — fail closed), or None to proceed. Clients without
+    elicitation get the pre-gate behavior (proceed).
     """
     from .protocol import elicit_confirmation
 
-    if elicit_confirmation(description) is False:
-        return "Cancelled by user — no changes were made."
+    try:
+        if elicit_confirmation(description) is False:
+            return "Cancelled by user — no changes were made."
+    except Exception:  # typically ElicitationFailed — fail closed
+        return (
+            "Not run: a confirmation was requested but the elicitation "
+            "round-trip failed — no changes were made. Retry, or run the "
+            "equivalent CLI command explicitly."
+        )
     return None
 
 

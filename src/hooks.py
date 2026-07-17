@@ -165,7 +165,10 @@ def _guard_query_from_tool_input(tool_name: str, tool_input: dict) -> str:
         if isinstance(val, str) and val:
             parts.append(val[:400])
             break
-    return " ".join(parts) if parts else str(tool_input)
+    # Clip the fallback too: for tools without the known keys the whole
+    # payload lands here, and it can be hundreds of KB — all of which would
+    # hit the embedder, the FTS parser, and the audit log on every action.
+    return " ".join(parts) if parts else str(tool_input)[:400]
 
 
 def guard_from_payload(stdin_text: str, *, strict: bool = False, db_path=None) -> str:

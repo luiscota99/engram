@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -440,6 +440,9 @@ CREATE TABLE IF NOT EXISTS inbox (
     decided_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox(status);
+-- Race-proof dedup (v24): finding_key unique among OPEN items only.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_open_finding
+    ON inbox(finding_key) WHERE status = 'open' AND finding_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inbox_finding ON inbox(finding_key);
 
 -- Change journal: every mutation a reflex reports (schema v17). Scripts emit
@@ -489,6 +492,10 @@ def get_connection(db_path=None):
     conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Hooks made engram multi-process (recall + guard + checkpoint can fire
+    # near-simultaneously from several sessions); wait out writers instead of
+    # failing fast with "database is locked".
+    conn.execute("PRAGMA busy_timeout=10000")
 
     # Load vector extension if available. A load failure (e.g. macOS TCC
     # blocking the dylib after a permissions change) must degrade to
@@ -514,10 +521,12 @@ def get_connection(db_path=None):
             "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta'"
         )
         if not cursor.fetchone():
-            # Brand new database setup
+            # Brand new database setup. OR IGNORE: two processes can race the
+            # first-ever connection; the schema is IF NOT EXISTS throughout.
             conn.executescript(SCHEMA_SQL)
             conn.execute(
-                "INSERT INTO schema_meta (key, value) VALUES ('version', ?)", (str(SCHEMA_VERSION),)
+                "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('version', ?)",
+                (str(SCHEMA_VERSION),),
             )
         else:
             # Check for migrations
@@ -525,11 +534,22 @@ def get_connection(db_path=None):
             if existing:
                 current_version = int(existing["value"])
                 if current_version < SCHEMA_VERSION:
-                    # Backup before any upgrade
-                    backup_path = backup_before_migration(path, current_version + 1)
-                    if backup_path:
-                        logger.info("Pre-migration backup saved to %s", backup_path)
-                    run_migrations(conn, current_version, SCHEMA_VERSION)
+                    # Serialize migrators: concurrent hooks all reach this
+                    # branch after an upgrade; without the write lock two
+                    # processes can interleave a multi-step migration (v16's
+                    # FTS swap mid-DROP). BEGIN IMMEDIATE takes the lock, then
+                    # re-check — the loser sees the bumped version and skips.
+                    conn.execute("BEGIN IMMEDIATE")
+                    row = conn.execute(
+                        "SELECT value FROM schema_meta WHERE key='version'"
+                    ).fetchone()
+                    current_version = int(row["value"]) if row else current_version
+                    if current_version < SCHEMA_VERSION:
+                        backup_path = backup_before_migration(path, current_version + 1)
+                        if backup_path:
+                            logger.info("Pre-migration backup saved to %s", backup_path)
+                        run_migrations(conn, current_version, SCHEMA_VERSION)
+                    conn.commit()
 
         yield conn
         conn.commit()
@@ -578,13 +598,14 @@ def init_db(db_path=None):
 
 
 def ensure_tag(conn, tag_name):
-    """Get or create a tag, return its id."""
+    """Get or create a tag, return its id.
+
+    Upsert-shaped (INSERT OR IGNORE, then SELECT) so two hook processes
+    racing on the same new tag can't abort a capture with IntegrityError.
+    """
     tag_name = tag_name.strip().lower()
-    row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()
-    if row:
-        return row["id"]
-    cursor = conn.execute("INSERT INTO tags (name) VALUES (?)", (tag_name,))
-    return cursor.lastrowid
+    conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag_name,))
+    return conn.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()["id"]
 
 
 def link_tags(conn, item_type, item_id, tag_names):
@@ -813,13 +834,13 @@ def get_or_create_project(project_path, name=None, db_path=None, conn=None):
         name = os.path.basename(project_path)
 
     with connection_scope(conn, db_path) as c:
-        row = c.execute("SELECT * FROM projects WHERE path = ?", (project_path,)).fetchone()
-        if row:
-            return dict(row)
-        cursor = c.execute(
-            "INSERT INTO projects (name, path) VALUES (?, ?)", (name, project_path)
+        # Upsert-shaped for the same reason as ensure_tag: concurrent hooks
+        # from two sessions can both see "no project" and race the INSERT.
+        c.execute(
+            "INSERT OR IGNORE INTO projects (name, path) VALUES (?, ?)", (name, project_path)
         )
-        return {"id": cursor.lastrowid, "name": name, "path": project_path}
+        row = c.execute("SELECT * FROM projects WHERE path = ?", (project_path,)).fetchone()
+        return dict(row)
 
 
 def link_item_to_project(item_type, item_id, project_id, affinity="used", db_path=None):

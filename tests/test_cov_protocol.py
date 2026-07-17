@@ -245,15 +245,18 @@ def test_elicit_confirmation_declined_action_returns_false(monkeypatch):
     assert protocol.elicit_confirmation("proceed?") is False
 
 
-def test_elicit_confirmation_error_response_returns_none(monkeypatch):
+def test_elicit_confirmation_error_response_raises(monkeypatch):
+    """Round-trip failures raise (fail closed) — only 'unsupported' is None."""
     response = json.dumps({"id": "engram-elicit-1", "error": {"code": 1, "message": "no"}})
     _wire_streams(monkeypatch, response + "\n")
-    assert protocol.elicit_confirmation("proceed?") is None
+    with pytest.raises(protocol.ElicitationFailed):
+        protocol.elicit_confirmation("proceed?")
 
 
-def test_elicit_confirmation_pipe_closed_returns_none(monkeypatch):
+def test_elicit_confirmation_pipe_closed_raises(monkeypatch):
     _wire_streams(monkeypatch, "")  # EOF immediately
-    assert protocol.elicit_confirmation("proceed?") is None
+    with pytest.raises(protocol.ElicitationFailed):
+        protocol.elicit_confirmation("proceed?")
 
 
 def test_elicit_confirmation_skips_blank_and_bad_json_then_matches(monkeypatch):
@@ -291,7 +294,8 @@ def test_elicit_confirmation_write_failure_returns_none(monkeypatch):
 
     monkeypatch.setattr(protocol.sys, "stdout", _BrokenStdout())
     monkeypatch.setattr(protocol.sys, "stdin", io.StringIO(""))
-    assert protocol.elicit_confirmation("proceed?") is None
+    with pytest.raises(protocol.ElicitationFailed):
+        protocol.elicit_confirmation("proceed?")
 
 
 # --------------------------------------------------------------------------- #

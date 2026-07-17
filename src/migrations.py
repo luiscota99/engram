@@ -451,6 +451,13 @@ MIGRATIONS = {
         lambda conn: _drop_fts_triggers(conn),
         lambda conn: _repair_fts_type_drift(conn),
     ],
+    24: [
+        # Race-proof inbox dedup: "unique while open" as a partial unique
+        # index, so concurrent filers can't double-file a finding_key. Filing
+        # uses INSERT OR IGNORE against this index.
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_open_finding
+           ON inbox(finding_key) WHERE status = 'open' AND finding_key IS NOT NULL;""",
+    ],
     17: [
         lambda conn: _add_column_if_missing(conn, "reflexes", "kind", "TEXT NOT NULL DEFAULT 'action'"),
         """CREATE TABLE IF NOT EXISTS inbox (
@@ -612,6 +619,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    24: [
+        "DROP INDEX IF EXISTS idx_inbox_open_finding;",
+    ],
     23: [
         # No-op by design: the dropped triggers were a corruption source; a
         # downgrade must not resurrect them, and the dedup repair is strictly
@@ -734,14 +744,38 @@ def downgrade_to(conn, current_version: int, target_version: int) -> bool:
 
 
 def backup_before_migration(db_path: str, version: int) -> str | None:
-    """Copy the DB file to a timestamped backup before a destructive migration.
+    """Snapshot the DB to a backup file before a destructive migration.
 
-    Returns the backup path, or None if the source file doesn't exist yet.
+    Uses the SQLite backup API: under WAL, recently committed transactions
+    live in ``-wal``, so a bare file copy yields a valid-but-stale snapshot
+    that silently misses them. Falls back to a file copy only if the backup
+    API fails (better a stale backup than none). Returns the backup path, or
+    None if the source doesn't exist yet.
     """
     if not os.path.exists(db_path):
         return None
     backup_dir = os.path.join(os.path.dirname(db_path), "backups")
     os.makedirs(backup_dir, exist_ok=True)
     backup_path = os.path.join(backup_dir, f"pre-migration-v{version}.db")
-    shutil.copy2(db_path, backup_path)
+    try:
+        try:
+            import sqlean as sqlite3  # matches the connection layer's driver
+        except ImportError:
+            import sqlite3
+        # sqlean-py may lack complete stubs; runtime matches stdlib sqlite3 API.
+        src = sqlite3.connect(db_path)  # type: ignore[attr-defined]
+        try:
+            dst = sqlite3.connect(backup_path)  # type: ignore[attr-defined]
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+    except Exception:
+        logger.warning(
+            "SQLite backup API failed; falling back to file copy (may miss WAL)",
+            exc_info=True,
+        )
+        shutil.copy2(db_path, backup_path)
     return backup_path
