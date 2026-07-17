@@ -13,6 +13,7 @@ from .commands.bootstrap import (
     cmd_install,
     cmd_seed,
 )
+from .commands.brain import cmd_brain_list, cmd_brain_new, cmd_brain_path
 from .commands.codebase import (
     cmd_clean_codebase,
     cmd_graph,
@@ -224,6 +225,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_rels = sub.add_parser("relations", help="Show typed relationships touching an item (e.g. skill:3)")
     p_rels.add_argument("item", help="Item as type:id")
     p_rels.set_defaults(func=cmd_relations)
+
+    # ── Brains: per-agent scoped memory (mini brains) ───────────────
+    p_brain = sub.add_parser("brain", help="Per-agent scoped memory ('mini brains') under ~/.engram/brains")
+    brain_sub = p_brain.add_subparsers(dest="brain_action")
+    p_brain_new = brain_sub.add_parser("new", help="Create a new scoped brain")
+    p_brain_new.add_argument("name", help="Brain name (alphanumeric . _ -)")
+    p_brain_new.add_argument("--seed", action="store_true", help="Seed with the default starter memories")
+    p_brain_new.set_defaults(func=cmd_brain_new)
+    p_brain_list = brain_sub.add_parser("list", help="List brains and their memory counts")
+    p_brain_list.set_defaults(func=cmd_brain_list)
+    p_brain_path = brain_sub.add_parser("path", help="Print a brain's DB path (for ENGRAM_DB_PATH / scripting)")
+    p_brain_path.add_argument("name", help="Brain name")
+    p_brain_path.set_defaults(func=cmd_brain_path)
 
     p_cons = sub.add_parser("consolidate", help="Consolidate multiple skills into one")
     p_cons.add_argument("--delete-ids", required=True)

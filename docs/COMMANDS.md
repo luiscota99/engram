@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 61 commands.
+All commands are invoked as `engram <command>`. 62 commands.
 
 ### `engram add`
 
@@ -48,6 +48,16 @@ Bootstrap agent rules for the current project
   - `--setup-mcp`
   - `--no-mcp`
   - `--global-antigravity` — Also write/update the Engram snippet in ~/.gemini/AGENTS.md (applies in every Antigravity workspace)
+
+### `engram brain`
+
+Per-agent scoped memory ('mini brains') under ~/.engram/brains
+
+  - `<brain_action>` — one of `new, list, path`
+
+- **`engram brain list`**
+- **`engram brain new`**
+- **`engram brain path`**
 
 ### `engram browse`
 
