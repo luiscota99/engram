@@ -1702,9 +1702,13 @@ def run_self_check(db_path=None) -> dict:
 
     # 6. The monitor watching itself: a scheduled self-check that never runs is
     # a blind monitor (this very check found the cron was crashing for months).
+    # STALENESS is the signal — a TCC-protected path alone is a risk factor,
+    # not blindness; alerting "blind" minutes after a successful run was a
+    # false alarm observed live (2026-07-17). The TCC hint rides along in the
+    # body when the alert is real.
     try:
         sched = scheduler_status()
-        if sched["scheduled"] and (sched["stale"] or sched["protected_path"]):
+        if sched["scheduled"] and sched["stale"]:
             body = (
                 "A self-check is scheduled in cron but has not run successfully "
                 f"(last success: {sched['last_success'] or 'never'})."

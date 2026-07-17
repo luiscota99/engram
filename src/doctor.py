@@ -147,6 +147,45 @@ def run_diagnostics(repair=False):
         except Exception:
             pass
 
+        # 0b. Soft-FK orphans: side-table rows referencing deleted memories.
+        # delete_item cleans these since July 2026; legacy deletions left
+        # debris behind (observed live: 15 item_tags rows on first cron run).
+        from .item_registry import table_for as _tf
+        from .item_registry import usage_ranked_types as _types
+
+        _conds = " OR ".join(
+            f"(item_type = '{t}' AND item_id NOT IN (SELECT id FROM {_tf(t)}))"
+            for t in _types()
+            if _tf(t)
+        )
+        soft_sides = (
+            "item_projects", "item_pins", "skill_tests",
+            "retrieval_feedback", "memory_dynamics", "item_tags",
+        )
+        total_soft = 0
+        for side in soft_sides:
+            try:
+                n = conn.execute(f"SELECT COUNT(*) FROM {side} WHERE {_conds}").fetchone()[0]
+            except Exception:
+                continue
+            if n:
+                total_soft += n
+                if repair:
+                    conn.execute(f"DELETE FROM {side} WHERE {_conds}")
+        if total_soft:
+            issues_found += total_soft
+            if repair:
+                issues_fixed += total_soft
+                print(fmt_error(f"Found {total_soft} soft-FK orphan rows (referencing deleted memories)."))
+                print("  ✓ Repair: Deleted soft-FK orphan rows.")
+            else:
+                print(fmt_error(
+                    f"Found {total_soft} soft-FK orphan rows referencing deleted memories "
+                    "(pins/projects/tests/feedback/dynamics/tags)."
+                ))
+        else:
+            print("✓ Soft-FK: No side-table rows reference deleted memories.")
+
         # 1. Orphaned Tags
         orphans = conn.execute(
             "SELECT id, name FROM tags WHERE id NOT IN (SELECT tag_id FROM item_tags)"
