@@ -280,3 +280,51 @@ def test_recall_filters_per_hit_not_all_or_nothing(seeded):
     ctx = hooks.build_recall_context("vector norms mismatch")
     assert "vector norms" in ctx
     assert "dentist" not in ctx
+
+
+# ── injection ledger: the cost side of the ROI report ────────────────
+
+def test_recall_logs_injection_and_suppression(seeded, tmp_path, monkeypatch):
+    """The ledger, hermetically: canned search results so ordering effects in
+    the wider suite can't mask the gate/ledger behavior under test."""
+    import json as _json
+
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("ENGRAM_AUDIT_LOG", str(log))
+    canned = [{"item_type": "mistake", "item_id": 1,
+               "title": "mixed vector norms under L2", "snippet": "normalize first"}]
+    monkeypatch.setattr("src.search.search", lambda *a, **kw: canned)
+
+    # lexical overlap with the canned hit → injection with token estimate
+    ctx = hooks.build_recall_context("vector norms mismatch")
+    assert ctx
+    # no overlap → the gate suppresses; the suppression is still recorded
+    hooks.build_recall_context("thanks looks good")
+
+    recs = [_json.loads(x) for x in log.read_text().splitlines()
+            if _json.loads(x).get("source") == "recall_inject"]
+    assert len(recs) == 2
+    fired = [r for r in recs if r["kept"] > 0]
+    suppressed = [r for r in recs if r["kept"] == 0]
+    assert fired and fired[0]["tokens_est"] > 0
+    assert suppressed and suppressed[0]["tokens_est"] == 0
+
+
+def test_summarize_separates_injections_from_searches(tmp_path, monkeypatch):
+    import json as _json
+
+    from src.search_audit import summarize_audit_log
+
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("ENGRAM_AUDIT_LOG", str(log))
+    lines = [
+        {"ts": "t1", "source": "hook", "query": "q", "result_count": 3},
+        {"ts": "t2", "source": "recall_inject", "tokens_est": 120, "kept": 2},
+        {"ts": "t3", "source": "recall_inject", "tokens_est": 0, "kept": 0},
+        {"ts": "t4", "source": "guard_inject", "tokens_est": 40, "kept": 1},
+    ]
+    log.write_text("\n".join(_json.dumps(r) for r in lines))
+    s = summarize_audit_log(str(log))
+    assert s["searches"] == 1  # injection records are not searches
+    assert s["injection"]["recall"] == {"evals": 2, "injected": 1, "tokens_est_total": 120}
+    assert s["injection"]["guard"] == {"evals": 1, "injected": 1, "tokens_est_total": 40}

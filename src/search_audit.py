@@ -80,6 +80,30 @@ def rotate_audit_log_if_needed(path: str | None = None) -> bool:
         return False
 
 
+def append_injection_audit(kind: str, *, tokens_est: int, kept: int) -> None:
+    """Record one post-gate injection outcome (the COST side of the ledger).
+
+    ``kind`` is ``recall`` or ``guard``. ``kept=0, tokens_est=0`` records a
+    gate suppression — candidates existed but nothing was injected. Without
+    these records the ROI report can only see pre-gate search activity, which
+    is why its old "hit rate" was a misleading 100%.
+    """
+    path = config.audit_log_path()
+    if not path:
+        return
+    line = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "source": f"{kind}_inject",
+        "tokens_est": int(tokens_est),
+        "kept": int(kept),
+    }
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def summarize_audit_log(path: str | None = None) -> dict:
     """Aggregate the search-audit JSONL into ROI-report stats.
 
@@ -101,6 +125,12 @@ def summarize_audit_log(path: str | None = None) -> dict:
         "top_queries": [],
         "first_ts": None,
         "last_ts": None,
+        # Post-gate injection ledger: evals (gate decisions), injected
+        # (kept>0), tokens_est_total (context actually added to agents).
+        "injection": {
+            "recall": {"evals": 0, "injected": 0, "tokens_est_total": 0},
+            "guard": {"evals": 0, "injected": 0, "tokens_est_total": 0},
+        },
     }
     if not path or not os.path.isfile(path):
         return out
@@ -116,8 +146,17 @@ def summarize_audit_log(path: str | None = None) -> dict:
                     rec = json.loads(raw)
                 except ValueError:
                     continue
-                out["searches"] += 1
                 src = rec.get("source") or "unknown"
+                if src.endswith("_inject"):
+                    kind = src[: -len("_inject")]
+                    bucket = out["injection"].get(kind)
+                    if bucket is not None:
+                        bucket["evals"] += 1
+                        if (rec.get("kept") or 0) > 0:
+                            bucket["injected"] += 1
+                            bucket["tokens_est_total"] += int(rec.get("tokens_est") or 0)
+                    continue  # injection records are not searches
+                out["searches"] += 1
                 out["by_source"][src] = out["by_source"].get(src, 0) + 1
                 if (rec.get("result_count") or 0) > 0:
                     out["with_hit"] += 1

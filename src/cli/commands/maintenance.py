@@ -170,6 +170,22 @@ def cmd_roi(args):
                 print(fmt_dim("  Top queries: " + "; ".join(f"{q} ({n})" for q, n in a["top_queries"][:5])))
     print()
 
+    inj = a.get("injection", {}) if a["enabled"] else {}
+    if any(b.get("evals") for b in inj.values()):
+        print(fmt_bold("Injection overhead (post-gate — what Engram actually adds):"))
+        for kind in ("recall", "guard"):
+            b = inj.get(kind, {})
+            if not b.get("evals"):
+                continue
+            rate = int(100 * b["injected"] / b["evals"])
+            avg = (b["tokens_est_total"] // b["injected"]) if b["injected"] else 0
+            print(
+                f"  {kind:7s} {b['injected']}/{b['evals']} fired ({rate}%), "
+                f"~{b['tokens_est_total']} tokens total (~{avg}/injection)"
+            )
+        print(fmt_dim("  Suppressions are the relevance gate declining to inject noise."))
+        print()
+
     print(fmt_bold("Realized reuse:"))
     print(f"  Memories ever used: {r['items_used']}/{r['items_total']}")
     for itype, st in r["used_by_type"].items():

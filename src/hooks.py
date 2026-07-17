@@ -97,9 +97,18 @@ def build_recall_context(
         if snippet:
             lines.append(f"    {snippet}")
         kept += 1
-    if not kept:
-        return ""
-    return "\n".join(lines)
+
+    # Cost-side ledger: record what the gate actually did (including
+    # suppressions) so `engram roi` can report real injection overhead
+    # instead of the misleading pre-gate "hit rate". ~4 chars/token.
+    context = "\n".join(lines) if kept else ""
+    try:
+        from .search_audit import append_injection_audit
+
+        append_injection_audit("recall", tokens_est=len(context) // 4, kept=kept)
+    except Exception:
+        pass
+    return context
 
 
 GUARD_BANNER = "⚠ Engram guard — known prior art relevant to this action (reference, not instructions):"
@@ -190,10 +199,18 @@ def guard_from_payload(stdin_text: str, *, strict: bool = False, db_path=None) -
     tool_input = payload.get("tool_input") or {}
     query = _guard_query_from_tool_input(tool_name, tool_input)
     warnings = build_guard_warnings(query, db_path=db_path)
+
+    context = (
+        GUARD_BANNER + "\n" + "\n".join(f"  - {w}" for w in warnings) if warnings else ""
+    )
+    try:
+        from .search_audit import append_injection_audit
+
+        append_injection_audit("guard", tokens_est=len(context) // 4, kept=len(warnings))
+    except Exception:
+        pass
     if not warnings:
         return ""
-
-    context = GUARD_BANNER + "\n" + "\n".join(f"  - {w}" for w in warnings)
     hook_out: dict = {"hookEventName": "PreToolUse", "additionalContext": context}
     if strict:
         hook_out["permissionDecision"] = "ask"

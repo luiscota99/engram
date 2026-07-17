@@ -1257,11 +1257,25 @@ def get_roi_report(db_path=None) -> dict:
             "used yet — capture-heavy, reuse-light. The payoff is in reuse."
         )
     else:
-        verdict = (
-            f"{audit['searches']} searches served (hit rate "
-            f"{int((audit['hit_rate'] or 0) * 100)}%); {total_used} memories reused; "
-            f"{report['reflex_runs']} reflex runs saved ≥{report['tokens_avoided_floor']} tokens (floor)."
-        )
+        # Post-gate injection numbers when available — the pre-gate "hit
+        # rate" was a misleading 100% (nearest-neighbor always returns
+        # something; the gate is what decides whether anything is injected).
+        inj = audit.get("injection", {})
+        recall_inj = inj.get("recall", {})
+        overhead = sum(b.get("tokens_est_total", 0) for b in inj.values())
+        if recall_inj.get("evals"):
+            inject_rate = int(100 * recall_inj["injected"] / recall_inj["evals"])
+            verdict = (
+                f"{audit['searches']} searches served; recall injected on "
+                f"{inject_rate}% of prompts (~{overhead} tokens total overhead); "
+                f"{total_used} memories reused; {report['reflex_runs']} reflex runs "
+                f"saved ≥{report['tokens_avoided_floor']} tokens (floor)."
+            )
+        else:
+            verdict = (
+                f"{audit['searches']} searches served; {total_used} memories reused; "
+                f"{report['reflex_runs']} reflex runs saved ≥{report['tokens_avoided_floor']} tokens (floor)."
+            )
     report["verdict"] = verdict
     return report
 
