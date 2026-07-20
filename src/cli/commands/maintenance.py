@@ -188,6 +188,14 @@ def cmd_roi(args):
 
     print(fmt_bold("Realized reuse:"))
     print(f"  Memories ever used: {r['items_used']}/{r['items_total']}")
+    fb = r.get("feedback_by_source") or {}
+    if fb:
+        parts = [
+            f"{src}: +{st['helped']}/-{st['unhelpful']}" for src, st in sorted(fb.items())
+        ]
+        print(f"  Feedback (helped/unhelpful by source): {', '.join(parts)}")
+        if "echo" in fb:
+            print(fmt_dim("    echo = agent output cited an injected memory (automatic, weak-positive)"))
     for itype, st in r["used_by_type"].items():
         if st["total"]:
             print(f"    {itype:<14} {st['used']}/{st['total']}")

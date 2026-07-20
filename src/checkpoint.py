@@ -190,6 +190,8 @@ def checkpoint_from_stop_payload(stdin_text: str, *, db_path=None) -> None:
         )
     except Exception:
         return
+    if transcript_path:
+        detect_and_record_echoes(session_id, transcript_path, db_path=db_path)
 
 
 def record_milestone(
@@ -238,6 +240,104 @@ def record_milestone(
             (project, session_id, git_head or "", git_branch or "", summary),
         )
     return summary
+
+
+_CITATION_RE = None
+
+
+def detect_and_record_echoes(session_id: str, transcript_path: str, *, db_path=None) -> int:
+    """Injection echo: memories the hooks injected that the agent then CITED.
+
+    A citation like "[MISTAKE #26]" or "mistake #26" in the agent's visible
+    output is textual evidence the injected memory shaped the work — a free,
+    automatic helpfulness signal (case study 2026-07-17: 137 items surfaced,
+    the 11 echoed ones were exactly the load-bearing memories). Each echoed
+    (item, session) records ONE weak-positive feedback row (source='echo');
+    explicit feedback stays separable by source, and no FSRS event fires —
+    an echo is evidence of use, not a graded recall outcome.
+
+    Returns the number of new echo rows. Never raises.
+    """
+    import re
+
+    global _CITATION_RE
+    if _CITATION_RE is None:
+        _CITATION_RE = re.compile(
+            r"\b(mistake|pattern|skill|conversation|prompt)\s*#(\d+)", re.IGNORECASE
+        )
+    try:
+        from . import config
+        from .database import get_connection
+
+        audit_path = config.audit_log_path()
+        if not audit_path or not os.path.exists(audit_path) or not session_id:
+            return 0
+
+        injected: set[tuple[str, int]] = set()
+        with open(audit_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if (
+                    isinstance(rec, dict)
+                    and str(rec.get("source", "")).endswith("_inject")
+                    and rec.get("session_id") == session_id
+                ):
+                    for ref in rec.get("items") or []:
+                        injected.add((str(ref["item_type"]), int(ref["item_id"])))
+        if not injected:
+            return 0
+
+        # Assistant text from the transcript tail (bounded read, as ever).
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as f:
+            if size > TRANSCRIPT_TAIL_BYTES:
+                f.seek(size - TRANSCRIPT_TAIL_BYTES)
+                f.readline()
+            raw = f.read().decode("utf-8", errors="ignore")
+        cited: set[tuple[str, int]] = set()
+        for line in raw.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "assistant":
+                continue
+            if event.get("isSidechain") or event.get("isApiErrorMessage"):
+                continue
+            for b in event.get("message", {}).get("content", []):
+                if isinstance(b, dict) and b.get("type") == "text":
+                    for m in _CITATION_RE.finditer(b.get("text", "")):
+                        cited.add((m.group(1).lower(), int(m.group(2))))
+
+        echoes = injected & cited
+        if not echoes:
+            return 0
+        marker = f"echo:{session_id}"
+        new = 0
+        with get_connection(db_path) as conn:
+            for item_type, item_id in sorted(echoes):
+                exists = conn.execute(
+                    "SELECT 1 FROM retrieval_feedback WHERE item_type = ? AND item_id = ? "
+                    "AND source = 'echo' AND query = ?",
+                    (item_type, item_id, marker),
+                ).fetchone()
+                if exists:
+                    continue
+                conn.execute(
+                    "INSERT INTO retrieval_feedback (item_type, item_id, helpful, query, source) "
+                    "VALUES (?, ?, 1, ?, 'echo')",
+                    (item_type, item_id, marker),
+                )
+                new += 1
+        return new
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug("echo detection failed", exc_info=True)
+        return 0
 
 
 def get_checkpoints(project_path: str, *, limit: int = 3, db_path=None) -> list[dict]:

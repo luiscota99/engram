@@ -310,3 +310,76 @@ def test_bootstrap_writes_precompact_hook(tmp_path):
     settings = _json.loads((tmp_path / ".claude" / "settings.json").read_text())
     cmds = [h["command"] for g in settings["hooks"]["PreCompact"] for h in g["hooks"]]
     assert "engram hook checkpoint" in cmds
+
+
+# ── injection echo: automatic helpfulness from citations ─────────────
+
+def test_echo_detected_and_recorded_once(db, tmp_path, monkeypatch):
+    import json as _json
+
+    from src.database import get_connection
+
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("ENGRAM_AUDIT_LOG", str(audit))
+    audit.write_text(_json.dumps({
+        "source": "recall_inject", "session_id": "sess-e", "kept": 2, "tokens_est": 100,
+        "items": [{"item_type": "mistake", "item_id": 26},
+                  {"item_type": "skill", "item_id": 75}],
+    }) + "\n")
+    transcript = _write_transcript(tmp_path, [
+        _user("run the benchmark"),
+        _assistant("Per Mistake #26, pinning ENGRAM_DB_PATH to a scratch DB first."),
+        _assistant("subagent says mistake #75 too", isSidechain=True),  # never counts
+    ])
+
+    n = checkpoint.detect_and_record_echoes("sess-e", transcript, db_path=db)
+    assert n == 1  # mistake 26 cited; skill 75 only in a sidechain → no echo
+    with get_connection(db) as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT item_type, item_id, helpful, source FROM retrieval_feedback"
+        ).fetchall()]
+    assert rows == [{"item_type": "mistake", "item_id": 26, "helpful": 1, "source": "echo"}]
+
+    # idempotent per (item, session): a later turn's Stop re-scan adds nothing
+    assert checkpoint.detect_and_record_echoes("sess-e", transcript, db_path=db) == 0
+
+
+def test_echo_requires_injection_not_just_citation(db, tmp_path, monkeypatch):
+    """Citing a memory the hooks never injected is not an echo."""
+    import json as _json
+
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("ENGRAM_AUDIT_LOG", str(audit))
+    audit.write_text(_json.dumps({
+        "source": "recall_inject", "session_id": "other-session", "kept": 1,
+        "tokens_est": 50, "items": [{"item_type": "mistake", "item_id": 26}],
+    }) + "\n")
+    transcript = _write_transcript(tmp_path, [
+        _assistant("Mistake #26 applies here."),
+    ])
+    assert checkpoint.detect_and_record_echoes("sess-x", transcript, db_path=db) == 0
+
+
+def test_stop_payload_triggers_echo_pass(db, tmp_path, monkeypatch):
+    import json as _json
+
+    from src.database import get_connection
+
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("ENGRAM_AUDIT_LOG", str(audit))
+    audit.write_text(_json.dumps({
+        "source": "guard_inject", "session_id": "sess-full", "kept": 1,
+        "tokens_est": 40, "items": [{"item_type": "pattern", "item_id": 13}],
+    }) + "\n")
+    transcript = _write_transcript(tmp_path, [
+        _user("check the eval"),
+        _assistant("Pattern #13 warns about toy-benchmark confidence; noting the caveat."),
+    ])
+    checkpoint.checkpoint_from_stop_payload(_json.dumps({
+        "session_id": "sess-full", "transcript_path": transcript, "cwd": str(tmp_path),
+    }))
+    with get_connection(db) as c:
+        n = c.execute(
+            "SELECT COUNT(*) FROM retrieval_feedback WHERE source='echo' AND item_type='pattern' AND item_id=13"
+        ).fetchone()[0]
+    assert n == 1

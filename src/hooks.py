@@ -50,6 +50,7 @@ def build_recall_context(
     project_path: str | None = None,
     limit: int = DEFAULT_RECALL_LIMIT,
     db_path=None,
+    session_id: str | None = None,
 ) -> str:
     """Search memory for *prompt* and format the top hits as injectable context.
 
@@ -89,6 +90,7 @@ def build_recall_context(
 
     lines = [RECALL_BANNER, ""]
     kept = 0
+    kept_items: list[dict] = []
     for r in results:
         itype = (r.get("item_type") or "item").upper()
         title = (r.get("title") or "").strip() or "(untitled)"
@@ -103,15 +105,22 @@ def build_recall_context(
         if snippet:
             lines.append(f"    {snippet}")
         kept += 1
+        if item_id is not None:
+            kept_items.append({"item_type": r.get("item_type"), "item_id": int(item_id)})
 
     # Cost-side ledger: record what the gate actually did (including
     # suppressions) so `engram roi` can report real injection overhead
     # instead of the misleading pre-gate "hit rate". ~4 chars/token.
+    # Injected item refs + session ride along for echo detection (the
+    # helpfulness side: did the agent's later output cite what we injected?).
     context = "\n".join(lines) if kept else ""
     try:
         from .search_audit import append_injection_audit
 
-        append_injection_audit("recall", tokens_est=len(context) // 4, kept=kept)
+        append_injection_audit(
+            "recall", tokens_est=len(context) // 4, kept=kept,
+            items=kept_items, session_id=session_id,
+        )
     except Exception:
         pass
     return context
@@ -210,9 +219,21 @@ def guard_from_payload(stdin_text: str, *, strict: bool = False, db_path=None) -
         GUARD_BANNER + "\n" + "\n".join(f"  - {w}" for w in warnings) if warnings else ""
     )
     try:
+        import re as _re
+
         from .search_audit import append_injection_audit
 
-        append_injection_audit("guard", tokens_est=len(context) // 4, kept=len(warnings))
+        # Warning strings are "[MISTAKE #12] title" — recover refs for echo detection.
+        refs = [
+            {"item_type": m.group(1).lower(), "item_id": int(m.group(2))}
+            for w in warnings
+            for m in [_re.match(r"\[(\w+) #(\d+)\]", w)]
+            if m
+        ]
+        append_injection_audit(
+            "guard", tokens_est=len(context) // 4, kept=len(warnings),
+            items=refs, session_id=payload.get("session_id"),
+        )
     except Exception:
         pass
     if not warnings:
@@ -244,7 +265,10 @@ def recall_from_payload(stdin_text: str, *, db_path=None) -> str:
     prompt = payload.get("prompt") or ""
     cwd = payload.get("cwd") or None
 
-    context = build_recall_context(prompt, project_path=cwd, db_path=db_path)
+    context = build_recall_context(
+        prompt, project_path=cwd, db_path=db_path,
+        session_id=payload.get("session_id"),
+    )
     if not context:
         return ""
 

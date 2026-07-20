@@ -1234,6 +1234,24 @@ def get_roi_report(db_path=None) -> dict:
     report["items_used"] = total_used
     report["items_total"] = total_items
 
+    # Helpfulness signals, kept separable: explicit (a human/agent judged)
+    # vs echo (the agent's output cited an injected memory — automatic,
+    # weak-positive; see checkpoint.detect_and_record_echoes).
+    feedback_by_source: dict[str, dict] = {}
+    with get_connection(db_path) as conn:
+        try:
+            for row in conn.execute(
+                "SELECT source, SUM(CASE WHEN helpful=1 THEN 1 ELSE 0 END) AS helped, "
+                "SUM(CASE WHEN helpful=-1 THEN 1 ELSE 0 END) AS unhelpful "
+                "FROM retrieval_feedback GROUP BY source"
+            ).fetchall():
+                feedback_by_source[row["source"]] = {
+                    "helped": row["helped"] or 0, "unhelpful": row["unhelpful"] or 0,
+                }
+        except Exception:
+            pass
+    report["feedback_by_source"] = feedback_by_source
+
     eff = get_efficiency_report(db_path=db_path)
     report["reflexes_approved"] = eff.get("reflexes_approved", 0)
     report["reflex_runs"] = eff.get("reflex_runs", 0)

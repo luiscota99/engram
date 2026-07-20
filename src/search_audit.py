@@ -80,7 +80,14 @@ def rotate_audit_log_if_needed(path: str | None = None) -> bool:
         return False
 
 
-def append_injection_audit(kind: str, *, tokens_est: int, kept: int) -> None:
+def append_injection_audit(
+    kind: str,
+    *,
+    tokens_est: int,
+    kept: int,
+    items: list[dict] | None = None,
+    session_id: str | None = None,
+) -> None:
     """Record one post-gate injection outcome (the COST side of the ledger).
 
     ``kind`` is ``recall`` or ``guard``. ``kept=0, tokens_est=0`` records a
@@ -97,6 +104,10 @@ def append_injection_audit(kind: str, *, tokens_est: int, kept: int) -> None:
         "tokens_est": int(tokens_est),
         "kept": int(kept),
     }
+    if items:
+        line["items"] = items  # [{"item_type":..., "item_id":...}] — echo detection joins on these
+    if session_id:
+        line["session_id"] = session_id
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
