@@ -79,6 +79,7 @@ from .commands.tools import (
     cmd_benchmark,
     cmd_browse,
     cmd_guard,
+    cmd_handoff,
     cmd_hook_checkpoint,
     cmd_hook_guard,
     cmd_hook_recall,
@@ -682,6 +683,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_bench_label.add_argument("--audit", help="Audit log path (default: the configured audit log)")
     p_bench_label.add_argument("--queries", help="Label set to grow (default: evals/real_queries.json)")
     p_bench_label.set_defaults(func=cmd_bench_label)
+
+    p_handoff = sub.add_parser("handoff", help="Write a deliberate milestone handoff (featured by engram resume)")
+    p_handoff.add_argument("-m", "--message", help="The briefing: state, decisions, next steps (default: auto-compose from git)")
+    p_handoff.add_argument("--project", help="Project path (default: current directory)")
+    p_handoff.add_argument("--session", help="Session id to attach to (default: a manual marker)")
+    p_handoff.set_defaults(func=cmd_handoff)
 
     p_resume = sub.add_parser("resume", help="Where did the last session leave off? (from Stop-hook checkpoints)")
     p_resume.add_argument("--project", help="Project path (default: current directory)")

@@ -314,8 +314,11 @@ Claude Code hooks so using memory isn't left to the agent's discretion:
 - **Guard** (`PreToolUse` → `engram hook guard`) surfaces known *mistakes/patterns*
   relevant to an Edit/Write/Bash before it runs. Warn-only by default; it requires
   real lexical overlap, so unrelated actions don't trigger false warnings.
-- **Checkpoint** (`Stop` → `engram hook checkpoint`) records a crash-proof
-  "where we left off" after every agent turn; `engram resume` reads it back.
+- **Checkpoint** (`Stop` and `PreCompact` → `engram hook checkpoint`) records a
+  crash-proof "where we left off" after every agent turn and again right before
+  context compaction squashes nuance; `engram resume` reads it back. For richer
+  briefings, `engram handoff -m "state + next steps"` writes a deliberate
+  milestone that resume features above the ambient per-turn capture.
 
 Injected memories are labeled as reference data, not instructions. For the repo
 boundary, add `engram guard --staged` as a `pre-commit` hook (it reads your local

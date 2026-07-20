@@ -129,6 +129,22 @@ def cmd_hook_checkpoint(args):
     checkpoint_from_stop_payload(stdin_text)
 
 
+def cmd_handoff(args):
+    """Write a deliberate milestone handoff: engram handoff -m "state + next".
+
+    The per-turn checkpoint captures whatever the last message was; this is
+    the intentional briefing at a good stopping point. Without -m, a summary
+    is auto-composed from the git position and recent commits.
+    """
+    from ...checkpoint import record_milestone
+
+    project = getattr(args, "project", None) or os.getcwd()
+    session = getattr(args, "session", None) or f"manual-{os.getpid()}"
+    summary = record_milestone(project, session, getattr(args, "message", None))
+    print("✓ Milestone handoff recorded (engram resume will feature it):")
+    print("  " + summary.replace("\n", "\n  ")[:400])
+
+
 def cmd_resume(args):
     """Print "where we left off" for a project from its session checkpoints."""
     from ...checkpoint import build_resume_report

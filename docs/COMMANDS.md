@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 71 commands.
+All commands are invoked as `engram <command>`. 72 commands.
 
 ### `engram add`
 
@@ -174,6 +174,14 @@ Scan files or the staged diff against known mistakes/patterns (pre-commit)
   - `<files>` — Files to scan
   - `--staged` — Scan the git staged diff
   - `--strict` — Exit non-zero if any known mistake/pattern matches
+
+### `engram handoff`
+
+Write a deliberate milestone handoff (featured by engram resume)
+
+  - `-m, --message` — The briefing: state, decisions, next steps (default: auto-compose from git)
+  - `--project` — Project path (default: current directory)
+  - `--session` — Session id to attach to (default: a manual marker)
 
 ### `engram health`
 

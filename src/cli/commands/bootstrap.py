@@ -427,6 +427,13 @@ def write_claude_checkpoint_hook(project_root: str) -> tuple[bool, str]:
     return merge_claude_hook(project_root, "Stop", CHECKPOINT_HOOK_COMMAND)
 
 
+def write_claude_precompact_hook(project_root: str) -> tuple[bool, str]:
+    """Checkpoint before context compaction — the moment nuance is about to be
+    squashed is exactly when a durable handoff matters most (the practical
+    version of a "context nearly full" trigger)."""
+    return merge_claude_hook(project_root, "PreCompact", CHECKPOINT_HOOK_COMMAND)
+
+
 def cmd_bootstrap(args):
     import urllib.request as _urllib_req
 
@@ -506,6 +513,8 @@ def cmd_bootstrap(args):
         print(f"  {guard_msg}")
         _, checkpoint_msg = write_claude_checkpoint_hook(project_root)
         print(f"  {checkpoint_msg}")
+        _, precompact_msg = write_claude_precompact_hook(project_root)
+        print(f"  {precompact_msg}")
 
     # MCP config
     setup_mcp = getattr(args, "setup_mcp", None)

@@ -458,6 +458,15 @@ MIGRATIONS = {
         """CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_open_finding
            ON inbox(finding_key) WHERE status = 'open' AND finding_key IS NOT NULL;""",
     ],
+    26: [
+        # Milestone handoffs: the every-turn checkpoint captures whatever the
+        # last message happened to be; a milestone is a DELIBERATE briefing
+        # (agent- or user-written at a good stopping point, or auto-composed).
+        # Kept as columns on the same row: turn fields churn every turn,
+        # milestone fields persist until the next milestone.
+        lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_summary", "TEXT"),
+        lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_at", "TEXT"),
+    ],
     25: [
         # Per-memory forgetting curves (FSRS-4.5): stability/difficulty state
         # evolved by usage (recall@good), helped feedback (recall@easy) and
@@ -636,6 +645,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    26: [
+        # ALTER ADD COLUMN is left in place on downgrade (harmless).
+    ],
     25: [
         "DROP TABLE IF EXISTS memory_dynamics;",
     ],

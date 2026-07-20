@@ -242,3 +242,71 @@ def test_bootstrap_writes_stop_hook(tmp_path):
     # idempotent
     changed_again, _ = write_claude_checkpoint_hook(str(tmp_path))
     assert not changed_again
+
+
+# ── milestone handoffs (v26): deliberate briefings vs ambient turns ──
+
+def test_milestone_persists_across_turn_churn(db, tmp_path):
+    """A later 'Now running tests...' turn must never erase the briefing."""
+    checkpoint.record_milestone(
+        str(tmp_path), "s1", "Shipped the fitter; NEXT: label 30 queries then re-fit.",
+        db_path=db,
+    )
+    for i in range(3):  # ambient turns keep churning
+        checkpoint.upsert_checkpoint(
+            str(tmp_path), "s1",
+            last_prompt=f"turn {i}", last_summary=f"Now running step {i}...",
+            db_path=db,
+        )
+    report = checkpoint.build_resume_report(str(tmp_path), db_path=db)
+    assert "MILESTONE HANDOFF" in report
+    assert "NEXT: label 30 queries" in report
+    assert "Now running step 2..." in report  # ambient turn data still shown
+
+
+def test_milestone_auto_composes_from_git(db, tmp_path, monkeypatch):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True, env=env)
+    (repo / "f").write_text("1")
+    subprocess.run(["git", "-C", str(repo), "add", "f"], check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "the milestone commit"],
+                   check=True, capture_output=True, env=env)
+
+    summary = checkpoint.record_milestone(str(repo), "s1", None, db_path=db)
+    assert "the milestone commit" in summary
+    assert "Milestone on" in summary
+
+
+def test_cli_handoff_records_and_prints(db, tmp_path, monkeypatch):
+    import io
+    import sys
+    from types import SimpleNamespace
+
+    from src.cli.commands.tools import cmd_handoff
+
+    buf = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", buf)
+    cmd_handoff(SimpleNamespace(
+        project=str(tmp_path), session="s-cli", message="Briefing: do X next."
+    ))
+    assert "Milestone handoff recorded" in buf.getvalue()
+    cps = checkpoint.get_checkpoints(str(tmp_path), db_path=db)
+    assert cps[0]["milestone_summary"] == "Briefing: do X next."
+
+
+def test_bootstrap_writes_precompact_hook(tmp_path):
+    from src.cli.commands.bootstrap import write_claude_precompact_hook
+
+    changed, _ = write_claude_precompact_hook(str(tmp_path))
+    assert changed
+    import json as _json
+
+    settings = _json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    cmds = [h["command"] for g in settings["hooks"]["PreCompact"] for h in g["hooks"]]
+    assert "engram hook checkpoint" in cmds

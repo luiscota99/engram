@@ -192,6 +192,54 @@ def checkpoint_from_stop_payload(stdin_text: str, *, db_path=None) -> None:
         return
 
 
+def record_milestone(
+    project_path: str,
+    session_id: str,
+    summary: str | None = None,
+    *,
+    db_path=None,
+) -> str:
+    """Write a DELIBERATE handoff — richer than the ambient per-turn capture.
+
+    The every-turn checkpoint stores whatever the last message happened to be;
+    a milestone is a briefing written at a good stopping point. With no
+    summary given, one is auto-composed from the git position and recent
+    commits. Milestone fields persist until the next milestone, so a later
+    "Now running tests..." turn never overwrites the briefing.
+
+    Returns the summary that was stored.
+    """
+    from .database import get_connection
+
+    project = _normalize_project(project_path)
+    git_head, git_branch = _git_state(project)
+    if not summary:
+        recent = _git(project, "log", "--format=- %h %s", "-5")
+        summary = (
+            f"Milestone on [{git_branch or '?'}] at {git_head or '(no git)'}.\n"
+            f"Recent commits:\n{recent}" if recent else
+            f"Milestone checkpoint at {git_head or '(no git)'}."
+        )
+    summary = summary[:MAX_SUMMARY_CHARS]
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """INSERT INTO checkpoints
+                   (project_path, session_id, git_head, git_branch,
+                    milestone_summary, milestone_at, turn_count)
+               VALUES (?, ?, ?, ?, ?, datetime('now'), 0)
+               ON CONFLICT(project_path, session_id) DO UPDATE SET
+                   milestone_summary = excluded.milestone_summary,
+                   milestone_at = excluded.milestone_at,
+                   git_head = CASE WHEN excluded.git_head != ''
+                                   THEN excluded.git_head ELSE git_head END,
+                   git_branch = CASE WHEN excluded.git_branch != ''
+                                     THEN excluded.git_branch ELSE git_branch END,
+                   updated_at = datetime('now')""",
+            (project, session_id, git_head or "", git_branch or "", summary),
+        )
+    return summary
+
+
 def get_checkpoints(project_path: str, *, limit: int = 3, db_path=None) -> list[dict]:
     """Most recent checkpoints for a project, newest first."""
     from .database import get_connection
@@ -241,9 +289,13 @@ def build_resume_report(project_path: str, *, limit: int = 1, db_path=None) -> s
                 if newer:
                     lines.append(f"Commits since this checkpoint ({len(newer)}):")
                     lines.extend(f"  - {c}" for c in newer)
+        if cp.get("milestone_summary"):
+            lines.append(
+                f"\nMILESTONE HANDOFF ({cp.get('milestone_at')} UTC):\n{cp['milestone_summary']}"
+            )
         if cp["last_prompt"]:
             lines.append(f"\nLast user prompt:\n> {cp['last_prompt']}")
         if cp["last_summary"]:
-            lines.append(f"\nAgent's last reply (the handoff):\n{cp['last_summary']}")
+            lines.append(f"\nAgent's last reply:\n{cp['last_summary']}")
         parts.append("\n".join(lines))
     return f"# Resume — {project}\n\n" + "\n\n---\n\n".join(parts)

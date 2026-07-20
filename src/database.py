@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -401,6 +401,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     git_head TEXT NOT NULL DEFAULT '',
     git_branch TEXT NOT NULL DEFAULT '',
     turn_count INTEGER NOT NULL DEFAULT 0,
+    milestone_summary TEXT,                        -- deliberate handoff (v26)
+    milestone_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     UNIQUE(project_path, session_id)
