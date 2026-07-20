@@ -328,3 +328,54 @@ def test_summarize_separates_injections_from_searches(tmp_path, monkeypatch):
     assert s["searches"] == 1  # injection records are not searches
     assert s["injection"]["recall"] == {"evals": 2, "injected": 1, "tokens_est_total": 120}
     assert s["injection"]["guard"] == {"evals": 1, "injected": 1, "tokens_est_total": 40}
+
+
+# ── Unicode-aware relevance gates (Spanish and other languages) ──────
+
+def test_tokens_keep_accented_words_whole():
+    toks = hooks._tokens("Configuración del despliegue en producción")
+    assert "configuración" in toks
+    assert "despliegue" in toks
+    assert "producción" in toks
+    # the old ASCII regex produced fragments like "configuraci" — must be gone
+    assert "configuraci" not in toks
+
+
+def test_tokens_still_split_snake_case():
+    assert {"cold", "start"} <= hooks._tokens("cold_start handling")
+
+
+def test_recall_matches_accented_spanish(tmp_path, monkeypatch):
+    db = tmp_path / "es.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db))
+    monkeypatch.delenv("ENGRAM_AUDIT_LOG", raising=False)
+    from src.database import init_db
+
+    init_db(str(db))
+    _add_mistake(
+        str(db),
+        "configuración de variables de entorno rota tras el despliegue",
+        context="despliegue en producción",
+        fix="validar el .env antes de desplegar",
+    )
+    ctx = hooks.build_recall_context("problema con la configuración del despliegue")
+    assert ctx and "configuración" in ctx
+    # conversational Spanish still injects nothing
+    assert hooks.build_recall_context("si dale adelante") == ""
+
+
+def test_guard_matches_accented_spanish(tmp_path, monkeypatch):
+    db = tmp_path / "esg.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db))
+    monkeypatch.delenv("ENGRAM_AUDIT_LOG", raising=False)
+    from src.database import init_db
+
+    init_db(str(db))
+    _add_mistake(
+        str(db),
+        "migración de base de datos aplicada sin respaldo previo",
+        context="migración en producción",
+    )
+    warns = hooks.build_guard_warnings("aplicar la migración de la base de datos")
+    assert warns and "MISTAKE" in warns[0]
+    assert hooks.build_guard_warnings("listar archivos del directorio") == []

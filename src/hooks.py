@@ -32,10 +32,16 @@ DEFAULT_RECALL_LIMIT = 3
 
 
 def _tokens(text: str) -> set[str]:
-    """Meaningful lexical tokens (>=4 chars) for the relevance gates."""
+    """Meaningful lexical tokens (>=4 chars) for the relevance gates.
+
+    Unicode-aware: accented words stay whole ("configuración" is one token, not
+    "configuraci"+"n" as the old ASCII [a-z0-9] regex produced), so the gates
+    work properly for Spanish and other languages. Underscores still split, so
+    code identifiers like cold_start match the prose "cold start".
+    """
     import re
 
-    return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) >= 4}
+    return {t for t in re.findall(r"[^\W_]+", (text or "").lower()) if len(t) >= 4}
 
 
 def build_recall_context(
