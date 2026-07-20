@@ -34,14 +34,17 @@ DEFAULT_RECALL_LIMIT = 3
 def _tokens(text: str) -> set[str]:
     """Meaningful lexical tokens (>=4 chars) for the relevance gates.
 
-    Unicode-aware: accented words stay whole ("configuración" is one token, not
-    "configuraci"+"n" as the old ASCII [a-z0-9] regex produced), so the gates
-    work properly for Spanish and other languages. Underscores still split, so
-    code identifiers like cold_start match the prose "cold start".
+    Unicode-aware and accent-folded: "configuración" tokenizes whole (not the
+    "configuraci"+"n" fragments an ASCII regex produced) and folds to
+    "configuracion", so lazily-typed unaccented Spanish still matches accented
+    memories. Underscores split, so cold_start matches the prose "cold start".
     """
     import re
+    import unicodedata
 
-    return {t for t in re.findall(r"[^\W_]+", (text or "").lower()) if len(t) >= 4}
+    folded = unicodedata.normalize("NFD", (text or "").lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return {t for t in re.findall(r"[^\W_]+", folded) if len(t) >= 4}
 
 
 def build_recall_context(

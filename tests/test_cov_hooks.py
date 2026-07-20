@@ -332,13 +332,16 @@ def test_summarize_separates_injections_from_searches(tmp_path, monkeypatch):
 
 # ── Unicode-aware relevance gates (Spanish and other languages) ──────
 
-def test_tokens_keep_accented_words_whole():
+def test_tokens_keep_accented_words_whole_and_fold_accents():
     toks = hooks._tokens("Configuración del despliegue en producción")
-    assert "configuración" in toks
+    # accented words tokenize whole and fold to their unaccented form
+    assert "configuracion" in toks
     assert "despliegue" in toks
-    assert "producción" in toks
+    assert "produccion" in toks
     # the old ASCII regex produced fragments like "configuraci" — must be gone
     assert "configuraci" not in toks
+    # folding makes lazily-typed and accented spellings identical
+    assert hooks._tokens("configuración") == hooks._tokens("configuracion")
 
 
 def test_tokens_still_split_snake_case():
@@ -360,6 +363,9 @@ def test_recall_matches_accented_spanish(tmp_path, monkeypatch):
     )
     ctx = hooks.build_recall_context("problema con la configuración del despliegue")
     assert ctx and "configuración" in ctx
+    # lazily-typed (no accents) must match the accented memory via folding
+    ctx2 = hooks.build_recall_context("problema con la configuracion del despliegue")
+    assert ctx2 and "configuración" in ctx2
     # conversational Spanish still injects nothing
     assert hooks.build_recall_context("si dale adelante") == ""
 
