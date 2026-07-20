@@ -223,8 +223,12 @@ def test_recency_factor_variants():
     assert rk._recency_factor("not-a-date") == 0.5
     # tz-aware path
     assert rk._recency_factor("2026-07-13T00:00:00+00:00") <= 1.0
-    # naive path, today -> ~1.0
-    assert rk._recency_factor("2026-07-13T00:00:00") == pytest.approx(1.0, abs=0.05)
+    # naive path, today -> ~1.0. Computed at runtime: a hardcoded "today"
+    # decays as real days pass and detonates in CI first (UTC runs ahead).
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    assert rk._recency_factor(today) == pytest.approx(1.0, abs=0.05)
 
 
 def test_usage_boost():
