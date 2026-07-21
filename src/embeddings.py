@@ -440,7 +440,11 @@ def embed_text(text: str, model: str | None = None, timeout: float | None = None
             headers["Authorization"] = f"Bearer {api_key}"
     else:
         url = f"{base_url.rstrip('/')}/api/embeddings"
-        data = json.dumps({"model": active_model, "prompt": text}).encode("utf-8")
+        # keep_alive holds the model resident so the next turn's embed doesn't
+        # pay the ~8s cold reload (Engram embeds on nearly every prompt).
+        data = json.dumps(
+            {"model": active_model, "prompt": text, "keep_alive": config.ollama_keep_alive()}
+        ).encode("utf-8")
 
     import urllib.request
 
@@ -519,6 +523,7 @@ def embed_batch(texts: list[str], model: str | None = None) -> list[list[float] 
 
     headers = {"Content-Type": "application/json"}
     inputs = [prepared[i] for i in miss_idx]
+    payload: dict = {"model": active_model, "input": inputs}
     if kind == "openai":
         url = _openai_embeddings_endpoint(base_url)
         api_key = os.environ.get(EMBED_API_KEY_ENV, "").strip()
@@ -526,7 +531,8 @@ def embed_batch(texts: list[str], model: str | None = None) -> list[list[float] 
             headers["Authorization"] = f"Bearer {api_key}"
     else:
         url = f"{base_url.rstrip('/')}/api/embed"
-    data = json.dumps({"model": active_model, "input": inputs}).encode("utf-8")
+        payload["keep_alive"] = config.ollama_keep_alive()
+    data = json.dumps(payload).encode("utf-8")
 
     import urllib.request
 

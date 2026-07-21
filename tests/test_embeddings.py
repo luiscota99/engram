@@ -53,6 +53,22 @@ def test_embed_text_failure_returns_none():
     assert result is None
 
 
+def test_embed_text_ollama_request_carries_keep_alive(monkeypatch):
+    """The Ollama embed body must include keep_alive so the model stays resident
+    between turns — otherwise the next prompt pays the ~8s cold reload."""
+    monkeypatch.setenv("ENGRAM_OLLAMA_KEEP_ALIVE", "45m")
+    fake_embedding = [0.1] * emb.VEC_EMBEDDING_DIMENSION
+    mock_response = _mock_response(fake_embedding)
+
+    with patch("urllib.request.urlopen", return_value=mock_response) as mock_open:
+        emb.embed_text("keep me warm")
+
+    req = mock_open.call_args[0][0]
+    body = json.loads(req.data.decode("utf-8"))
+    assert body["keep_alive"] == "45m"
+    assert body["prompt"] == "keep me warm"
+
+
 def test_embed_text_empty_string_returns_none():
     with patch("urllib.request.urlopen") as mock_open:
         result = emb.embed_text("")

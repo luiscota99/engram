@@ -49,6 +49,19 @@ def ollama_host() -> str:
     return os.environ.get("OLLAMA_HOST", DEFAULT_OLLAMA_HOST).rstrip("/")
 
 
+def ollama_keep_alive() -> str:
+    """How long Ollama keeps the embed model resident after a request.
+
+    Engram embeds on nearly every turn (recall/guard hooks), so the default 5m
+    eviction means an idle gap forces the ~8s cold model reload on the next
+    prompt — the recurring stall behind the "intermittent" feel. A longer
+    keep-alive holds the model (~0.5GB RAM for nomic) so warm calls stay ~1s.
+    Override with ENGRAM_OLLAMA_KEEP_ALIVE (Ollama syntax: "30m", "-1" for
+    indefinite, "0" to disable and restore stock eviction).
+    """
+    return os.environ.get("ENGRAM_OLLAMA_KEEP_ALIVE", "30m").strip() or "30m"
+
+
 def llm_base_url() -> str:
     """OpenAI-compatible chat API base URL (defaults to Ollama's /v1)."""
     return os.environ.get("ENGRAM_LLM_BASE_URL", f"{ollama_host()}/v1").rstrip("/")
