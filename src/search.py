@@ -75,7 +75,9 @@ def _get_stale_rowids(conn) -> set:
         return set()
 
 
-def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None, conn=None, embed_timeout=None):
+def semantic_search(
+    query, item_type=None, tags=None, limit=10, db_path=None, conn=None, embed_timeout=None, timing_sink=None
+):
     """Search vec_memory using KNN vector search.
 
     Requires sqlite_vec extension and a running Ollama instance.
@@ -88,8 +90,19 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None, co
     recall/guard hooks, which run on every prompt) pass a small value so a cold
     or slow Ollama can't block the turn — on timeout the query embed returns
     None and the caller falls back to lexical-only, instead of stalling seconds.
+
+    ``timing_sink`` (optional dict) receives ``embed_ms`` and ``vec_search_ms``
+    so the caller can record where the semantic path spends its time. This is
+    how the ROI ledger separates embedding latency (the measured bottleneck)
+    from the vector KNN scan (near-free at current scale) — so a real vector-DB
+    limit would show up in data instead of being guessed at.
     """
+    import time
+
+    t0 = time.monotonic()
     embedding = embed_text(query, timeout=embed_timeout)
+    if timing_sink is not None:
+        timing_sink["embed_ms"] = round((time.monotonic() - t0) * 1000, 1)
     if not embedding:
         if not is_embedding_host_available():
             return [], "unavailable"
@@ -125,7 +138,10 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None, co
                 {where}
                 ORDER BY m.distance
             """
+            t_knn = time.monotonic()
             rows = conn.execute(sql, [json.dumps(embedding), limit * 2] + params).fetchall()
+            if timing_sink is not None:
+                timing_sink["vec_search_ms"] = round((time.monotonic() - t_knn) * 1000, 1)
             results = []
             for row in rows:
                 results.append({
@@ -193,9 +209,11 @@ def search(
             detected_tags = detect_query_tags(query, conn=conn)
 
         # 1. Semantic Search
+        timing: dict = {}
         if query and query.strip():
             sem_results, semantic_status = semantic_search(
-                query, item_type, filter_tags, limit=limit, conn=conn, embed_timeout=embed_timeout
+                query, item_type, filter_tags, limit=limit, conn=conn,
+                embed_timeout=embed_timeout, timing_sink=timing,
             )
             semantic_available = semantic_status == "ok"
 
@@ -402,6 +420,8 @@ def search(
             tags=list(tags) if tags else None,
             limit=limit,
             project_path=project_path,
+            embed_ms=timing.get("embed_ms"),
+            vec_search_ms=timing.get("vec_search_ms"),
         )
     return final
 

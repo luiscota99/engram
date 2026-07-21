@@ -186,6 +186,35 @@ def cmd_roi(args):
         print(fmt_dim("  Suppressions are the relevance gate declining to inject noise."))
         print()
 
+    lat = a.get("latency", {}) if a["enabled"] else {}
+    if lat.get("samples"):
+        em = lat.get("embed_ms", {})
+        vm = lat.get("vec_search_ms", {})
+        print(fmt_bold("Semantic latency (where the time goes):"))
+        print(
+            f"  embedding:      p50 {em.get('p50')}ms  p95 {em.get('p95')}ms  "
+            f"max {em.get('max')}ms"
+        )
+        print(
+            f"  vector KNN:     p50 {vm.get('p50')}ms  p95 {vm.get('p95')}ms  "
+            f"max {vm.get('max')}ms   (over {lat['samples']} samples)"
+        )
+        p50_em = em.get("p50") or 0
+        p50_vm = vm.get("p50") or 0
+        if p50_vm and p50_em:
+            ratio = p50_em / p50_vm
+            if ratio >= 5:
+                print(fmt_dim(
+                    f"  → embedding dominates ({ratio:.0f}× the KNN); the vector index is not the "
+                    "bottleneck. Latency work belongs on the embedder, not the DB."
+                ))
+            else:
+                print(fmt_dim(
+                    "  → vector KNN is now a material share of latency; if it keeps growing, "
+                    "an ANN index (or store pruning) is the lever — revisit the vector-DB choice."
+                ))
+        print()
+
     print(fmt_bold("Realized reuse:"))
     print(f"  Memories ever used: {r['items_used']}/{r['items_total']}")
     fb = r.get("feedback_by_source") or {}

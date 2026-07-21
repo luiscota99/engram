@@ -24,6 +24,8 @@ def append_search_audit(
     tags: list[str] | None,
     limit: int,
     project_path: str | None,
+    embed_ms: float | None = None,
+    vec_search_ms: float | None = None,
 ) -> None:
     path = config.audit_log_path()
     if not path:
@@ -44,6 +46,13 @@ def append_search_audit(
         "top_k": top,
         "result_count": len(results),
     }
+    # Latency split: embedding cost vs vector KNN cost. Recorded when the
+    # semantic path actually ran, so the ledger can prove which layer is the
+    # bottleneck (embed, empirically) and catch a real vector-DB limit early.
+    if embed_ms is not None:
+        line["embed_ms"] = embed_ms
+    if vec_search_ms is not None:
+        line["vec_search_ms"] = vec_search_ms
     parent = os.path.dirname(os.path.abspath(path))
     if parent:
         try:
@@ -142,11 +151,20 @@ def summarize_audit_log(path: str | None = None) -> dict:
             "recall": {"evals": 0, "injected": 0, "tokens_est_total": 0},
             "guard": {"evals": 0, "injected": 0, "tokens_est_total": 0},
         },
+        # Latency split across searches that ran the semantic path. Populated
+        # only when timing samples exist; None fields mean "not measured yet".
+        "latency": {
+            "samples": 0,
+            "embed_ms": {"p50": None, "p95": None, "max": None},
+            "vec_search_ms": {"p50": None, "p95": None, "max": None},
+        },
     }
     if not path or not os.path.isfile(path):
         return out
 
     query_counts: dict[str, int] = {}
+    embed_samples: list[float] = []
+    vec_samples: list[float] = []
     try:
         with open(path, encoding="utf-8") as f:
             for raw in f:
@@ -173,6 +191,12 @@ def summarize_audit_log(path: str | None = None) -> dict:
                     out["with_hit"] += 1
                 else:
                     out["zero_result"] += 1
+                em = rec.get("embed_ms")
+                if isinstance(em, (int, float)):
+                    embed_samples.append(float(em))
+                vm = rec.get("vec_search_ms")
+                if isinstance(vm, (int, float)):
+                    vec_samples.append(float(vm))
                 q = (rec.get("query") or "").strip()
                 if q:
                     query_counts[q] = query_counts.get(q, 0) + 1
@@ -188,4 +212,26 @@ def summarize_audit_log(path: str | None = None) -> dict:
     if out["searches"]:
         out["hit_rate"] = round(out["with_hit"] / out["searches"], 3)
     out["top_queries"] = sorted(query_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+
+    def _pct(samples: list[float], q: float) -> float | None:
+        if not samples:
+            return None
+        ordered = sorted(samples)
+        # nearest-rank percentile; exact enough for an ops signal
+        idx = min(len(ordered) - 1, max(0, int(round(q * (len(ordered) - 1)))))
+        return round(ordered[idx], 1)
+
+    out["latency"]["samples"] = len(embed_samples)
+    if embed_samples:
+        out["latency"]["embed_ms"] = {
+            "p50": _pct(embed_samples, 0.50),
+            "p95": _pct(embed_samples, 0.95),
+            "max": round(max(embed_samples), 1),
+        }
+    if vec_samples:
+        out["latency"]["vec_search_ms"] = {
+            "p50": _pct(vec_samples, 0.50),
+            "p95": _pct(vec_samples, 0.95),
+            "max": round(max(vec_samples), 1),
+        }
     return out
