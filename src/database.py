@@ -496,8 +496,15 @@ def get_db_path() -> str:
 
 
 @contextmanager
-def get_connection(db_path=None):
-    """Context manager for database connections with WAL mode and foreign keys."""
+def get_connection(db_path=None, busy_timeout_ms=10000):
+    """Context manager for database connections with WAL mode and foreign keys.
+
+    ``busy_timeout_ms`` caps how long a write waits for a competing writer
+    before SQLite raises "database is locked". The 10s default suits durable
+    writes that must land; incidental hot-path writes (e.g. usage counters on
+    recall) pass a small value so a busy DB fails soft in fractions of a second
+    instead of stalling the interactive turn.
+    """
     path = db_path or get_db_path()
     db_dir = os.path.dirname(path)
     if db_dir:
@@ -510,7 +517,7 @@ def get_connection(db_path=None):
     # Hooks made engram multi-process (recall + guard + checkpoint can fire
     # near-simultaneously from several sessions); wait out writers instead of
     # failing fast with "database is locked".
-    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
 
     # Load vector extension if available. A load failure (e.g. macOS TCC
     # blocking the dylib after a permissions change) must degrade to
@@ -798,21 +805,34 @@ def get_session_details(session_id, db_path=None):
 
 
 def record_usage(item_type, item_id, success=True, db_path=None):
-    """Increment usage count for a memory item."""
+    """Increment usage count for a memory item.
+
+    This is an incidental hot-path write: it fires when a recall/search result
+    is used, off the interactive turn's critical path. Its bookkeeping is not
+    worth blocking a prompt over, so it uses a short busy_timeout and fails soft
+    if the DB is locked by another session — a missed +1 is invisible; a stalled
+    turn is not. Returns False when the write was skipped.
+    """
     table = table_for(item_type)
     if not table:
         return False
 
-    with get_connection(db_path) as conn:
-        conn.execute(
-            f"UPDATE {table} SET usage_count = usage_count + 1, last_used_at = datetime('now') WHERE id = ?",
-            (item_id,),
-        )
-        # A use is a successful recall: grow the item's forgetting-curve
-        # stability (FSRS rating "good"). Never raises.
-        from .stability import GOOD, record_event
+    try:
+        with get_connection(db_path, busy_timeout_ms=500) as conn:
+            conn.execute(
+                f"UPDATE {table} SET usage_count = usage_count + 1, last_used_at = datetime('now') WHERE id = ?",
+                (item_id,),
+            )
+            # A use is a successful recall: grow the item's forgetting-curve
+            # stability (FSRS rating "good"). Never raises.
+            from .stability import GOOD, record_event
 
-        record_event(item_type, int(item_id), GOOD, conn=conn)
+            record_event(item_type, int(item_id), GOOD, conn=conn)
+    except sqlite3.OperationalError:  # type: ignore[attr-defined]  # sqlean stubs omit it; present at runtime
+        # "database is locked" under multi-session contention — drop the counter
+        # bump rather than stall the turn.
+        logger.debug("record_usage skipped (db busy) for %s#%s", item_type, item_id, exc_info=True)
+        return False
     return True
 
 

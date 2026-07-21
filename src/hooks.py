@@ -30,6 +30,13 @@ RECALL_BANNER = (
 # not a wall of text. Reference material, not a full search.
 DEFAULT_RECALL_LIMIT = 3
 
+# Hooks run on EVERY prompt/action, so their query-embed must never stall the
+# turn: cap it low and fall back to lexical when Ollama is cold or slow (the
+# ~8s cold-start would otherwise block the whole prompt). Interactive latency
+# beats semantic completeness here — a lexical hit now is worth more than a
+# semantic hit five seconds late.
+HOOK_EMBED_TIMEOUT = 2.0
+
 
 def _tokens(text: str) -> set[str]:
     """Meaningful lexical tokens (>=4 chars) for the relevance gates.
@@ -74,6 +81,7 @@ def build_recall_context(
             project_path=project_path,
             skip_audit=False,
             audit_source="hook",
+            embed_timeout=HOOK_EMBED_TIMEOUT,
         )
     except Exception:
         return ""
@@ -152,6 +160,7 @@ def build_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> l
             db_path=db_path,
             skip_audit=False,
             audit_source="guard",
+            embed_timeout=HOOK_EMBED_TIMEOUT,
         )
     except Exception:
         return []

@@ -75,7 +75,7 @@ def _get_stale_rowids(conn) -> set:
         return set()
 
 
-def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None, conn=None):
+def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None, conn=None, embed_timeout=None):
     """Search vec_memory using KNN vector search.
 
     Requires sqlite_vec extension and a running Ollama instance.
@@ -83,8 +83,13 @@ def semantic_search(query, item_type=None, tags=None, limit=10, db_path=None, co
         "ok"          — semantic search ran and returned results (or a valid empty set)
         "unavailable" — Ollama/embedding failed; caller should fall back to lexical-only
         "degraded"    — vec extension unavailable or query error
+
+    ``embed_timeout`` caps the query-embedding call. Interactive callers (the
+    recall/guard hooks, which run on every prompt) pass a small value so a cold
+    or slow Ollama can't block the turn — on timeout the query embed returns
+    None and the caller falls back to lexical-only, instead of stalling seconds.
     """
-    embedding = embed_text(query)
+    embedding = embed_text(query, timeout=embed_timeout)
     if not embedding:
         if not is_embedding_host_available():
             return [], "unavailable"
@@ -151,6 +156,7 @@ def search(
     audit_source="search",
     include_superseded=False,
     rank_inputs_sink: dict | None = None,
+    embed_timeout=None,
 ):
     """Hybrid Search: FTS5 lexical + KNN semantic, ranked by multi-factor utility score.
 
@@ -189,7 +195,7 @@ def search(
         # 1. Semantic Search
         if query and query.strip():
             sem_results, semantic_status = semantic_search(
-                query, item_type, filter_tags, limit=limit, conn=conn
+                query, item_type, filter_tags, limit=limit, conn=conn, embed_timeout=embed_timeout
             )
             semantic_available = semantic_status == "ok"
 

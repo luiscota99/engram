@@ -247,3 +247,35 @@ def test_signal_handlers_override_inherited_sig_ign():
     finally:
         signal.signal(signal.SIGINT, old_int)
         signal.signal(signal.SIGTERM, old_term)
+
+
+def test_parent_death_watchdog_exits_when_ppid_changes(monkeypatch):
+    """When the client dies abnormally (no stdin close, no signal), the server is
+    reparented and its ppid changes; the watchdog must self-terminate so orphans
+    can't accumulate. os._exit is the one exit that preempts a blocked main thread."""
+    import threading
+
+    from src.mcp import protocol
+
+    # First getppid() (captured as start_ppid) returns 5000; every later poll
+    # returns 6000 — the client died and we were reparented.
+    calls = {"n": 0}
+
+    def _fake_getppid():
+        calls["n"] += 1
+        return 5000 if calls["n"] == 1 else 6000
+
+    exited = threading.Event()
+    captured = {}
+
+    def _fake_exit(code):
+        captured["code"] = code
+        exited.set()
+        raise SystemExit(code)  # end the watchdog thread instead of killing pytest
+
+    monkeypatch.setattr(protocol.os, "getppid", _fake_getppid)
+    monkeypatch.setattr(protocol.os, "_exit", _fake_exit)
+
+    protocol._start_parent_death_watchdog(poll_interval=0.01)
+    assert exited.wait(timeout=2.0), "watchdog did not detect parent death"
+    assert captured["code"] == 0

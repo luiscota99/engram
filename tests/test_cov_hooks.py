@@ -269,6 +269,32 @@ def test_recall_relevant_prompt_still_injects(seeded):
     assert ctx and "MISTAKE" in ctx
 
 
+def test_recall_hook_caps_embed_timeout(seeded, monkeypatch):
+    # The recall hook fires on every prompt; its query embed must be capped so a
+    # cold embedder falls back to lexical instead of stalling the turn.
+    captured = {}
+
+    def _fake_search(*args, **kwargs):
+        captured["embed_timeout"] = kwargs.get("embed_timeout")
+        return []
+
+    monkeypatch.setattr("src.search.search", _fake_search)
+    hooks.build_recall_context("mixed vector norms again")
+    assert captured["embed_timeout"] == hooks.HOOK_EMBED_TIMEOUT
+
+
+def test_guard_hook_caps_embed_timeout(guarded, monkeypatch):
+    captured = {}
+
+    def _fake_search(*args, **kwargs):
+        captured["embed_timeout"] = kwargs.get("embed_timeout")
+        return []
+
+    monkeypatch.setattr("src.search.search", _fake_search)
+    hooks.build_guard_warnings("rm -rf vector norms")
+    assert captured["embed_timeout"] == hooks.HOOK_EMBED_TIMEOUT
+
+
 def test_recall_payload_conversational_returns_empty(seeded):
     payload = json.dumps({"prompt": "done", "cwd": None})
     assert hooks.recall_from_payload(payload) == ""

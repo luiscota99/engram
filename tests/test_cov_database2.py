@@ -192,6 +192,37 @@ def test_record_usage_unknown_type_returns_false(test_db):
     assert record_usage("bogus", 1, db_path=test_db["path"]) is False
 
 
+def test_record_usage_fails_soft_when_db_locked(test_db):
+    """An incidental counter bump must never block the turn: under a held write
+    lock it returns False (short busy_timeout) instead of stalling ~10s."""
+    import time
+
+    conn = test_db["conn"]
+    sid = _seed_skill(conn)
+    conn.commit()
+
+    # Hold the write lock from a competing connection so record_usage's UPDATE
+    # can't acquire it and hits its 500ms busy_timeout.
+    holder = db.sqlite3.connect(test_db["path"])
+    try:
+        holder.execute("PRAGMA journal_mode=WAL")
+        holder.execute("BEGIN IMMEDIATE")
+        holder.execute(
+            "UPDATE skills SET usage_count = usage_count + 1 WHERE id = ?", (sid,)
+        )
+
+        start = time.monotonic()
+        result = record_usage("skill", sid, db_path=test_db["path"])
+        elapsed = time.monotonic() - start
+    finally:
+        holder.rollback()
+        holder.close()
+
+    assert result is False
+    # Well under the 10s default; the short busy_timeout is what makes it soft.
+    assert elapsed < 5.0
+
+
 # --------------------------------------------------------- _resolve_git_root
 
 def test_resolve_git_root_uses_git_toplevel(monkeypatch):

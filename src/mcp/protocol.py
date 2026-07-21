@@ -218,9 +218,53 @@ def _install_signal_handlers() -> None:
         logger.debug("could not install signal handlers", exc_info=True)
 
 
+def _start_parent_death_watchdog(poll_interval: float = 2.0) -> None:
+    """Self-terminate if the parent (the MCP client) dies without closing stdin.
+
+    stdin EOF is the portable graceful-shutdown signal and the read loop honors
+    it; SIGINT/SIGTERM cover the client's ordered teardown. Neither fires when
+    the client dies *abnormally* — SIGKILL, a closed terminal, system sleep: no
+    stdin close, no signal. The server then blocks in ``readline`` forever and
+    is reparented to init/launchd, accumulating as an orphan that holds a DB
+    connection (the root cause behind the "intermittent MCP" reports).
+
+    A daemon thread polls ``os.getppid()``; on POSIX an orphaned child reparents
+    so its ppid becomes 1 (or another subreaper). When that happens the thread
+    calls ``os._exit`` — the one exit that preempts the main thread even while
+    it is stuck in a non-interruptible C call (SQLite/Ollama), which a signal or
+    ``SystemExit`` cannot. Portable across macOS and Linux (no ``PR_SET_PDEATHSIG``,
+    which is Linux-only).
+    """
+    if not hasattr(os, "getppid"):  # non-POSIX; nothing to watch
+        return
+
+    start_ppid = os.getppid()
+
+    def _watch() -> None:
+        import time
+
+        while True:
+            time.sleep(poll_interval)
+            ppid = os.getppid()
+            if ppid != start_ppid or ppid == 1:
+                logger.info(
+                    "Engram MCP parent gone (ppid %s→%s); exiting orphan (pid=%s)",
+                    start_ppid,
+                    ppid,
+                    os.getpid(),
+                )
+                sys.stderr.flush()
+                os._exit(0)
+
+    import threading
+
+    threading.Thread(target=_watch, name="engram-parent-watchdog", daemon=True).start()
+
+
 def run_stdio_server():
     """Run the MCP server over stdio (stdin/stdout)."""
     _install_signal_handlers()
+    _start_parent_death_watchdog()
     init_db()
     logger.info("Engram MCP server started (pid=%s)", os.getpid())
 
