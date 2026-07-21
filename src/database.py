@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -375,6 +375,13 @@ CREATE INDEX IF NOT EXISTS idx_skill_tests_item ON skill_tests(item_type, item_i
 
 -- Typed relationships between memory items (schema v20). Small closed vocabulary
 -- of edge types; source = manual | merge (auto-derived).
+--
+-- Bi-temporal (v27): two independent time axes so "what was true when" is answerable.
+--   event-time:      valid_from / valid_to  — when the fact HELD in the world
+--   ingestion-time:  recorded_at / invalidated_at — when Engram learned / retired it
+-- `status` (active | invalidated) is the fast filter; the timestamps carry the history.
+-- `actor` (who asserted) + `provenance` (manual | merge | system — always CODE-set,
+-- never model-set) are an anti-poisoning layer on the write side.
 CREATE TABLE IF NOT EXISTS memory_relations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_type TEXT NOT NULL,
@@ -383,11 +390,19 @@ CREATE TABLE IF NOT EXISTS memory_relations (
     to_id INTEGER NOT NULL,
     relation TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'manual',
+    status TEXT NOT NULL DEFAULT 'active',
+    actor TEXT,
+    provenance TEXT NOT NULL DEFAULT 'manual',
+    valid_from TEXT,
+    valid_to TEXT,
+    recorded_at TEXT DEFAULT (datetime('now')),
+    invalidated_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE(from_type, from_id, to_type, to_id, relation)
 );
 CREATE INDEX IF NOT EXISTS idx_relations_from ON memory_relations(from_type, from_id);
 CREATE INDEX IF NOT EXISTS idx_relations_to ON memory_relations(to_type, to_id);
+CREATE INDEX IF NOT EXISTS idx_relations_status ON memory_relations(status);
 
 -- Crash-proof session checkpoints (schema v21) — one row per (project, session),
 -- upserted by the Stop hook every agent turn. Operational state, not a memory

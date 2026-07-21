@@ -54,6 +54,19 @@ def _title_for(conn, item_type: str, item_id: int) -> str | None:
     return row["label"] if row else None
 
 
+# Relations that are single-valued on the `from` side: asserting a new one
+# retires any prior active edge of the same (from, relation) pointing elsewhere.
+# None of the closed vocabulary qualifies by default — notably `supersedes` is
+# one-to-MANY here (consolidation merges a cluster: one keeper supersedes every
+# loser, and all those edges are simultaneously true). Callers that genuinely
+# want replace-on-change opt in per call via functional=True.
+FUNCTIONAL_RELATIONS: set[str] = set()
+
+# Provenance is CODE-set, never model-set (anti-poisoning): the write path decides
+# it, not the content being stored.
+PROVENANCE_KINDS = {"manual", "merge", "system"}
+
+
 def add_relation(
     from_type: str,
     from_id: int,
@@ -62,14 +75,22 @@ def add_relation(
     relation: str,
     *,
     source: str = "manual",
+    actor: str | None = None,
+    provenance: str = "manual",
+    valid_from: str | None = None,
+    functional: bool = False,
     db_path=None,
     validate_exists: bool = True,
 ) -> str | None:
-    """Create a typed edge. Returns an error string, or None on success.
+    """Create (or re-activate) a typed edge. Returns an error string, or None.
 
-    Idempotent (the UNIQUE constraint means re-linking is a no-op). ``source``
-    tags manual vs auto-derived edges. With ``validate_exists`` both endpoints
-    must be real items.
+    Race-safe by CAS: a single UPSERT against the UNIQUE(edge) constraint, so
+    concurrent writers never double-insert and re-asserting an invalidated edge
+    re-activates it (no check-then-act). ``actor`` records who asserted it and
+    ``provenance`` (manual|merge|system) how it was learned — both code-set, an
+    anti-poisoning layer. ``valid_from`` is the event-time the fact began.
+    ``functional`` (or a relation in FUNCTIONAL_RELATIONS) retires any prior
+    active edge of the same (from, relation) pointing elsewhere (supersede-on-change).
     """
     if relation not in RELATION_TYPES:
         return f"Unknown relation '{relation}'. Choose from: {', '.join(sorted(RELATION_TYPES))}."
@@ -77,6 +98,8 @@ def add_relation(
         return f"Item types must be one of: {', '.join(sorted(_ITEM_TABLES))}."
     if (from_type, from_id) == (to_type, to_id):
         return "An item cannot relate to itself."
+    if provenance not in PROVENANCE_KINDS:
+        return f"Unknown provenance '{provenance}'. Choose from: {', '.join(sorted(PROVENANCE_KINDS))}."
 
     with get_connection(db_path) as conn:
         if validate_exists:
@@ -84,26 +107,86 @@ def add_relation(
                 return f"No {from_type} with id {from_id}."
             if _title_for(conn, to_type, to_id) is None:
                 return f"No {to_type} with id {to_id}."
+        if functional or relation in FUNCTIONAL_RELATIONS:
+            conn.execute(
+                "UPDATE memory_relations SET status='invalidated', "
+                "invalidated_at=datetime('now'), valid_to=COALESCE(valid_to, datetime('now')) "
+                "WHERE from_type=? AND from_id=? AND relation=? AND status='active' "
+                "AND NOT (to_type=? AND to_id=?)",
+                (from_type, from_id, relation, to_type, to_id),
+            )
         conn.execute(
-            "INSERT OR IGNORE INTO memory_relations "
-            "(from_type, from_id, to_type, to_id, relation, source) VALUES (?, ?, ?, ?, ?, ?)",
-            (from_type, from_id, to_type, to_id, relation, source),
+            "INSERT INTO memory_relations "
+            "(from_type, from_id, to_type, to_id, relation, source, actor, provenance, valid_from, recorded_at, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 'active') "
+            "ON CONFLICT(from_type, from_id, to_type, to_id, relation) DO UPDATE SET "
+            "status='active', invalidated_at=NULL, valid_to=NULL, recorded_at=datetime('now'), "
+            "actor=excluded.actor, provenance=excluded.provenance, valid_from=excluded.valid_from, "
+            "source=excluded.source",
+            (from_type, from_id, to_type, to_id, relation, source, actor, provenance, valid_from),
         )
     return None
 
 
-def get_relations(item_type: str, item_id: int, db_path=None) -> list[dict]:
+def invalidate_relation(
+    from_type: str, from_id: int, to_type: str, to_id: int, relation: str, db_path=None
+) -> bool:
+    """Retire an active edge (bi-temporal close): status=invalidated, stamp
+    invalidated_at and valid_to. Keeps the row for "what was true when" queries.
+    Returns True if an active edge was retired."""
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE memory_relations SET status='invalidated', "
+            "invalidated_at=datetime('now'), valid_to=COALESCE(valid_to, datetime('now')) "
+            "WHERE from_type=? AND from_id=? AND to_type=? AND to_id=? AND relation=? AND status='active'",
+            (from_type, from_id, to_type, to_id, relation),
+        )
+        return cur.rowcount > 0
+
+
+def _asof_clause(as_of: str | None, include_invalidated: bool) -> tuple[str, list]:
+    """SQL predicate (+params) selecting edges visible under the temporal filter.
+
+    - as_of set: bi-temporal point query over all 4 axes (edge recorded by then,
+      not yet retired, and its event-time window covers `as_of`).
+    - as_of None: active edges only, unless include_invalidated.
+    """
+    if as_of is not None:
+        return (
+            " AND recorded_at <= ? AND (invalidated_at IS NULL OR invalidated_at > ?)"
+            " AND (valid_from IS NULL OR valid_from <= ?)"
+            " AND (valid_to IS NULL OR valid_to > ?)",
+            [as_of, as_of, as_of, as_of],
+        )
+    if include_invalidated:
+        return ("", [])
+    return (" AND status = 'active'", [])
+
+
+def get_relations(
+    item_type: str,
+    item_id: int,
+    db_path=None,
+    *,
+    as_of: str | None = None,
+    include_invalidated: bool = False,
+) -> list[dict]:
     """All edges touching an item, each with the other endpoint's title.
 
-    Returns dicts: ``{direction: 'out'|'in', relation, other_type, other_id,
-    other_title, source}``. Outgoing first, then incoming.
+    Returns dicts: ``{direction, relation, other_type, other_id, other_title,
+    source, status, actor, provenance, valid_from, valid_to}``. Outgoing first.
+    By default only ``active`` edges; pass ``as_of`` for a "what was true when"
+    point query, or ``include_invalidated`` for the full history.
     """
+    filt, fparams = _asof_clause(as_of, include_invalidated)
     out: list[dict] = []
+    cols = ("relation, source, status, actor, provenance, "
+            "valid_from, valid_to, recorded_at, invalidated_at")
     with get_connection(db_path) as conn:
         for row in conn.execute(
-            "SELECT to_type, to_id, relation, source FROM memory_relations "
-            "WHERE from_type = ? AND from_id = ? ORDER BY relation",
-            (item_type, item_id),
+            f"SELECT to_type, to_id, {cols} FROM memory_relations "
+            f"WHERE from_type = ? AND from_id = ?{filt} ORDER BY relation",
+            (item_type, item_id, *fparams),
         ).fetchall():
             out.append({
                 "direction": "out",
@@ -112,11 +195,18 @@ def get_relations(item_type: str, item_id: int, db_path=None) -> list[dict]:
                 "other_id": row["to_id"],
                 "other_title": _title_for(conn, row["to_type"], row["to_id"]),
                 "source": row["source"],
+                "status": row["status"],
+                "actor": row["actor"],
+                "provenance": row["provenance"],
+                "valid_from": row["valid_from"],
+                "valid_to": row["valid_to"],
+                "recorded_at": row["recorded_at"],
+                "invalidated_at": row["invalidated_at"],
             })
         for row in conn.execute(
-            "SELECT from_type, from_id, relation, source FROM memory_relations "
-            "WHERE to_type = ? AND to_id = ? ORDER BY relation",
-            (item_type, item_id),
+            f"SELECT from_type, from_id, {cols} FROM memory_relations "
+            f"WHERE to_type = ? AND to_id = ?{filt} ORDER BY relation",
+            (item_type, item_id, *fparams),
         ).fetchall():
             out.append({
                 "direction": "in",
@@ -125,6 +215,13 @@ def get_relations(item_type: str, item_id: int, db_path=None) -> list[dict]:
                 "other_id": row["from_id"],
                 "other_title": _title_for(conn, row["from_type"], row["from_id"]),
                 "source": row["source"],
+                "status": row["status"],
+                "actor": row["actor"],
+                "provenance": row["provenance"],
+                "valid_from": row["valid_from"],
+                "valid_to": row["valid_to"],
+                "recorded_at": row["recorded_at"],
+                "invalidated_at": row["invalidated_at"],
             })
     return out
 

@@ -467,6 +467,23 @@ MIGRATIONS = {
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_summary", "TEXT"),
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_at", "TEXT"),
     ],
+    27: [
+        # Bi-temporal + provenance edges. Two time axes (event-time
+        # valid_from/valid_to, ingestion-time recorded_at/invalidated_at) +
+        # status, plus code-set actor/provenance for anti-poisoning. Additive
+        # columns — existing edges become active, recorded_at backfilled from
+        # created_at, provenance derived from source.
+        lambda conn: _add_column_if_missing(conn, "memory_relations", "status", "TEXT NOT NULL DEFAULT 'active'"),
+        lambda conn: _add_column_if_missing(conn, "memory_relations", "actor", "TEXT"),
+        lambda conn: _add_column_if_missing(conn, "memory_relations", "provenance", "TEXT NOT NULL DEFAULT 'manual'"),
+        lambda conn: _add_column_if_missing(conn, "memory_relations", "valid_from", "TEXT"),
+        lambda conn: _add_column_if_missing(conn, "memory_relations", "valid_to", "TEXT"),
+        lambda conn: _add_column_if_missing(conn, "memory_relations", "recorded_at", "TEXT"),
+        lambda conn: _add_column_if_missing(conn, "memory_relations", "invalidated_at", "TEXT"),
+        "UPDATE memory_relations SET recorded_at = created_at WHERE recorded_at IS NULL",
+        "UPDATE memory_relations SET provenance = 'merge' WHERE source = 'merge' AND provenance = 'manual'",
+        "CREATE INDEX IF NOT EXISTS idx_relations_status ON memory_relations(status)",
+    ],
     25: [
         # Per-memory forgetting curves (FSRS-4.5): stability/difficulty state
         # evolved by usage (recall@good), helped feedback (recall@easy) and
@@ -645,6 +662,11 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    27: [
+        # ALTER ADD COLUMN steps are left in place (SQLite can't drop columns
+        # pre-3.35, and the extra edge columns are harmless to older code).
+        "DROP INDEX IF EXISTS idx_relations_status;",
+    ],
     26: [
         # ALTER ADD COLUMN is left in place on downgrade (harmless).
     ],
