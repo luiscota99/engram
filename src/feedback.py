@@ -38,9 +38,14 @@ def add_feedback(
     helpful: bool,
     query: str = "",
     source: str = "manual",
+    idempotency_key: str | None = None,
     db_path=None,
 ) -> bool:
-    """Record one feedback event. Returns False for an unknown type/id."""
+    """Record one feedback event. Returns False for an unknown type/id.
+
+    ``idempotency_key`` (optional) makes hook/MCP retries safe: duplicate keys
+    are ignored (UNIQUE partial index, schema v27).
+    """
     from .database import get_connection, get_item
 
     if item_type not in VALID_ITEM_TYPES:
@@ -48,11 +53,35 @@ def add_feedback(
     if get_item(item_type, item_id, db_path=db_path) is None:
         return False
     with get_connection(db_path) as conn:
-        conn.execute(
-            """INSERT INTO retrieval_feedback (item_type, item_id, helpful, query, source)
-               VALUES (?, ?, ?, ?, ?)""",
-            (item_type, int(item_id), 1 if helpful else -1, (query or "")[:500], source),
-        )
+        try:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO retrieval_feedback
+                   (item_type, item_id, helpful, query, source, idempotency_key)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    item_type,
+                    int(item_id),
+                    1 if helpful else -1,
+                    (query or "")[:500],
+                    source,
+                    idempotency_key,
+                ),
+            )
+        except Exception:
+            # Older DBs mid-migration without the column: fall back.
+            cur = conn.execute(
+                """INSERT INTO retrieval_feedback (item_type, item_id, helpful, query, source)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    item_type,
+                    int(item_id),
+                    1 if helpful else -1,
+                    (query or "")[:500],
+                    source,
+                ),
+            )
+        if cur.rowcount == 0:
+            return True  # idempotent replay
         # Feedback also drives the item's forgetting curve: helped is a
         # strong recall (FSRS "easy"), unhelpful is a lapse — and a lapse
         # can only ever shrink stability, never grow it.

@@ -143,44 +143,61 @@ GUARD_BANNER = "⚠ Engram guard — known prior art relevant to this action (re
 def build_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> list[str]:
     """Return short warnings for known *mistakes/patterns* relevant to an action.
 
-    Used both by the PreToolUse hook (per-action, level 3) and ``engram guard``
-    (per-commit, level 4). Only mistakes and patterns count — a matching skill is
-    encouragement, not a caution. Empty list when nothing relevant or on error.
+    Hot path: deterministic trigger n-gram probe (no embeddings). Falls back to
+    hybrid search only when ``ENGRAM_GUARD_FALLBACK=hybrid``.
     """
     action_text = (action_text or "").strip()
     if not action_text:
         return []
+
+    import os
+
+    from .trigger_index import enrich_trigger_hits, probe_triggers
+
+    try:
+        hits = enrich_trigger_hits(probe_triggers(action_text, limit=limit, db_path=db_path), db_path=db_path)
+    except Exception:
+        hits = []
+
+    warnings: list[str] = []
+    for h in hits:
+        warnings.append(f"[{h['item_type'].upper()} #{h.get('item_id')}] {h.get('title')}")
+        if len(warnings) >= limit:
+            return warnings
+
+    if os.environ.get("ENGRAM_GUARD_FALLBACK", "off").lower() not in ("hybrid", "1", "true", "on"):
+        return warnings
 
     from .search import search
 
     try:
         results = search(
             action_text,
-            limit=max(limit * 3, 6),  # over-fetch, then keep only cautionary types
+            limit=max(limit * 3, 6),
             db_path=db_path,
             skip_audit=False,
             audit_source="guard",
             embed_timeout=HOOK_EMBED_TIMEOUT,
         )
     except Exception:
-        return []
+        return warnings
 
-    # A guard warns "you may be repeating a mistake" — a false positive is worse
-    # than a miss, so require real LEXICAL overlap (shared terms, module-level
-    # _tokens), not mere semantic proximity. Otherwise every unrelated action
-    # ("ls -la") would match the nearest neighbor.
     query_tokens = _tokens(action_text)
     if not query_tokens:
-        return []
+        return warnings
 
-    warnings: list[str] = []
+    seen = {w.split("]")[0] for w in warnings}
     for r in results:
         if r.get("item_type") not in ("mistake", "pattern"):
             continue
         title = (r.get("title") or "").strip() or "(untitled)"
         if not (query_tokens & _tokens(f"{title} {r.get('snippet') or ''}")):
             continue
-        warnings.append(f"[{r['item_type'].upper()} #{r.get('item_id')}] {title}")
+        label = f"[{r['item_type'].upper()} #{r.get('item_id')}] {title}"
+        key = label.split("]")[0]
+        if key in seen:
+            continue
+        warnings.append(label)
         if len(warnings) >= limit:
             break
     return warnings

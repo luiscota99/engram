@@ -164,15 +164,18 @@ def search(
     query,
     item_type=None,
     tags=None,
-    limit=20,
-    project_path=None,
+    limit=10,
     db_path=None,
+    project_path=None,
     *,
     skip_audit=False,
     audit_source="search",
     include_superseded=False,
     rank_inputs_sink: dict | None = None,
     embed_timeout=None,
+    as_of: str | None = None,
+    explain: bool = False,
+    token_budget: int | None = None,
 ):
     """Hybrid Search: FTS5 lexical + KNN semantic, ranked by multi-factor utility score.
 
@@ -181,16 +184,9 @@ def search(
     ``"degraded"``) so callers can surface degradation warnings without checking embeddings
     separately.
 
-    **Tag handling:** auto-detected tags (from the query string) are used only in
-    ranking to **boost** matches (see ``src/ranking.py``). Only tags passed
-    explicitly by the caller (e.g. CLI ``--tags``) are applied as **SQL
-    filters** on semantic + FTS paths; auto tags are *not* AND'd into
-    ``tags MATCH`` (that was overly strict and returned empty result sets when
-    multiple weak signals fired).
-
-    **Audit:** If ``ENGRAM_AUDIT_LOG`` is set and ``skip_audit`` is False, appends one JSON
-    line per call (see ``src/search_audit.py``). Use ``skip_audit=True`` for internal
-    or bulk calls (e.g. benchmarks, duplicate checks).
+    ``as_of`` (ISO date): drop items invalidated on or before that date via ``memory_facts``.
+    ``explain``: attach ``score_breakdown`` dicts to each result.
+    ``token_budget``: soft cap on total injected chars (~4 chars/token) across snippets.
     """
     results: list[dict] = []
     semantic_status = "ok"
@@ -199,17 +195,14 @@ def search(
     filter_tags = list(tags) if tags else []
     sem_results: list[dict] = []
     lex_results: list[dict] = []
+    graph_results: list[dict] = []
+    timing: dict = {}
 
-    # One connection serves the whole search: tag detection, semantic KNN,
-    # lexical FTS, usage batch, affinities, and pinned items.
     with get_connection(db_path) as conn:
-        # 0. Auto-detect tags for score boosting only; optional caller tags filter results
         detected_tags: list[str] = []
         if query and query.strip():
             detected_tags = detect_query_tags(query, conn=conn)
 
-        # 1. Semantic Search
-        timing: dict = {}
         if query and query.strip():
             sem_results, semantic_status = semantic_search(
                 query, item_type, filter_tags, limit=limit, conn=conn,
@@ -217,7 +210,6 @@ def search(
             )
             semantic_available = semantic_status == "ok"
 
-        # 2. Lexical FTS5 Search
         conditions = []
         params = []
         if item_type:
@@ -270,18 +262,82 @@ def search(
 
         stale_rowids = _get_stale_rowids(conn)
 
-        # 2b. Hybrid merge — RRF fusion order, semantic row wins on duplicate key
+        seed_for_graph = (sem_results[:5] + lex_results[:5])
+        seen_graph: set[str] = set()
+        try:
+            for seed in seed_for_graph:
+                rel_rows = conn.execute(
+                    """SELECT to_type AS other_type, to_id AS other_id, relation
+                       FROM memory_relations
+                       WHERE from_type = ? AND from_id = ? AND relation != 'not_related'
+                       UNION ALL
+                       SELECT from_type, from_id, relation
+                       FROM memory_relations
+                       WHERE to_type = ? AND to_id = ? AND relation != 'not_related'
+                       LIMIT 12""",
+                    (
+                        seed["item_type"],
+                        int(seed["item_id"]),
+                        seed["item_type"],
+                        int(seed["item_id"]),
+                    ),
+                ).fetchall()
+                for rel in rel_rows:
+                    ot, oid = rel["other_type"], int(rel["other_id"])
+                    gk = f"{ot}-{oid}"
+                    if gk in seen_graph:
+                        continue
+                    seen_graph.add(gk)
+                    frow = conn.execute(
+                        "SELECT item_type, item_id, title, content as snippet, tags, "
+                        "rowid as fts_rowid FROM memory_fts "
+                        "WHERE item_type = ? AND item_id = ?",
+                        (ot, str(oid)),
+                    ).fetchone()
+                    if not frow:
+                        continue
+                    if item_type and frow["item_type"] != item_type:
+                        continue
+                    graph_results.append({
+                        "item_type": frow["item_type"],
+                        "item_id": frow["item_id"],
+                        "title": frow["title"],
+                        "snippet": frow["snippet"] or "",
+                        "tags": frow["tags"],
+                        "rank": 0,
+                        "rowid": frow["fts_rowid"],
+                        "is_semantic": False,
+                        "via_graph": rel["relation"],
+                    })
+                    if len(graph_results) >= limit:
+                        break
+                if len(graph_results) >= limit:
+                    break
+        except Exception:
+            logger.debug("graph-hop channel skipped", exc_info=True)
+            graph_results = []
+
         rrf_scores = reciprocal_rank_scores(sem_results, lex_results)
+        if graph_results:
+            for rank, r in enumerate(graph_results, start=1):
+                key = result_key(r)
+                rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (60 + rank)
+            if rrf_scores:
+                m = max(rrf_scores.values()) or 1.0
+                rrf_scores = {k: v / m for k, v in rrf_scores.items()}
+
         sem_map = {result_key(r): r for r in sem_results}
         lex_map = {result_key(r): r for r in lex_results}
+        graph_map = {result_key(r): r for r in graph_results}
         ordered_keys = sorted(rrf_scores.keys(), key=lambda kk: rrf_scores[kk], reverse=True)
         for kk in ordered_keys:
             if kk in sem_map:
                 results.append(sem_map[kk])
-            else:
+            elif kk in lex_map:
                 results.append(lex_map[kk])
+            elif kk in graph_map:
+                results.append(graph_map[kk])
 
-        # 3. Batch-fetch usage_count, last_used_at, and item date per type
         usage_counts = {}
         last_used_map = {}
         item_dates = {}
@@ -290,25 +346,22 @@ def search(
             table = table_for(itype)
             if not table:
                 continue
-            # mistakes/conversations/sessions carry a semantic date; others use created_at
             date_col = "date" if itype in ("mistake", "conversation", "session") else "created_at"
             ids = [int(r["item_id"]) for r in results if r["item_type"] == itype]
             if ids:
                 placeholders = ",".join("?" * len(ids))
-                rows = conn.execute(
+                brows = conn.execute(
                     f"SELECT id, usage_count, last_used_at, "
                     f"COALESCE({date_col}, created_at) as item_date "
                     f"FROM {table} WHERE id IN ({placeholders})",
                     ids,
                 ).fetchall()
-                for row in rows:
+                for row in brows:
                     key = (itype, row["id"])
                     usage_counts[key] = row["usage_count"] or 0
                     last_used_map[key] = row["last_used_at"]
                     item_dates[key] = row["item_date"]
 
-        # 3b. Batch-fetch explicit retrieval feedback — one query for ALL types
-        # (single shared table, so no per-type participation drift).
         from .feedback import feedback_totals
 
         candidate_keys = [(r["item_type"], int(r["item_id"])) for r in results]
@@ -318,8 +371,6 @@ def search(
             logger.exception("feedback totals fetch failed; ranking without feedback")
             feedback_map = {}
 
-        # 3c. Batch-fetch per-item forgetting-curve stability (FSRS, v25).
-        # Absent items keep the fixed-half-life behavior.
         from .stability import stability_map as fetch_stability
 
         try:
@@ -328,7 +379,19 @@ def search(
             logger.exception("stability fetch failed; ranking with fixed half-life")
             stability_by_key = {}
 
-        # 4. Project affinity
+        entity_boost_keys: set[tuple[str, int]] = set()
+        try:
+            from .entities import entity_ids_for_query, item_entity_map
+
+            q_ents = entity_ids_for_query(query or "", conn=conn)
+            if q_ents and candidate_keys:
+                emap = item_entity_map(candidate_keys, conn=conn)
+                for ck, eids in emap.items():
+                    if eids & q_ents:
+                        entity_boost_keys.add(ck)
+        except Exception:
+            logger.debug("entity boost skipped", exc_info=True)
+
         affinities = {}
         if project_path:
             try:
@@ -337,14 +400,20 @@ def search(
             except Exception:
                 logger.exception("get_or_create_project / project affinity failed")
 
-        # 7. (fetched here to reuse the connection; prepended after ranking below)
         pinned = get_pinned_items(item_type=item_type, limit=limit, conn=conn)
 
-    # 5a. Rank-input capture for the offline weight fitter: everything
-    # rank_results consumes, snapshotted BEFORE ranking mutates the dicts, so
-    # the fitter can re-rank the same candidates under candidate weights
-    # without re-running retrieval (and a parity gate can verify replay ==
-    # live under current weights — see benchmarks/fit_ranking.py).
+        invalidated: set[str] = set()
+        try:
+            from datetime import date as _date
+
+            from .temporal import invalidated_subjects_as_of
+
+            invalidated = invalidated_subjects_as_of(
+                as_of or _date.today().isoformat(), conn=conn
+            )
+        except Exception:
+            invalidated = set()
+
     temporal_intent = detect_temporal_intent(query or "")
     if rank_inputs_sink is not None:
         import copy
@@ -367,10 +436,10 @@ def search(
                 "filter_tags": list(filter_tags) if filter_tags else [],
                 "include_superseded": include_superseded,
                 "limit": limit,
+                "as_of": as_of,
             }
         )
 
-    # 5. Rank using multi-factor scoring (+ RRF hybrid boost)
     results = rank_results(
         results=results,
         feedback_map=feedback_map,
@@ -386,11 +455,32 @@ def search(
         temporal_intent=temporal_intent,
     )
 
-    # 6. BM25 reranking — adjusts utility scores using keyword overlap signal
+    ENTITY_BOOST = 18.0
+    for r in results:
+        key_row = (r["item_type"], int(r["item_id"]))
+        ent = ENTITY_BOOST if key_row in entity_boost_keys else 0.0
+        if ent:
+            r["utility_score"] = r.get("utility_score", 0.0) + ent
+        if explain:
+            helped = unhelpful = 0
+            if feedback_map and key_row in feedback_map:
+                helped, unhelpful = feedback_map[key_row]
+            r["score_breakdown"] = {
+                "utility": round(float(r.get("utility_score", 0.0)), 3),
+                "rrf_normalized": r.get("rrf_normalized", 0.0),
+                "is_semantic": bool(r.get("is_semantic")),
+                "entity_boost": ent,
+                "via_graph": r.get("via_graph"),
+                "usage": usage_counts.get(key_row, 0),
+                "feedback": {"helped": helped, "unhelpful": unhelpful},
+                "affinity": affinities.get(key_row),
+            }
+    if entity_boost_keys:
+        results.sort(key=lambda x: x.get("utility_score", 0.0), reverse=True)
+
     if query and query.strip():
         results = rerank_with_bm25(results, query)
 
-    # 7. Prepend pinned items (always-injected core context)
     if pinned:
         if filter_tags:
             pinned = [
@@ -406,6 +496,32 @@ def search(
             r for r in results
             if not str(r.get("title", "")).startswith("[SUPERSEDED]")
         ]
+
+    if invalidated:
+        results = [
+            r
+            for r in results
+            if f"{r.get('item_type')}:{r.get('item_id')}" not in invalidated
+            and f"{r.get('item_type')}:{int(r['item_id'])}" not in invalidated
+        ]
+
+    if token_budget and token_budget > 0:
+        budget_chars = int(token_budget) * 4
+        used = 0
+        trimmed = []
+        for r in results:
+            snip = r.get("snippet") or ""
+            title = r.get("title") or ""
+            cost = len(title) + len(snip)
+            if used + cost > budget_chars and trimmed:
+                r = dict(r)
+                r["snippet"] = ""
+                cost = len(title)
+            if used + cost > budget_chars and trimmed:
+                break
+            used += cost
+            trimmed.append(r)
+        results = trimmed
 
     final = SearchResults(results[:limit])
     final.semantic_status = semantic_status
