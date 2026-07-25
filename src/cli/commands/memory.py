@@ -31,6 +31,7 @@ from ...memory_ops import (
     pattern_dedup_content,
     skill_dedup_content,
 )
+from ...providers import get_provider
 from ...search import get_recent, get_stats, search, semantic_search
 from ...workflow import (
     WorkflowViolationError,
@@ -71,11 +72,11 @@ def cmd_search(args):
     else:
         project_path = os.getcwd()
     explain = bool(getattr(args, "explain", False))
-    results = search(
+    results = get_provider().search(
         query,
-        args.type,
-        tag_list,
-        args.limit,
+        item_type=args.type,
+        tags=tag_list,
+        limit=args.limit,
         project_path=project_path,
         audit_source="cli",
         include_superseded=getattr(args, "include_superseded", False),

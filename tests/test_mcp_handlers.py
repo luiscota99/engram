@@ -43,7 +43,7 @@ def _session_with_workflow_state(db_path: str, session_id: str = "wf-session") -
         (
             "memory_invalidate",
             {},
-            {"startswith": "Error:"},
+            {"contains": "validation_error"},
         ),
         (
             "memory_sleep",
@@ -99,13 +99,15 @@ def test_format_results_rank_aware_snippets():
 
 
 def test_memory_search_default_limit_is_5(test_db):
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
 
     from src.mcp.handlers import handle_memory_search
 
-    with patch("src.mcp.handlers.memory_search", return_value=[]) as ms:
+    fake = MagicMock()
+    fake.search.return_value = []
+    with patch("src.mcp.handlers.get_provider", return_value=fake) as gp:
         handle_memory_search({"query": "anything"})
-    assert ms.call_args.kwargs["limit"] == 5
+    assert gp.return_value.search.call_args.kwargs["limit"] == 5
 
 
 # --- Broad smoke coverage: every read-mostly handler returns a str, no crash ---

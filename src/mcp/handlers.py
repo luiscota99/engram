@@ -26,6 +26,7 @@ from src.database import (
     record_usage,
     unpin_item,
 )
+from src.errors import EngramError, NotFoundError, ValidationError
 from src.feedback import add_feedback
 from src.maintenance import find_consolidation_candidates, run_gc, run_health_check, run_sleep
 from src.memory_ops import (
@@ -43,10 +44,9 @@ from src.memory_ops import (
 )
 from src.merge import merge_available, merge_entries
 from src.prompt_security import wrap_untrusted_text
+from src.providers import get_provider
 from src.search import get_recent, get_stats
-from src.search import search as memory_search
 from src.session_review import build_session_review_prompt
-from src.temporal import invalidate_memory
 from src.workflow import (
     WorkflowViolationError,
     advance_phase,
@@ -59,6 +59,11 @@ from src.workflow import (
 from .. import config
 
 McpToolArgs = Mapping[str, Any]
+
+
+def _err(exc: EngramError) -> str:
+    """Structured MCP error payload (ADR / plan C2)."""
+    return exc.to_json_line()
 
 
 def format_and_truncate_results(
@@ -192,11 +197,14 @@ def handle_memory_read_item(args: McpToolArgs) -> str:
     item_type = args.get("item_type")
     item_id = args.get("item_id")
     if not item_type or not item_id:
-        return "Error: item_type and item_id are required."
+        return _err(ValidationError("item_type and item_id are required."))
 
-    item = get_item(item_type, item_id)
+    item = get_provider().get_item(item_type, int(item_id))
     if not item:
-        return f"Error: Could not find {item_type} with ID {item_id}."
+        # Fall back to enriched get_item path for tags when provider is swapped.
+        item = get_item(item_type, item_id)
+    if not item:
+        return _err(NotFoundError(f"Could not find {item_type} with ID {item_id}."))
 
     # Auto-track: reading the full item means you're using it
     record_usage(item_type, item_id)
@@ -289,7 +297,8 @@ def handle_memory_search(args: McpToolArgs) -> str:
     limit = args.get("limit", 5)
     project_path = args.get("project_path")
     explain = bool(args.get("explain"))
-    results = memory_search(
+    # Route through MemoryProvider so tests/backends can swap the store (R5).
+    results = get_provider().search(
         query,
         item_type=item_type,
         tags=tags,
@@ -327,7 +336,7 @@ def handle_memory_search(args: McpToolArgs) -> str:
 def handle_memory_kg(args: McpToolArgs) -> str:
     import json as _json
 
-    from src.temporal import invalidate_memory, kg_query, kg_timeline, upsert_fact
+    from src.temporal import kg_query, kg_timeline, upsert_fact
 
     action = (args.get("action") or "").strip()
     if action == "query":
@@ -336,27 +345,27 @@ def handle_memory_kg(args: McpToolArgs) -> str:
     if action == "timeline":
         subject = args.get("subject")
         if not subject:
-            return "Error: subject is required for timeline."
+            return _err(ValidationError("subject is required for timeline."))
         rows = kg_timeline(subject)
         return _json.dumps(rows, ensure_ascii=False, indent=2) if rows else "No timeline."
     if action == "invalidate":
         itype = args.get("item_type")
         iid = args.get("item_id")
         if not itype or iid is None:
-            return "Error: item_type and item_id required."
-        ok = invalidate_memory(
+            return _err(ValidationError("item_type and item_id required."))
+        ok = get_provider().invalidate(
             itype,
             int(iid),
             superseded_by=args.get("superseded_by"),
             reason=args.get("reason") or "mcp invalidate",
         )
-        return "Invalidated." if ok else "Error: could not invalidate."
+        return "Invalidated." if ok else _err(NotFoundError("could not invalidate."))
     if action == "add_fact":
         subject = args.get("subject")
         predicate = args.get("predicate")
         obj = args.get("object")
         if not subject or not predicate or obj is None:
-            return "Error: subject, predicate, object required."
+            return _err(ValidationError("subject, predicate, object required."))
         fid = upsert_fact(
             subject,
             predicate,
@@ -365,7 +374,7 @@ def handle_memory_kg(args: McpToolArgs) -> str:
             source_id=args.get("item_id"),
         )
         return f"Fact #{fid} recorded."
-    return "Error: unknown action. Use query|timeline|invalidate|add_fact."
+    return _err(ValidationError("unknown action. Use query|timeline|invalidate|add_fact."))
 
 
 def handle_memory_maintain(args: McpToolArgs) -> str:
@@ -1348,15 +1357,15 @@ def handle_memory_invalidate(args: McpToolArgs) -> str:
     item_type = args.get("item_type")
     item_id = args.get("item_id")
     if not item_type or item_id is None:
-        return "Error: item_type and item_id are required."
-    ok = invalidate_memory(
+        return _err(ValidationError("item_type and item_id are required."))
+    ok = get_provider().invalidate(
         item_type,
         int(item_id),
         superseded_by=args.get("superseded_by"),
         reason=args.get("reason"),
     )
     if not ok:
-        return f"Error: could not invalidate {item_type} ID {item_id}."
+        return _err(NotFoundError(f"could not invalidate {item_type} ID {item_id}."))
     return f"Invalidated {item_type} ID {item_id}."
 
 

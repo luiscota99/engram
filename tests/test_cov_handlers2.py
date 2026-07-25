@@ -164,14 +164,13 @@ def test_record_usage_success(mcp_db):
 
 
 def test_read_item_missing_args(mcp_db):
-    assert TOOL_HANDLERS["memory_read_item"]({}) == (
-        "Error: item_type and item_id are required."
-    )
+    out = TOOL_HANDLERS["memory_read_item"]({})
+    assert "validation_error" in out
 
 
 def test_read_item_not_found(mcp_db):
     out = TOOL_HANDLERS["memory_read_item"]({"item_type": "skill", "item_id": 12345})
-    assert out == "Error: Could not find skill with ID 12345."
+    assert "not_found" in out
 
 
 def test_read_item_success_returns_json(mcp_db):
@@ -1142,11 +1141,9 @@ def test_pin_unpin_error_paths(mcp_db):
 
 
 def test_invalidate_missing_and_notfound(mcp_db):
-    assert TOOL_HANDLERS["memory_invalidate"]({}) == (
-        "Error: item_type and item_id are required."
-    )
+    assert "validation_error" in TOOL_HANDLERS["memory_invalidate"]({})
     out = TOOL_HANDLERS["memory_invalidate"]({"item_type": "skill", "item_id": 9999})
-    assert out == "Error: could not invalidate skill ID 9999."
+    assert "not_found" in out
 
 
 def test_invalidate_success(mcp_db):

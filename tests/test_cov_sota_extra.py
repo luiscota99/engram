@@ -56,7 +56,7 @@ def test_kg_query_upsert_and_handlers(tmp_path, monkeypatch):
     out = handle_memory_kg({"action": "add_fact", "subject": "a", "predicate": "b", "object": "c"})
     assert "Fact #" in out
     out = handle_memory_kg({"action": "invalidate"})
-    assert "Error" in out
+    assert "validation_error" in out
     with get_connection(str(db)) as conn:
         mid = create_mistake(
             conn, date="2026-01-01", context="c", mistake="m", fix="f", tags=["t"]
@@ -64,7 +64,7 @@ def test_kg_query_upsert_and_handlers(tmp_path, monkeypatch):
     assert "Invalidated" in handle_memory_kg(
         {"action": "invalidate", "item_type": "mistake", "item_id": mid, "reason": "x"}
     )
-    assert "unknown" in handle_memory_kg({"action": "nope"}).lower()
+    assert "validation_error" in handle_memory_kg({"action": "nope"}).lower() or "unknown" in handle_memory_kg({"action": "nope"}).lower()
 
 
 def test_search_graph_token_budget_and_maintain(tmp_path, monkeypatch):
@@ -463,3 +463,51 @@ def test_optional_cross_encoder_with_mock(monkeypatch):
     assert out[0]["utility_score"] > 1.0
     monkeypatch.delenv("ENGRAM_RERANK", raising=False)
     ranking._cross_encoder = None
+
+
+def test_provider_used_by_mcp_search(tmp_path, monkeypatch):
+    from src.database import init_db
+    from src.mcp.handlers import handle_memory_search
+    from src.providers import set_provider
+
+    db = tmp_path / "prov.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db))
+    monkeypatch.setenv("ENGRAM_EMBED_URL", "disabled")
+    init_db()
+
+    class Fake:
+        def search(self, query, **kwargs):
+            return [{
+                "item_type": "mistake",
+                "item_id": "1",
+                "title": "fake hit",
+                "snippet": "from fake provider",
+                "tags": "",
+                "is_semantic": False,
+                "utility_score": 1.0,
+            }]
+
+        def get_item(self, item_type, item_id):
+            return {"id": item_id, "item_type": item_type, "title": "x"}
+
+        def invalidate(self, item_type, item_id, **kwargs):
+            return True
+
+    set_provider(Fake())
+    out = handle_memory_search({"query": "anything", "limit": 1})
+    assert "fake hit" in out
+    from src.mcp.handlers import handle_memory_invalidate, handle_memory_read_item
+    assert "Invalidated" in handle_memory_invalidate({"item_type": "mistake", "item_id": 1})
+    assert '"id"' in handle_memory_read_item({"item_type": "mistake", "item_id": 1})
+    # structured validation error
+    err = handle_memory_invalidate({"item_type": None, "item_id": None})
+    assert '"code": "validation_error"' in err or "validation_error" in err
+    set_provider(None)
+
+
+def test_beam_adapter_help():
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, "benchmarks/beam_bench.py"], capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "BEAM adapter" in r.stdout

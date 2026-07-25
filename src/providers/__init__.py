@@ -24,3 +24,17 @@ class MemoryProvider(Protocol):
         reason: str | None = None,
     ) -> bool:
         ...
+
+
+# MemPalace docs alias — same protocol, different name in competitive literature.
+StorageBackend = MemoryProvider
+
+from .native import NativeSqliteProvider, get_provider, set_provider  # noqa: E402
+
+__all__ = [
+    "MemoryProvider",
+    "StorageBackend",
+    "NativeSqliteProvider",
+    "get_provider",
+    "set_provider",
+]

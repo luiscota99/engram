@@ -22,6 +22,10 @@ python benchmarks/eeme_bench.py --fail-under-r5 0.90
 | **Session R@5** | **0.538** | Full oracle, 940 sessions — see `benchmarks/BENCHMARKS.md` |
 | **MRR** | **0.442** | Not comparable to vendor QA accuracy headlines |
 
+## BEAM
+
+Adapter stub: `benchmarks/beam_bench.py` (retrieval-only; provide local labeled slice).
+
 ## LoCoMo
 
 Adapter: `benchmarks/locomo_bench.py --queries <file>` (retrieval R@k only).
