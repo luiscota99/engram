@@ -48,6 +48,7 @@ from .commands.memory import (
     cmd_add,
     cmd_consolidate,
     cmd_feedback,
+    cmd_kg,
     cmd_link,
     cmd_link_pattern,
     cmd_list,
@@ -122,7 +123,32 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include superseded/invalidated memories in results",
     )
+    p_search.add_argument("--as-of", metavar="YYYY-MM-DD", help="Hide items invalidated on/before this date")
+    p_search.add_argument("--explain", action="store_true", help="Show score breakdown per hit")
+    p_search.add_argument("--token-budget", type=int, help="Soft token budget for snippets")
     p_search.set_defaults(func=cmd_search)
+
+    p_kg = sub.add_parser("kg", help="Temporal knowledge facts (query/timeline/invalidate)")
+    kg_sub = p_kg.add_subparsers(dest="kg_action", required=True)
+    p_kg_q = kg_sub.add_parser("query", help="List facts")
+    p_kg_q.add_argument("--subject")
+    p_kg_q.add_argument("-n", "--limit", type=int, default=20)
+    p_kg_q.set_defaults(func=cmd_kg)
+    p_kg_t = kg_sub.add_parser("timeline", help="Timeline for a subject")
+    p_kg_t.add_argument("--subject", required=True)
+    p_kg_t.set_defaults(func=cmd_kg)
+    p_kg_i = kg_sub.add_parser("invalidate", help="Invalidate a memory item")
+    p_kg_i.add_argument("--type", dest="item_type", required=True)
+    p_kg_i.add_argument("--id", dest="item_id", type=int, required=True)
+    p_kg_i.add_argument("--reason")
+    p_kg_i.add_argument("--superseded-by", type=int)
+    p_kg_i.set_defaults(func=cmd_kg)
+    p_kg_a = kg_sub.add_parser("add", help="Add a fact triple")
+    p_kg_a.add_argument("--subject", required=True)
+    p_kg_a.add_argument("--predicate", required=True)
+    p_kg_a.add_argument("--object", required=True)
+    p_kg_a.add_argument("--valid-until")
+    p_kg_a.set_defaults(func=cmd_kg)
 
     p_recent = sub.add_parser("recent", help="Show recent entries")
     p_recent.add_argument("-n", type=int, default=10)
@@ -355,6 +381,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_import_cursor.add_argument("path")
     p_import_cursor.add_argument("--dry-run", action="store_true")
     p_import_cursor.set_defaults(func=cmd_import_cursor_skills)
+
+    def _cmd_import_mem0(args):
+        from ...importers import import_mem0_export
+
+        print(import_mem0_export(args.path))
+
+    def _cmd_import_zep(args):
+        from ...importers import import_zep_export
+
+        print(import_zep_export(args.path))
+
+    def _cmd_import_openmemory(args):
+        from ...importers import import_openmemory_export
+
+        print(import_openmemory_export(args.path))
+
+    p_im0 = sub.add_parser("import-mem0", help="Import a Mem0 JSON export")
+    p_im0.add_argument("path")
+    p_im0.set_defaults(func=_cmd_import_mem0)
+    p_iz = sub.add_parser("import-zep", help="Import a Zep/Graphiti JSON export")
+    p_iz.add_argument("path")
+    p_iz.set_defaults(func=_cmd_import_zep)
+    p_iom = sub.add_parser("import-openmemory", help="Import an OpenMemory JSON export")
+    p_iom.add_argument("path")
+    p_iom.set_defaults(func=_cmd_import_openmemory)
 
     add_chunk_sync_parsers(sub)
 

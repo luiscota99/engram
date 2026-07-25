@@ -216,7 +216,12 @@ def run_diagnostics(repair=False):
                 )
             )
             if repair:
+                # Prefer messaging that existing tests/docs recognize; still
+                # distinguish small vs large drift for operators.
+                delta = abs(core_count - fts_count)
                 print(fmt_dim("  Running FTS Rebuild from core tables..."))
+                if delta > max(50, core_count // 5):
+                    print(fmt_dim(f"  (large drift Δ={delta})"))
                 rebuild_fts(conn)
                 issues_fixed += 1
                 print("  ✓ Repair: FTS index rebuilt successfully. All core items are now indexed.")

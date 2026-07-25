@@ -1272,7 +1272,11 @@ def is_pinned(item_type: str, item_id: int, db_path=None) -> bool:
 
 
 def get_pinned_items(item_type: str | None = None, limit: int = 20, db_path=None, conn=None) -> list[dict]:
-    """Return pinned memory rows from the pin snapshot (no FTS virtual SCAN)."""
+    """Return pinned memory rows from the pin snapshot (no FTS virtual SCAN).
+
+    Falls back to a point lookup on ``memory_fts`` when snapshot columns are
+    empty (pre-v27 pins).
+    """
     with connection_scope(conn, db_path) as conn:
         conditions = []
         params: list = []
@@ -1290,15 +1294,30 @@ def get_pinned_items(item_type: str | None = None, limit: int = 20, db_path=None
         ).fetchall()
         results = []
         for row in rows:
+            title = row["title"] or ""
+            tags = row["tags"] or ""
+            snippet = ""
+            fts_rowid = None
+            if not title:
+                fts = conn.execute(
+                    "SELECT title, tags, content, rowid FROM memory_fts "
+                    "WHERE item_type = ? AND item_id = ?",
+                    (row["item_type"], str(row["item_id"])),
+                ).fetchone()
+                if fts:
+                    title = fts["title"] or ""
+                    tags = fts["tags"] or tags
+                    snippet = fts["content"] or ""
+                    fts_rowid = fts["rowid"]
             results.append({
                 "item_type": row["item_type"],
                 "item_id": str(row["item_id"]),
-                "title": row["title"] or "",
-                "snippet": "",
-                "tags": row["tags"] or "",
+                "title": title,
+                "snippet": snippet,
+                "tags": tags,
                 "pinned": True,
                 "pinned_at": row["pinned_at"],
-                "rowid": None,
+                "rowid": fts_rowid,
                 "is_semantic": False,
                 "utility_score": 9999.0,
             })

@@ -1,0 +1,40 @@
+{
+  "description": "Gold set for recall/guard relevance gates (precision-over-recall).",
+  "version": "1.0",
+  "cases": [
+    {
+      "id": "conv_es_1",
+      "prompt": "gracias, listo por hoy",
+      "expect": "suppress",
+      "note": "conversational — inject nothing"
+    },
+    {
+      "id": "conv_en_1",
+      "prompt": "sounds good, thanks!",
+      "expect": "suppress"
+    },
+    {
+      "id": "tech_busy_1",
+      "prompt": "fix sqlite busy_timeout under concurrent hooks",
+      "expect": "inject",
+      "must_overlap_terms": ["busy", "timeout", "sqlite", "concurrent", "hooks"]
+    },
+    {
+      "id": "tech_wal_1",
+      "prompt": "enable WAL mode for memory.db writers",
+      "expect": "inject",
+      "must_overlap_terms": ["wal", "memory", "writers"]
+    },
+    {
+      "id": "accent_1",
+      "prompt": "configuracion de embeddings ollama",
+      "expect": "inject",
+      "must_overlap_terms": ["configuracion", "embeddings", "ollama"]
+    },
+    {
+      "id": "tool_noise_1",
+      "prompt": "ls -la /tmp",
+      "expect": "suppress"
+    }
+  ]
+}

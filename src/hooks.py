@@ -165,7 +165,7 @@ def build_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> l
         if len(warnings) >= limit:
             return warnings
 
-    if os.environ.get("ENGRAM_GUARD_FALLBACK", "off").lower() not in ("hybrid", "1", "true", "on"):
+    if os.environ.get("ENGRAM_GUARD_FALLBACK", "hybrid").lower() in ("off", "0", "false", "no"):
         return warnings
 
     from .search import search

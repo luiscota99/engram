@@ -288,6 +288,7 @@ def handle_memory_search(args: McpToolArgs) -> str:
     tags = args.get("tags", "").split(",") if args.get("tags") else None
     limit = args.get("limit", 5)
     project_path = args.get("project_path")
+    explain = bool(args.get("explain"))
     results = memory_search(
         query,
         item_type=item_type,
@@ -295,14 +296,123 @@ def handle_memory_search(args: McpToolArgs) -> str:
         limit=limit,
         project_path=project_path,
         audit_source="mcp",
+        as_of=args.get("as_of"),
+        explain=explain,
+        token_budget=args.get("token_budget"),
     )
     semantic_status = getattr(results, "semantic_status", None)
     semantic_available = getattr(results, "semantic_available", None)
-    return format_and_truncate_results(
+    text = format_and_truncate_results(
         results,
         semantic_status=semantic_status,
         semantic_available=semantic_available,
     )
+    if explain:
+        import json as _json
+
+        breakdowns = [
+            {
+                "item_type": r.get("item_type"),
+                "item_id": r.get("item_id"),
+                "score_breakdown": r.get("score_breakdown"),
+            }
+            for r in results
+            if r.get("score_breakdown")
+        ]
+        if breakdowns:
+            text += "\n\n[score_breakdown]\n" + _json.dumps(breakdowns, ensure_ascii=False)
+    return text
+
+
+def handle_memory_kg(args: McpToolArgs) -> str:
+    import json as _json
+
+    from src.temporal import invalidate_memory, kg_query, kg_timeline, upsert_fact
+
+    action = (args.get("action") or "").strip()
+    if action == "query":
+        rows = kg_query(args.get("subject"), limit=int(args.get("limit") or 20))
+        return _json.dumps(rows, ensure_ascii=False, indent=2) if rows else "No facts."
+    if action == "timeline":
+        subject = args.get("subject")
+        if not subject:
+            return "Error: subject is required for timeline."
+        rows = kg_timeline(subject)
+        return _json.dumps(rows, ensure_ascii=False, indent=2) if rows else "No timeline."
+    if action == "invalidate":
+        itype = args.get("item_type")
+        iid = args.get("item_id")
+        if not itype or iid is None:
+            return "Error: item_type and item_id required."
+        ok = invalidate_memory(
+            itype,
+            int(iid),
+            superseded_by=args.get("superseded_by"),
+            reason=args.get("reason") or "mcp invalidate",
+        )
+        return "Invalidated." if ok else "Error: could not invalidate."
+    if action == "add_fact":
+        subject = args.get("subject")
+        predicate = args.get("predicate")
+        obj = args.get("object")
+        if not subject or not predicate or obj is None:
+            return "Error: subject, predicate, object required."
+        fid = upsert_fact(
+            subject,
+            predicate,
+            str(obj),
+            source_type=args.get("item_type"),
+            source_id=args.get("item_id"),
+        )
+        return f"Fact #{fid} recorded."
+    return "Error: unknown action. Use query|timeline|invalidate|add_fact."
+
+
+def handle_memory_maintain(args: McpToolArgs) -> str:
+    action = (args.get("action") or "").strip()
+    dispatch = {
+        "health": handle_memory_health,
+        "stats": handle_memory_stats,
+        "roi": handle_memory_roi,
+        "gc": handle_memory_gc,
+        "sleep": handle_memory_sleep,
+        "consolidations": handle_memory_suggest_consolidations,
+        "llm_status": handle_memory_llm_status,
+        "embedding_status": handle_memory_embedding_status,
+    }
+    fn = dispatch.get(action)
+    if not fn:
+        return "Error: unknown maintain action."
+    return fn(args)
+
+
+def handle_memory_session(args: McpToolArgs) -> str:
+    action = (args.get("action") or "").strip()
+    dispatch = {
+        "init": handle_memory_init_session,
+        "transcript": handle_memory_add_transcript,
+        "decision": handle_memory_add_decision,
+        "role": handle_memory_get_role,
+        "get": handle_memory_get_session,
+        "check": handle_memory_check_workflow_state,
+        "advance": handle_memory_advance_phase,
+        "review": handle_memory_session_review,
+    }
+    fn = dispatch.get(action)
+    if not fn:
+        return "Error: unknown session action."
+    return fn(args)
+
+
+def handle_memory_codebase(args: McpToolArgs) -> str:
+    action = (args.get("action") or "").strip()
+    if action == "index_file":
+        return handle_memory_index_file(args)
+    if action == "query":
+        return handle_memory_query_codebase(args)
+    if action == "stale_files":
+        return handle_memory_get_stale_files(args)
+    return "Error: unknown codebase action."
 
 
 def handle_memory_recent(args: McpToolArgs) -> str:
@@ -1314,4 +1424,8 @@ TOOL_HANDLERS: dict[str, Callable[[McpToolArgs], str]] = {
     "memory_llm_status": handle_memory_llm_status,
     "memory_invalidate": handle_memory_invalidate,
     "memory_sleep": handle_memory_sleep,
+    "memory_kg": handle_memory_kg,
+    "memory_maintain": handle_memory_maintain,
+    "memory_session": handle_memory_session,
+    "memory_codebase": handle_memory_codebase,
 }

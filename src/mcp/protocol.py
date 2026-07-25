@@ -25,7 +25,7 @@ from src.database import init_db
 
 from .constants import PROTOCOL_VERSION, SERVER_NAME, get_server_version
 from .handlers import TOOL_HANDLERS
-from .tools_schema import TOOLS
+from .tools_schema import TOOLS, TOOLS_PUBLIC
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ def handle_request(msg: Mapping[str, Any]) -> dict[str, Any] | None:
     if method == "tools/list":
         # Static tools plus any approved reflexes, exposed as first-class
         # `reflex_<name>` tools so agents invoke proven workflows deterministically.
-        tools = list(TOOLS)
+        tools = list(TOOLS_PUBLIC)
         try:
             from src.reflex import reflex_tools_for_mcp
 
