@@ -57,5 +57,6 @@ publishes retrieval metrics with caveats; see [`benchmarks/BENCHMARKS.md`](../be
 ## Related
 
 - [ADR-0009: SOTA scope fence](decisions/0009-sota-scope-fence.md)
+- [Migrate from Mem0 / Zep / OpenMemory](MIGRATION_FROM_COMPETITORS.md)
 - [RAGE audit (historical)](RAGE_AUDIT.md)
 - [July 2026 comparative review](COMPARATIVE_REVIEW_2026-07.md)

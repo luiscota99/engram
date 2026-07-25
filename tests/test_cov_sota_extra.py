@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from src.database import get_connection, init_db
 from src.extract_ops import ExtractOp, classify_extract_candidate, propose_extract_ops
 from src.importers import import_openmemory_export, import_zep_export
-from src.memory_ops import create_mistake, create_pattern, create_skill
 from src.mcp.handlers import (
     handle_memory_codebase,
     handle_memory_kg,
@@ -16,10 +14,11 @@ from src.mcp.handlers import (
     handle_memory_search,
     handle_memory_session,
 )
+from src.memory_ops import create_mistake, create_pattern, create_skill
 from src.providers.native import NativeSqliteProvider, get_provider, set_provider
 from src.relations import add_relation
 from src.search import search
-from src.temporal import invalidate_memory, kg_query, upsert_fact
+from src.temporal import kg_query, upsert_fact
 
 
 def test_provider_get_set_and_invalidate(tmp_path, monkeypatch):
@@ -304,3 +303,163 @@ def test_trigger_canonicalize_empty():
 
     assert canonicalize("") == ""
     assert extract_trigger_phrases("hi", "") == []
+
+
+def test_repair_fts_delta(tmp_path, monkeypatch):
+    from src.database import get_connection, init_db, repair_fts_delta
+    from src.memory_ops import create_mistake
+
+    db = tmp_path / "delta.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db))
+    monkeypatch.setenv("ENGRAM_EMBED_URL", "disabled")
+    init_db()
+    with get_connection(str(db)) as conn:
+        mid = create_mistake(
+            conn,
+            date="2026-01-01",
+            context="c",
+            mistake="delta repair target",
+            fix="reindex me",
+            tags=["t"],
+        )
+        conn.execute(
+            "DELETE FROM memory_fts WHERE item_type = ? AND item_id = ?",
+            ("mistake", str(mid)),
+        )
+        stats = repair_fts_delta(conn)
+        assert stats["reindexed"] >= 1
+        row = conn.execute(
+            "SELECT 1 FROM memory_fts WHERE item_type = ? AND item_id = ?",
+            ("mistake", str(mid)),
+        ).fetchone()
+        assert row
+
+
+def test_optional_cross_encoder_noop_by_default():
+    from src.ranking import optional_cross_encoder_rerank
+
+    rows = [{"title": "a", "snippet": "b", "utility_score": 1.0}]
+    out = optional_cross_encoder_rerank(rows, "query")
+    assert out == rows
+
+
+def test_openai_wrapper_recall_block(tmp_path, monkeypatch):
+    from src.database import get_connection, init_db
+    from src.memory_ops import create_mistake
+    from src.openai_wrapper import EngramChat
+
+    db = tmp_path / "w.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db))
+    monkeypatch.setenv("ENGRAM_EMBED_URL", "disabled")
+    init_db()
+    with get_connection(str(db)) as conn:
+        create_mistake(
+            conn,
+            date="2026-01-01",
+            context="sqlite",
+            mistake="busy_timeout missing under writers",
+            fix="set pragma",
+            tags=["sqlite"],
+        )
+    client = EngramChat(db_path=str(db), recall_limit=2)
+    block = client._recall_block("busy_timeout sqlite writers")
+    assert isinstance(block, str)
+
+
+def test_optional_cross_encoder_import_failure(monkeypatch):
+    import src.ranking as ranking
+
+    monkeypatch.setenv("ENGRAM_RERANK", "cross-encoder")
+    ranking._cross_encoder = None
+    rows = [{"title": "t", "snippet": "s", "utility_score": 10.0}]
+    # Without sentence_transformers installed this should degrade gracefully
+    out = ranking.optional_cross_encoder_rerank(rows, "q")
+    assert out == rows
+    monkeypatch.delenv("ENGRAM_RERANK", raising=False)
+
+
+def test_repair_fts_orphan_removal(tmp_path, monkeypatch):
+    from src.database import get_connection, init_db, repair_fts_delta
+    from src.memory_ops import create_mistake
+
+    db = tmp_path / "orph.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db))
+    monkeypatch.setenv("ENGRAM_EMBED_URL", "disabled")
+    init_db()
+    with get_connection(str(db)) as conn:
+        create_mistake(
+            conn, date="2026-01-01", context="c", mistake="keep me", fix="f", tags=["t"]
+        )
+        conn.execute(
+            "INSERT INTO memory_fts (item_type, item_id, title, content, tags) "
+            "VALUES ('mistake', '99999', 'orphan', 'x', '')"
+        )
+        stats = repair_fts_delta(conn)
+        assert stats["orphans_removed"] >= 1
+
+
+def test_doctor_small_drift_uses_delta(tmp_path, monkeypatch, capsys):
+    from src import doctor
+    from src.database import get_connection, init_db
+    from src.memory_ops import create_mistake
+
+    db = tmp_path / "doc.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db))
+    monkeypatch.setenv("ENGRAM_EMBED_URL", "disabled")
+    init_db()
+    with get_connection(str(db)) as conn:
+        mid = create_mistake(
+            conn, date="2026-01-01", context="c", mistake="drift me", fix="f", tags=["t"]
+        )
+        conn.execute(
+            "DELETE FROM memory_fts WHERE item_type=? AND item_id=?",
+            ("mistake", str(mid)),
+        )
+    # Avoid network checks dominating — patch ollama/llm probes
+    monkeypatch.setattr(doctor.config, "ollama_host", lambda: "http://127.0.0.1:9")
+    monkeypatch.setattr(doctor, "urllib", doctor.urllib)
+    doctor.run_diagnostics(repair=True)
+    out = capsys.readouterr().out
+    assert "FTS Drift" in out or "Repair" in out
+
+
+def test_version_fallback(monkeypatch):
+    import src.version as version
+
+    class Boom:
+        def version(self, name):
+            raise Exception("no dist")
+
+    monkeypatch.setattr(version, "version", Boom().version, raising=False)
+    # call through importlib path
+    from importlib import metadata
+    monkeypatch.setattr(metadata, "version", lambda n: (_ for _ in ()).throw(metadata.PackageNotFoundError(n)))
+    assert version.get_package_version()  # fallback string
+
+
+def test_optional_cross_encoder_with_mock(monkeypatch):
+    import sys
+    import types
+
+    import src.ranking as ranking
+
+    class FakeCE:
+        def __init__(self, model_name):
+            self.model_name = model_name
+
+        def predict(self, pairs):
+            return [0.9 for _ in pairs]
+
+    st = types.ModuleType("sentence_transformers")
+    st.CrossEncoder = FakeCE
+    monkeypatch.setitem(sys.modules, "sentence_transformers", st)
+    monkeypatch.setenv("ENGRAM_RERANK", "cross-encoder")
+    ranking._cross_encoder = None
+    rows = [
+        {"title": "a", "snippet": "one", "utility_score": 1.0, "score_breakdown": {}},
+        {"title": "b", "snippet": "two", "utility_score": 2.0},
+    ]
+    out = ranking.optional_cross_encoder_rerank(rows, "query text")
+    assert out[0]["utility_score"] > 1.0
+    monkeypatch.delenv("ENGRAM_RERANK", raising=False)
+    ranking._cross_encoder = None

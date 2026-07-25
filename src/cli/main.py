@@ -383,17 +383,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_import_cursor.set_defaults(func=cmd_import_cursor_skills)
 
     def _cmd_import_mem0(args):
-        from ...importers import import_mem0_export
+        from src.importers import import_mem0_export
 
         print(import_mem0_export(args.path))
 
     def _cmd_import_zep(args):
-        from ...importers import import_zep_export
+        from src.importers import import_zep_export
 
         print(import_zep_export(args.path))
 
     def _cmd_import_openmemory(args):
-        from ...importers import import_openmemory_export
+        from src.importers import import_openmemory_export
 
         print(import_openmemory_export(args.path))
 

@@ -25,7 +25,7 @@ from src.database import init_db
 
 from .constants import PROTOCOL_VERSION, SERVER_NAME, get_server_version
 from .handlers import TOOL_HANDLERS
-from .tools_schema import TOOLS, TOOLS_PUBLIC
+from .tools_schema import TOOLS_PUBLIC
 
 logger = logging.getLogger(__name__)
 

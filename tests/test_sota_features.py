@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
 import pytest
 
 from src.database import get_connection, get_pinned_items, init_db, pin_item
 from src.entities import auto_link_from_text, entities_for_item, extract_entity_candidates
-from src.errors import DuplicateBlocked, EngramError
+from src.errors import DuplicateBlocked
 from src.extract_ops import classify_extract_candidate
 from src.feedback import add_feedback
 from src.hooks import build_guard_warnings

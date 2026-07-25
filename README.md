@@ -32,7 +32,7 @@ AI assistants are brilliant but stateless. They forget every lesson learned as s
 
 Architecture decisions are documented in [`docs/decisions/`](docs/decisions/).
 
-**Competitive positioning:** Engram is scoped as *engineering memory that compiles into action* — not a conversational personalization SaaS. See [`docs/COMPARISON.md`](docs/COMPARISON.md) vs Mem0, Hindsight, MemPalace, Zep/Graphiti, Letta, and others.
+**Competitive positioning:** Engram is scoped as *engineering memory that compiles into action* — not a conversational personalization SaaS. See [`docs/COMPARISON.md`](docs/COMPARISON.md) vs Mem0, Hindsight, MemPalace, Zep/Graphiti, Letta, and others. Migrating? [`docs/MIGRATION_FROM_COMPETITORS.md`](docs/MIGRATION_FROM_COMPETITORS.md).
 
 ## The Action Ladder — memory that compiles into action
 

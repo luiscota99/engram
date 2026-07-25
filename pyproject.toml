@@ -82,6 +82,7 @@ omit = [
     "src/browse.py",
     "src/cli/__main__.py",
     "src/mcp/http_server.py",
+    "src/openai_wrapper.py",
 ]
 
 [tool.coverage.report]

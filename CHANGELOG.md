@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **SOTA follow-up:** true delta FTS repair in doctor; optional cross-encoder rerank (`ENGRAM_RERANK`); `EngramChat` OpenAI-compatible wrapper; `docs/MIGRATION_FROM_COMPETITORS.md`.
+
 - **SOTA competitive batch (v0.2.0 / schema v27):** guard n-gram trigger fast path; entities; temporal `as_of` search + `engram kg` / MCP `memory_kg`; explainable `score_breakdown`; graph-hop RRF channel; pin snapshots; feedback idempotency keys; MemoryProvider ABC; Mem0/Zep/OpenMemory importers; extract ADD/UPDATE/DELETE ops (inbox); MCP public surface ≤20 tools (`memory_maintain`/`memory_session`/`memory_codebase`); optional local/ONNX embed backend; HTTP MCP transport; EEME + gate gold + LoCoMo adapter; `docs/COMPARISON.md` + ADR-0009.
 
 ### Added

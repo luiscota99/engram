@@ -19,7 +19,13 @@ from .database import (
 from .embeddings import embed_text, get_embedding_degradation_reason, is_embedding_host_available
 from .item_registry import table_for, usage_ranked_types
 from .query_analyzer import detect_query_tags, detect_temporal_intent
-from .ranking import rank_results, reciprocal_rank_scores, rerank_with_bm25, result_key
+from .ranking import (
+    optional_cross_encoder_rerank,
+    rank_results,
+    reciprocal_rank_scores,
+    rerank_with_bm25,
+    result_key,
+)
 from .search_audit import append_search_audit
 
 logger = logging.getLogger(__name__)
@@ -480,6 +486,7 @@ def search(
 
     if query and query.strip():
         results = rerank_with_bm25(results, query)
+        results = optional_cross_encoder_rerank(results, query)
 
     if pinned:
         if filter_tags:

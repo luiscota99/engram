@@ -816,6 +816,57 @@ def rebuild_fts(conn):
     return True
 
 
+def repair_fts_delta(conn) -> dict:
+    """Reindex only missing core rows and drop orphan FTS rows (no nuclear wipe).
+
+    Returns ``{reindexed, orphans_removed}``. Prefer this over ``rebuild_fts``
+    when drift is small so embeddings for healthy rows stay put.
+    """
+    reindexed = 0
+    orphans = 0
+    # Orphan FTS rows (no matching core id)
+    for item_type, table, _title_col, _content_expr in rebuild_specs():
+        rows = conn.execute(
+            """SELECT f.rowid, f.item_id FROM memory_fts f
+               WHERE f.item_type = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM {table} c WHERE CAST(c.id AS TEXT) = f.item_id
+                 )""".format(table=table),
+            (item_type,),
+        ).fetchall()
+        for row in rows:
+            rid = row["rowid"]
+            conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rid,))
+            try:
+                conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rid,))
+            except Exception:
+                pass
+            conn.execute("DELETE FROM embedding_status WHERE fts_rowid = ?", (rid,))
+            orphans += 1
+
+    # Missing FTS rows for core items
+    for item_type, table, title_col, content_expr in rebuild_specs():
+        missing = conn.execute(
+            f"""SELECT c.id, {title_col} AS title, {content_expr} AS content
+                FROM {table} c
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM memory_fts f
+                  WHERE f.item_type = ? AND f.item_id = CAST(c.id AS TEXT)
+                )""",
+            (item_type,),
+        ).fetchall()
+        for row in missing:
+            tag_rows = conn.execute(
+                """SELECT t.name FROM tags t
+                   JOIN item_tags it ON t.id = it.tag_id
+                   WHERE it.item_type = ? AND it.item_id = ?""",
+                (item_type, row["id"]),
+            ).fetchall()
+            tags = [t["name"] for t in tag_rows]
+            index_in_fts(conn, item_type, row["id"], row["title"], row["content"], tags)
+            reindexed += 1
+    return {"reindexed": reindexed, "orphans_removed": orphans}
+
 def get_item(item_type, item_id, db_path=None):
     """Fetch the full structured data for a specific item, including its tags."""
     table = table_for(item_type)

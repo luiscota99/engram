@@ -63,6 +63,49 @@ BM25_WEIGHT = 0.3  # how much BM25 adjusts the final score: score *= (1 + BM25_W
 RRF_K = 60
 RRF_WEIGHT = 50.0  # was 15 — cosmetic next to base 100; fusion must be able to reorder
 
+# Optional neural cross-encoder rerank (ENGRAM_RERANK=cross-encoder). Off by default —
+# requires sentence-transformers; keeps Engram zero-dep for the common path.
+CROSS_ENCODER_TOP_N = 20
+CROSS_ENCODER_WEIGHT = 40.0
+_cross_encoder = None
+
+
+def optional_cross_encoder_rerank(results: list[dict], query: str) -> list[dict]:
+    """Rerank the top-N hits with a cross-encoder when ``ENGRAM_RERANK=cross-encoder``.
+
+    Failures degrade silently to the input order (local-first / no hard dep).
+    """
+    import os
+
+    mode = (os.environ.get("ENGRAM_RERANK") or "").strip().lower()
+    if mode not in ("cross-encoder", "cross_encoder", "ce", "1", "true", "on"):
+        return results
+    if not query or not results:
+        return results
+    global _cross_encoder
+    try:
+        if _cross_encoder is None:
+            from sentence_transformers import CrossEncoder  # type: ignore
+
+            model_name = os.environ.get(
+                "ENGRAM_CROSS_ENCODER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+            )
+            _cross_encoder = CrossEncoder(model_name)
+        head = results[:CROSS_ENCODER_TOP_N]
+        pairs = [
+            (query, f"{r.get('title') or ''} {r.get('snippet') or ''}"[:800]) for r in head
+        ]
+        scores = _cross_encoder.predict(pairs)
+        for r, s in zip(head, scores):
+            r["utility_score"] = float(r.get("utility_score", 0.0)) + CROSS_ENCODER_WEIGHT * float(s)
+            bd = r.get("score_breakdown")
+            if isinstance(bd, dict):
+                bd["cross_encoder"] = round(float(s), 4)
+        head.sort(key=lambda x: x.get("utility_score", 0.0), reverse=True)
+        return head + results[CROSS_ENCODER_TOP_N:]
+    except Exception:
+        return results
+
 
 def result_key(result: dict) -> str:
     """Stable key for a search result row: ``"{item_type}-{item_id}"``."""
