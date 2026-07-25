@@ -44,16 +44,20 @@ Declared in [`pyproject.toml`](pyproject.toml) (`[project]` dependencies and `[p
 ```
 src/
 ├── cli/                 # CLI entry: main.py (parser), commands/*.py
-├── mcp/                 # MCP: protocol.py, handlers.py, tools_schema.py, constants.py
+├── mcp/                 # MCP: protocol.py, handlers.py, tools_schema.py, http_server.py
 ├── mcp_server.py        # Thin launcher; stdio MCP (see mcp/protocol.py)
+├── providers/           # MemoryProvider ABC + NativeSqliteProvider
 ├── database.py          # SQLite schema, migrations, FTS5, connections
-├── search.py            # Hybrid FTS5 + semantic search, ranking hooks
-├── embeddings.py        # Ollama embedding client
-├── ranking.py           # Multi-factor and BM25 ranking
-├── workflow.py          # Committee / session phase state
-├── doctor.py            # Diagnostics and repairs
-└── seed.py              # Initial seed data / OOBE helpers
+├── memory_ops.py        # Shared create_* write path (CLI/MCP)
+├── item_registry.py     # Canonical item-type registry
+├── search.py / ranking.py / stability.py / feedback.py
+├── entities.py / trigger_index.py / temporal.py / relations.py
+├── hooks.py / reflex.py / inbox.py / router.py
+├── embeddings.py        # Ollama / OpenAI-compat / optional local ONNX
+├── doctor.py / maintenance.py / importers.py
+└── seed.py
 ```
+See also [`docs/COMPARISON.md`](docs/COMPARISON.md) and ADR-0009.
 
 CLI entry point: `engram` → `src.cli:main` ([`pyproject.toml`](pyproject.toml) `[project.scripts]`).
 

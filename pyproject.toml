@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "engram-memory"
-version = "0.1.0"
+version = "0.2.0"
 description = "A fast, local, FTS5-powered engineering memory for LLM-assisted development"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,9 +25,13 @@ dev = [
     "ruff>=0.3.0",
     "pre-commit>=3.7.0"
 ]
+embed = [
+    "fastembed>=0.4.0"
+]
 
 [project.scripts]
 engram = "src.cli:main"
+engram-mcp-http = "src.mcp.http_server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -51,6 +55,17 @@ include = [
     "src/search.py",
     "src/summarize.py",
     "src/version.py",
+    "src/ranking.py",
+    "src/ranking_weights.py",
+    "src/memory_ops.py",
+    "src/item_registry.py",
+    "src/hooks.py",
+    "src/feedback.py",
+    "src/stability.py",
+    "src/errors.py",
+    "src/entities.py",
+    "src/trigger_index.py",
+    "src/providers",
     "src/mcp",
     "src/cli",
 ]
@@ -66,6 +81,8 @@ source = ["src"]
 omit = [
     "src/browse.py",
     "src/cli/__main__.py",
+    "src/mcp/http_server.py",
+    "src/openai_wrapper.py",
 ]
 
 [tool.coverage.report]

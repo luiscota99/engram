@@ -119,6 +119,18 @@ TOOLS = [
                 "project_path": {
                     "type": "string",
                     "description": "Optional: current project working directory for context-aware ranking"
+                },
+                "as_of": {
+                    "type": "string",
+                    "description": "ISO date — hide items invalidated on/before this date"
+                },
+                "explain": {
+                    "type": "boolean",
+                    "description": "Include score_breakdown per hit"
+                },
+                "token_budget": {
+                    "type": "integer",
+                    "description": "Soft token budget for injected snippets"
                 }
             },
             "required": [
@@ -1033,4 +1045,105 @@ TOOLS = [
             }
         }
     }
+,
+    {
+        "name": "memory_kg",
+        "description": "Temporal knowledge facts: query, timeline, or invalidate (action enum).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["query", "timeline", "invalidate", "add_fact"]},
+                "subject": {"type": "string", "description": "e.g. skill:12"},
+                "item_type": {"type": "string"},
+                "item_id": {"type": "integer"},
+                "predicate": {"type": "string"},
+                "object": {"type": "string"},
+                "reason": {"type": "string"},
+                "superseded_by": {"type": "integer"},
+                "limit": {"type": "integer", "default": 20}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "memory_maintain",
+        "description": "Maintenance hub: health, stats, roi, gc, sleep, consolidations, llm_status, embedding_status.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["health", "stats", "roi", "gc", "sleep", "consolidations", "llm_status", "embedding_status"]
+                },
+                "dry_run": {"type": "boolean", "default": True},
+                "archive": {"type": "boolean", "default": False}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "memory_session",
+        "description": "Committee/session hub: init, transcript, decision, role, get, check, advance, review.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["init", "transcript", "decision", "role", "get", "check", "advance", "review"]
+                },
+                "session_id": {"type": "string"},
+                "title": {"type": "string"},
+                "role": {"type": "string"},
+                "content": {"type": "string"},
+                "decision": {"type": "string"},
+                "phase": {"type": "string"},
+                "workflow": {"type": "string"},
+                "project_path": {"type": "string"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "memory_codebase",
+        "description": "Codebase memory: index_file, query, or stale_files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["index_file", "query", "stale_files"]},
+                "path": {"type": "string"},
+                "query": {"type": "string"},
+                "project_path": {"type": "string"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["action"]
+        }
+    }
 ]
+
+
+# Public tools/list surface (ADR-0004 / SOTA): keep handlers for legacy names,
+# but only advertise a lean taxonomy to agents.
+_PUBLIC_TOOL_NAMES = frozenset({
+    "memory_route",
+    "memory_search",
+    "memory_add",
+    "memory_read_item",
+    "memory_recent",
+    "memory_feedback",
+    "memory_record_usage",
+    "memory_resume",
+    "memory_propose_decision",
+    "memory_kg",
+    "memory_maintain",
+    "memory_session",
+    "memory_codebase",
+    "memory_link",
+    "memory_suggest_capture",
+    "memory_find_similar",
+    "memory_pin",
+    "memory_unpin",
+    "memory_list_pinned",
+    "memory_merge_entries",
+})
+
+TOOLS_PUBLIC = [t for t in TOOLS if t.get("name") in _PUBLIC_TOOL_NAMES]

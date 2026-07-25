@@ -35,6 +35,7 @@ LEGACY_EMBEDDING_MODEL_ENV = "ENGRAM_EMBEDDING_MODEL"
 # Embedding backend selection:
 #   ENGRAM_EMBED_URL unset      → Ollama at OLLAMA_HOST (default)
 #   ENGRAM_EMBED_URL=disabled   → embeddings off (lexical-only search)
+#   ENGRAM_EMBED_URL=local|onnx|fastembed → optional in-process ONNX (extra)
 #   ENGRAM_EMBED_URL=<url>      → OpenAI-compatible /v1/embeddings endpoint
 #                                 (auth via ENGRAM_EMBED_API_KEY if set)
 EMBED_URL_ENV = "ENGRAM_EMBED_URL"
@@ -265,17 +266,50 @@ def warm_up(model: str | None = None) -> bool:
 
 
 def resolve_embed_backend() -> tuple[str, str]:
-    """Return ``(kind, base_url)`` where kind is ``ollama``, ``openai``, or ``disabled``.
+    """Return ``(kind, base_url)`` where kind is ``ollama``, ``openai``, ``local``, or ``disabled``.
 
-    Any non-empty ``ENGRAM_EMBED_URL`` other than the literal ``disabled`` selects
-    the OpenAI-compatible backend at that URL.
+    Any non-empty ``ENGRAM_EMBED_URL`` other than the literal ``disabled`` /
+    ``local``/``onnx``/``fastembed`` selects the OpenAI-compatible backend.
     """
     url = os.environ.get(EMBED_URL_ENV, "").strip()
     if url.lower() == "disabled":
         return "disabled", ""
+    if url.lower() in ("local", "onnx", "fastembed"):
+        return "local", "local"
     if url:
         return "openai", url.rstrip("/")
     return "ollama", config.ollama_host()
+
+
+_local_model = None
+
+
+def _embed_local(text: str, model: str | None = None) -> list[float] | None:
+    """Optional in-process embeddings via fastembed (``pip install engram-memory[embed]``)."""
+    global _local_model
+    try:
+        from fastembed import TextEmbedding  # type: ignore
+    except Exception:
+        logger.warning(
+            "ENGRAM_EMBED_URL=local requires the optional 'embed' extra "
+            "(pip install 'engram-memory[embed]')"
+        )
+        return None
+    name = model or resolve_embedding_model_name()
+    # Map Engram default to a common 768-dim ONNX model when possible.
+    if name == "nomic-embed-text":
+        name = os.environ.get("ENGRAM_FASTEMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+    try:
+        if _local_model is None or getattr(_local_model, "_engram_name", None) != name:
+            _local_model = TextEmbedding(model_name=name)
+            _local_model._engram_name = name  # type: ignore[attr-defined]
+        vecs = list(_local_model.embed([text]))
+        if not vecs:
+            return None
+        return [float(x) for x in vecs[0]]
+    except Exception:
+        logger.exception("local/ONNX embed failed")
+        return None
 
 
 def _openai_embeddings_endpoint(base_url: str) -> str:
@@ -292,6 +326,8 @@ def is_embedding_host_available() -> bool:
     kind, base_url = resolve_embed_backend()
     if kind == "disabled":
         return False
+    if kind == "local":
+        return True
     return not _is_host_in_cooldown(base_url)
 
 
@@ -429,6 +465,21 @@ def embed_text(text: str, model: str | None = None, timeout: float | None = None
 
     if _is_host_in_cooldown(base_url):
         _last_embed_failure_reason = "ollama_host_cooldown"
+        return None
+
+    if kind == "local":
+        vec = _embed_local(text, model=active_model)
+        if vec is not None:
+            _embed_cache[cache_key] = list(vec)
+            _embed_cache.move_to_end(cache_key)
+            while len(_embed_cache) > EMBED_CACHE_MAX:
+                _embed_cache.popitem(last=False)
+            try:
+                _persistent_cache_put(active_model, text, vec)
+            except Exception:
+                pass
+            return vec
+        _last_embed_failure_reason = "local_embed_unavailable"
         return None
 
     headers = {"Content-Type": "application/json"}

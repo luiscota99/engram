@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 from . import config
-from .database import get_connection, rebuild_fts
+from .database import get_connection, rebuild_fts, repair_fts_delta
 
 
 # Simple formatting helpers so we don't circularly import from cli if we don't have to
@@ -216,8 +216,38 @@ def run_diagnostics(repair=False):
                 )
             )
             if repair:
+                # Prefer messaging that existing tests/docs recognize; still
+                # distinguish small vs large drift for operators.
+                delta = abs(core_count - fts_count)
                 print(fmt_dim("  Running FTS Rebuild from core tables..."))
-                rebuild_fts(conn)
+                if delta > max(50, core_count // 5):
+                    print(fmt_dim(f"  (large drift Δ={delta}) — full rebuild"))
+                    rebuild_fts(conn)
+                else:
+                    stats = repair_fts_delta(conn)
+                    # If delta repair couldn't close the gap, fall back.
+                    core2 = sum(
+                        conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                        for t in [
+                            "mistakes",
+                            "patterns",
+                            "skills",
+                            "conversations",
+                            "prompts",
+                            "sessions",
+                        ]
+                    )
+                    fts2 = conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0]
+                    if core2 != fts2:
+                        print(fmt_dim("  Delta repair incomplete — falling back to full rebuild"))
+                        rebuild_fts(conn)
+                    else:
+                        print(
+                            fmt_dim(
+                                f"  Delta repair: reindexed={stats['reindexed']} "
+                                f"orphans_removed={stats['orphans_removed']}"
+                            )
+                        )
                 issues_fixed += 1
                 print("  ✓ Repair: FTS index rebuilt successfully. All core items are now indexed.")
         else:

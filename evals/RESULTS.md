@@ -1,67 +1,45 @@
 # Public Eval Results
 
-Last updated: **2026-06-12**
+Last updated: **2026-07-25** (SOTA roadmap)
 
-## Seeded regression (`benchmarks/test_queries.json`)
+## Seeded regression / EEME (`benchmarks/test_queries.json`)
 
-100 labeled queries across 8 categories (v1.2). CI gates hybrid **R@5 ≥ 0.90** on the full set.
+100 labeled engineering queries. CI gates hybrid **R@5 ≥ 0.90**. Also runnable as:
+
+```bash
+python benchmarks/eeme_bench.py --fail-under-r5 0.90
+```
 
 | Metric | Last known | Target |
 |--------|------------|--------|
 | **R@5 (aggregate)** | **1.00** | ≥ 0.90 |
-| **MRR** | **0.90** | ≥ 0.80 |
-| **R@1** | 0.82 | — |
-| **NDCG@5** | 0.93 | — |
+| **MRR** | **~0.92** | ≥ 0.80 |
 
-### R@5 by category
-
-| Category | n | R@5 |
-|----------|--:|----:|
-| exact_error | 15 | 1.00 |
-| semantic_similar | 19 | 1.00 |
-| tag_filter | 13 | 1.00 |
-| type_inference | 13 | 1.00 |
-| multi_hop | 12 | 1.00 |
-| conversation | 10 | 1.00 |
-| prompt | 8 | 1.00 |
-| abstention | 10 | 1.00 |
-
-```bash
-python benchmarks/engram_retrieval_bench.py --output /tmp/retrieval.json
-```
-
-**Abstention grading:** off-topic queries pass when top-k hits have query-term overlap &lt; `abstention_min_overlap` (default 0.25). See `benchmarks/grading.py`.
-
-## Public labeled set (`evals/public_queries.json`)
+## LongMemEval (retrieval-only, local embedder)
 
 | Metric | Last known | Notes |
 |--------|------------|-------|
-| **R@5** | _TBD_ | 30+ held-out queries on seed DB |
-| **MRR** | _TBD_ | |
+| **Session R@5** | **0.538** | Full oracle, 940 sessions — see `benchmarks/BENCHMARKS.md` |
+| **MRR** | **0.442** | Not comparable to vendor QA accuracy headlines |
+
+## BEAM
+
+Adapter stub: `benchmarks/beam_bench.py` (retrieval-only; provide local labeled slice).
+
+## LoCoMo
+
+Adapter: `benchmarks/locomo_bench.py --queries <file>` (retrieval R@k only).
+
+## Relevance gate gold (`evals/gate_gold.json`)
 
 ```bash
-ENGRAM_DB_PATH=/tmp/eval.db python benchmarks/engram_retrieval_bench.py \
-  --queries evals/public_queries.json --output /tmp/public_eval.json
-```
-
-## LongMemEval adapter
-
-| Metric | Last known | Notes |
-|--------|------------|-------|
-| **R@5** | 1.00 | 5-query offline smoke (`--offline`) |
-| **MRR** | 1.00 | |
-
-```bash
-python benchmarks/longmemeval_bench.py --offline --output benchmarks/longmemeval_results.json
+python benchmarks/gate_eval.py --fail-under-precision 0.95
 ```
 
 ## Comparison context
 
-| System | LongMemEval R@5 | Source |
-|--------|------------------|--------|
-| Engram | _TBD_ (full dataset) | This repo |
-| MemPalace | 96.6% | Published (500q) |
-| Mem0 v3 | 94.8% | Published |
-| Mastra | 94.87% | Self-reported |
-
-_Update this table only with reproducible runs; note DB path, commit SHA, and Ollama model._
+| System | Published claim | Comparable to Engram retrieval? |
+|--------|-----------------|----------------------------------|
+| Engram | R@5 retrieval 0.538 LME oracle | Yes |
+| MemPalace | ~96.6% LME R@5 (claim) | Same family if retrieval |
+| Mem0 / Zep / Hindsight | Often QA / LLM-judge | **No** — see `docs/COMPARISON.md` |

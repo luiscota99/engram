@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 72 commands.
+All commands are invoked as `engram <command>`. 76 commands.
 
 ### `engram add`
 
@@ -210,6 +210,18 @@ Import Cursor skills into Engram
   - `<path>`
   - `--dry-run`
 
+### `engram import-mem0`
+
+Import a Mem0 JSON export
+
+  - `<path>`
+
+### `engram import-openmemory`
+
+Import an OpenMemory JSON export
+
+  - `<path>`
+
 ### `engram import-session-summary`
 
 Ingest session_summary.md (or given file) into global memory as a conversation entry
@@ -221,6 +233,12 @@ Ingest session_summary.md (or given file) into global memory as a conversation e
 ### `engram import-skills`
 
 Import skills from orchestrator SKILL.md files
+
+  - `<path>`
+
+### `engram import-zep`
+
+Import a Zep/Graphiti JSON export
 
   - `<path>`
 
@@ -255,6 +273,17 @@ Initialize the database
 One-shot setup: detect Cursor/Claude Code/Antigravity and wire Engram into all of them
 
   - `--all` — Set up every integration even if not detected
+
+### `engram kg`
+
+Temporal knowledge facts (query/timeline/invalidate)
+
+  - `<kg_action>` — one of `query, timeline, invalidate, add`
+
+- **`engram kg add`**
+- **`engram kg invalidate`**
+- **`engram kg query`**
+- **`engram kg timeline`**
 
 ### `engram link`
 
@@ -417,6 +446,9 @@ Search all memory
   - `--project` — Project directory for affinity ranking (default: current working directory)
   - `--no-project` — Disable project-scoped affinity (search global memory only)
   - `--include-superseded` — Include superseded/invalidated memories in results
+  - `--as-of` — Hide items invalidated on/before this date
+  - `--explain` — Show score breakdown per hit
+  - `--token-budget` — Soft token budget for snippets
 
 ### `engram seed`
 

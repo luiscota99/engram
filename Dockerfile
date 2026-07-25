@@ -5,18 +5,16 @@ LABEL description="Engram — persistent memory for AI-assisted development"
 
 WORKDIR /app
 
-# Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy source
+COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
+COPY cursor-rules/ ./cursor-rules/
+COPY claude-skills/ ./claude-skills/
+COPY scripts/ ./scripts/
 
-# Create data directory for volume mount
+RUN pip install --no-cache-dir .
+
 RUN mkdir -p /data
-
-# Default DB path inside container
 ENV ENGRAM_DB_PATH=/data/memory.db
 
-ENTRYPOINT ["python", "-m", "src.cli"]
+ENTRYPOINT ["engram"]
 CMD ["stats"]

@@ -31,6 +31,7 @@ from ...memory_ops import (
     pattern_dedup_content,
     skill_dedup_content,
 )
+from ...providers import get_provider
 from ...search import get_recent, get_stats, search, semantic_search
 from ...workflow import (
     WorkflowViolationError,
@@ -70,14 +71,18 @@ def cmd_search(args):
         project_path = os.path.abspath(os.path.expanduser(args.project))
     else:
         project_path = os.getcwd()
-    results = search(
+    explain = bool(getattr(args, "explain", False))
+    results = get_provider().search(
         query,
-        args.type,
-        tag_list,
-        args.limit,
+        item_type=args.type,
+        tags=tag_list,
+        limit=args.limit,
         project_path=project_path,
         audit_source="cli",
         include_superseded=getattr(args, "include_superseded", False),
+        as_of=getattr(args, "as_of", None),
+        explain=explain,
+        token_budget=getattr(args, "token_budget", None),
     )
     if not results:
         print("No results found.")
@@ -91,7 +96,61 @@ def cmd_search(args):
             print(f"    {r['snippet'][:120].replace(chr(10), ' ')}...")
         if r["tags"]:
             print(fmt_dim(f"    tags: {r['tags']}"))
+        if explain and r.get("score_breakdown"):
+            print(fmt_dim(f"    explain: {r['score_breakdown']}"))
         print("")
+
+
+def cmd_kg(args):
+    """Temporal knowledge facts CLI."""
+    from ...temporal import invalidate_memory, kg_query, kg_timeline, upsert_fact
+
+    action = args.kg_action
+    if action == "query":
+        rows = kg_query(args.subject, limit=args.limit or 20)
+        if not rows:
+            print(fmt_dim("No facts."))
+            return
+        for r in rows:
+            print(
+                f"  #{r['id']} {r['subject']} —{r['predicate']}→ {r['object']} "
+                f"[{r.get('valid_from')}..{r.get('valid_until') or '∞'}]"
+            )
+        return
+    if action == "timeline":
+        if not args.subject:
+            print("Error: --subject required")
+            sys.exit(1)
+        rows = kg_timeline(args.subject)
+        if not rows:
+            print(fmt_dim("Empty timeline."))
+            return
+        for r in rows:
+            print(f"  {r.get('valid_from')} {r['predicate']}: {r['object']}")
+        return
+    if action == "invalidate":
+        if not args.item_type or args.item_id is None:
+            print("Error: --type and --id required")
+            sys.exit(1)
+        ok = invalidate_memory(
+            args.item_type,
+            int(args.item_id),
+            reason=args.reason or "cli invalidate",
+            superseded_by=args.superseded_by,
+        )
+        print("Invalidated." if ok else "Failed.")
+        return
+    if action == "add":
+        fid = upsert_fact(
+            args.subject,
+            args.predicate,
+            args.object,
+            valid_until=args.valid_until,
+        )
+        print(f"Fact #{fid} recorded.")
+        return
+    print("Unknown kg action")
+    sys.exit(1)
 
 
 def cmd_recent(args):

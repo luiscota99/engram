@@ -54,6 +54,19 @@ jobs:
       run: |
         python benchmarks/engram_retrieval_bench.py --fail-under-r5 0.90
 
+    - name: Relevance gate gold (precision)
+      env:
+        PYTHONPATH: .
+      run: |
+        python benchmarks/gate_eval.py --fail-under-precision 0.95
+
+    - name: EEME home-domain retrieval
+      env:
+        ENGRAM_DB_PATH: ${{ runner.temp }}/engram_eeme_ci.db
+        PYTHONPATH: .
+      run: |
+        python benchmarks/eeme_bench.py --fail-under-r5 0.90
+
   degraded-retrieval:
     runs-on: ubuntu-latest
     steps:

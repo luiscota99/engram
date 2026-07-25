@@ -467,6 +467,39 @@ MIGRATIONS = {
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_summary", "TEXT"),
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_at", "TEXT"),
     ],
+    27: [
+        # SOTA competitive batch: guard trigger phrases, entities, pin
+        # snapshots (avoid FTS SCAN), feedback idempotency keys.
+        """CREATE TABLE IF NOT EXISTS mistake_triggers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_type TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            phrase TEXT NOT NULL,
+            UNIQUE(item_type, item_id, phrase)
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_triggers_phrase ON mistake_triggers(phrase);",
+        """CREATE TABLE IF NOT EXISTS entities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            canonical_name TEXT NOT NULL UNIQUE,
+            slug TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );""",
+        """CREATE TABLE IF NOT EXISTS item_entities (
+            item_type TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            PRIMARY KEY (item_type, item_id, entity_id)
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_item_entities_entity ON item_entities(entity_id);",
+        lambda conn: _add_column_if_missing(conn, "item_pins", "title", "TEXT"),
+        lambda conn: _add_column_if_missing(conn, "item_pins", "tags", "TEXT"),
+        lambda conn: _add_column_if_missing(conn, "retrieval_feedback", "idempotency_key", "TEXT"),
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_idem
+           ON retrieval_feedback(idempotency_key) WHERE idempotency_key IS NOT NULL;""",
+        lambda conn: _backfill_pin_snapshots(conn),
+        lambda conn: _bootstrap_triggers(conn),
+    ],
     25: [
         # Per-memory forgetting curves (FSRS-4.5): stability/difficulty state
         # evolved by usage (recall@good), helped feedback (recall@easy) and
@@ -608,6 +641,37 @@ def _add_column_if_missing(conn, table: str, column: str, decl: str) -> None:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def _backfill_pin_snapshots(conn) -> None:
+    """Denormalize title/tags onto item_pins so list-pinned never SCANs FTS."""
+    rows = conn.execute("SELECT item_type, item_id FROM item_pins").fetchall()
+    for row in rows:
+        fts = conn.execute(
+            "SELECT title, tags FROM memory_fts WHERE item_type = ? AND item_id = ?",
+            (row["item_type"], str(row["item_id"])),
+        ).fetchone()
+        if fts:
+            conn.execute(
+                "UPDATE item_pins SET title = ?, tags = ? WHERE item_type = ? AND item_id = ?",
+                (fts["title"], fts["tags"], row["item_type"], row["item_id"]),
+            )
+
+
+def _bootstrap_triggers(conn) -> None:
+    """Populate mistake_triggers from existing mistakes/patterns (no network)."""
+    from .trigger_index import rebuild_triggers_for_item
+
+    for itype, table, title_col, content_expr in (
+        ("mistake", "mistakes", "mistake", "context || ' ' || mistake || ' ' || COALESCE(fix,'')"),
+        ("pattern", "patterns", "name", "symptoms || ' ' || root_cause || ' ' || standard_fix"),
+    ):
+        for row in conn.execute(
+            f"SELECT id, {title_col} AS title, {content_expr} AS content FROM {table}"
+        ).fetchall():
+            rebuild_triggers_for_item(
+                conn, itype, int(row["id"]), row["title"] or "", row["content"] or ""
+            )
+
+
 def _normalize_vec_memory(conn) -> None:
     import json as _json
     import math as _math
@@ -645,6 +709,12 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    27: [
+        "DROP TABLE IF EXISTS mistake_triggers;",
+        "DROP TABLE IF EXISTS item_entities;",
+        "DROP TABLE IF EXISTS entities;",
+        "DROP INDEX IF EXISTS idx_feedback_idem;",
+    ],
     26: [
         # ALTER ADD COLUMN is left in place on downgrade (harmless).
     ],

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 
 try:
@@ -39,7 +40,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -311,6 +312,8 @@ CREATE TABLE IF NOT EXISTS item_pins (
     item_type TEXT NOT NULL,
     item_id INTEGER NOT NULL,
     pinned_at TEXT DEFAULT (datetime('now')),
+    title TEXT,
+    tags TEXT,
     PRIMARY KEY (item_type, item_id)
 );
 CREATE INDEX IF NOT EXISTS idx_item_pins_type ON item_pins(item_type);
@@ -420,9 +423,12 @@ CREATE TABLE IF NOT EXISTS retrieval_feedback (
     helpful INTEGER NOT NULL CHECK (helpful IN (1, -1)),
     query TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
+    idempotency_key TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_item ON retrieval_feedback(item_type, item_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_idem
+    ON retrieval_feedback(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 -- Per-memory forgetting curves (schema v25, FSRS-4.5). Evolved by usage and
 -- feedback events; items without a row keep fixed-half-life ranking behavior.
@@ -484,6 +490,32 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     source_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_memory_facts_subject ON memory_facts(subject);
+
+-- Guard hot-path trigger phrases (schema v27) — no embeddings on PreToolUse.
+CREATE TABLE IF NOT EXISTS mistake_triggers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    phrase TEXT NOT NULL,
+    UNIQUE(item_type, item_id, phrase)
+);
+CREATE INDEX IF NOT EXISTS idx_triggers_phrase ON mistake_triggers(phrase);
+
+-- Entity resolution (schema v27)
+CREATE TABLE IF NOT EXISTS entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    canonical_name TEXT NOT NULL UNIQUE,
+    slug TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS item_entities (
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_type, item_id, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_item_entities_entity ON item_entities(entity_id);
 """
 
 
@@ -730,6 +762,27 @@ def index_in_fts(conn, item_type, item_id, title, content, tags_list):
             (rowid, item_type, int(item_id), embedding_model, status),
         )
 
+    # Keep pin snapshots, guard triggers, and entities in sync with FTS content.
+    try:
+        conn.execute(
+            "UPDATE item_pins SET title = ?, tags = ? WHERE item_type = ? AND item_id = ?",
+            (title, tags_str, item_type, int(item_id)),
+        )
+    except Exception:
+        pass
+    try:
+        from .trigger_index import rebuild_triggers_for_item
+
+        rebuild_triggers_for_item(conn, item_type, int(item_id), title or "", content or "")
+    except Exception:
+        logger.debug("trigger reindex skipped", exc_info=True)
+    try:
+        from .entities import auto_link_from_text
+
+        auto_link_from_text(item_type, int(item_id), f"{title}\n{content}", conn=conn)
+    except Exception:
+        logger.debug("entity link skipped", exc_info=True)
+
 
 def rebuild_fts(conn):
     """Fully rebuild the FTS index from core tables.
@@ -762,6 +815,57 @@ def rebuild_fts(conn):
 
     return True
 
+
+def repair_fts_delta(conn) -> dict:
+    """Reindex only missing core rows and drop orphan FTS rows (no nuclear wipe).
+
+    Returns ``{reindexed, orphans_removed}``. Prefer this over ``rebuild_fts``
+    when drift is small so embeddings for healthy rows stay put.
+    """
+    reindexed = 0
+    orphans = 0
+    # Orphan FTS rows (no matching core id)
+    for item_type, table, _title_col, _content_expr in rebuild_specs():
+        rows = conn.execute(
+            """SELECT f.rowid, f.item_id FROM memory_fts f
+               WHERE f.item_type = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM {table} c WHERE CAST(c.id AS TEXT) = f.item_id
+                 )""".format(table=table),
+            (item_type,),
+        ).fetchall()
+        for row in rows:
+            rid = row["rowid"]
+            conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rid,))
+            try:
+                conn.execute("DELETE FROM vec_memory WHERE rowid = ?", (rid,))
+            except Exception:
+                pass
+            conn.execute("DELETE FROM embedding_status WHERE fts_rowid = ?", (rid,))
+            orphans += 1
+
+    # Missing FTS rows for core items
+    for item_type, table, title_col, content_expr in rebuild_specs():
+        missing = conn.execute(
+            f"""SELECT c.id, {title_col} AS title, {content_expr} AS content
+                FROM {table} c
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM memory_fts f
+                  WHERE f.item_type = ? AND f.item_id = CAST(c.id AS TEXT)
+                )""",
+            (item_type,),
+        ).fetchall()
+        for row in missing:
+            tag_rows = conn.execute(
+                """SELECT t.name FROM tags t
+                   JOIN item_tags it ON t.id = it.tag_id
+                   WHERE it.item_type = ? AND it.item_id = ?""",
+                (item_type, row["id"]),
+            ).fetchall()
+            tags = [t["name"] for t in tag_rows]
+            index_in_fts(conn, item_type, row["id"], row["title"], row["content"], tags)
+            reindexed += 1
+    return {"reindexed": reindexed, "orphans_removed": orphans}
 
 def get_item(item_type, item_id, db_path=None):
     """Fetch the full structured data for a specific item, including its tags."""
@@ -1132,6 +1236,8 @@ SOFT_FK_TABLES = (
     "skill_tests",
     "retrieval_feedback",
     "memory_dynamics",
+    "item_entities",
+    "mistake_triggers",
 )
 
 
@@ -1183,9 +1289,16 @@ def pin_item(item_type: str, item_id: int, db_path=None) -> bool:
     if not get_item(item_type, item_id, db_path=db_path):
         return False
     with get_connection(db_path) as conn:
+        fts = conn.execute(
+            "SELECT title, tags FROM memory_fts WHERE item_type = ? AND item_id = ?",
+            (item_type, str(item_id)),
+        ).fetchone()
+        title = fts["title"] if fts else None
+        tags = fts["tags"] if fts else None
         conn.execute(
-            "INSERT OR REPLACE INTO item_pins (item_type, item_id, pinned_at) VALUES (?, ?, datetime('now'))",
-            (item_type, int(item_id)),
+            "INSERT OR REPLACE INTO item_pins (item_type, item_id, pinned_at, title, tags) "
+            "VALUES (?, ?, datetime('now'), ?, ?)",
+            (item_type, int(item_id), title, tags),
         )
     return True
 
@@ -1210,36 +1323,52 @@ def is_pinned(item_type: str, item_id: int, db_path=None) -> bool:
 
 
 def get_pinned_items(item_type: str | None = None, limit: int = 20, db_path=None, conn=None) -> list[dict]:
-    """Return pinned memory rows joined with FTS metadata."""
+    """Return pinned memory rows from the pin snapshot (no FTS virtual SCAN).
+
+    Falls back to a point lookup on ``memory_fts`` when snapshot columns are
+    empty (pre-v27 pins).
+    """
     with connection_scope(conn, db_path) as conn:
         conditions = []
         params: list = []
         if item_type:
-            conditions.append("p.item_type = ?")
+            conditions.append("item_type = ?")
             params.append(item_type)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         rows = conn.execute(
-            f"""SELECT p.item_type, p.item_id, p.pinned_at,
-                       f.title, f.content AS snippet, f.tags, f.rowid AS fts_rowid
-                FROM item_pins p
-                JOIN memory_fts f
-                  ON f.item_type = p.item_type AND CAST(f.item_id AS INTEGER) = p.item_id
+            f"""SELECT item_type, item_id, pinned_at, title, tags
+                FROM item_pins
                 {where}
-                ORDER BY p.pinned_at DESC
+                ORDER BY pinned_at DESC
                 LIMIT ?""",
             params + [limit],
         ).fetchall()
         results = []
         for row in rows:
+            title = row["title"] or ""
+            tags = row["tags"] or ""
+            snippet = ""
+            fts_rowid = None
+            if not title:
+                fts = conn.execute(
+                    "SELECT title, tags, content, rowid FROM memory_fts "
+                    "WHERE item_type = ? AND item_id = ?",
+                    (row["item_type"], str(row["item_id"])),
+                ).fetchone()
+                if fts:
+                    title = fts["title"] or ""
+                    tags = fts["tags"] or tags
+                    snippet = fts["content"] or ""
+                    fts_rowid = fts["rowid"]
             results.append({
                 "item_type": row["item_type"],
                 "item_id": str(row["item_id"]),
-                "title": row["title"],
-                "snippet": row["snippet"] or "",
-                "tags": row["tags"],
+                "title": title,
+                "snippet": snippet,
+                "tags": tags,
                 "pinned": True,
                 "pinned_at": row["pinned_at"],
-                "rowid": row["fts_rowid"],
+                "rowid": fts_rowid,
                 "is_semantic": False,
                 "utility_score": 9999.0,
             })
@@ -1296,10 +1425,26 @@ def check_duplicate_before_add(
 
     if not result["duplicates"] and content:
         with get_connection(db_path) as conn:
-            rows = conn.execute(
-                "SELECT item_type, item_id, title, content FROM memory_fts WHERE item_type = ?",
-                (item_type,),
-            ).fetchall()
+            # Prefer FTS MATCH candidate selection over a full-type scan.
+            terms = re.findall(r"[a-z0-9]+", content.lower())
+            terms = [t for t in terms if len(t) >= 3][:8]
+            rows = []
+            if terms:
+                fts_q = " OR ".join(f'"{t}"' for t in terms)
+                try:
+                    rows = conn.execute(
+                        "SELECT item_type, item_id, title, content FROM memory_fts "
+                        "WHERE item_type = ? AND memory_fts MATCH ? LIMIT 40",
+                        (item_type, fts_q),
+                    ).fetchall()
+                except Exception:
+                    rows = []
+            if not rows:
+                rows = conn.execute(
+                    "SELECT item_type, item_id, title, content FROM memory_fts "
+                    "WHERE item_type = ? LIMIT 200",
+                    (item_type,),
+                ).fetchall()
             for row in rows:
                 text = f"{row['title']} {row['content'] or ''}"
                 if _jaccard_similarity(content, text) >= 0.6:

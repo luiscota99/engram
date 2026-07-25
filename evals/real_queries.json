@@ -34,6 +34,181 @@
       "expected_type": "prompt",
       "expected_title_contains": "MTG Judge",
       "category": "misc"
+    },
+    {
+      "id": "eng_sqlite_busy",
+      "query": "sqlite busy_timeout concurrent writers",
+      "expected_type": "mistake",
+      "expected_title_contains": "busy",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_wal",
+      "query": "enable WAL mode for sqlite",
+      "expected_type": "skill",
+      "expected_title_contains": "WAL",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_fts",
+      "query": "FTS5 dual write path corruption",
+      "expected_type": "mistake",
+      "expected_title_contains": "FTS",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_rrf",
+      "query": "reciprocal rank fusion hybrid search",
+      "expected_type": "pattern",
+      "expected_title_contains": "RRF",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_mcp_orphan",
+      "query": "MCP server orphan after client death",
+      "expected_type": "mistake",
+      "expected_title_contains": "MCP",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_reflex",
+      "query": "promote skill to approved reflex",
+      "expected_type": "skill",
+      "expected_title_contains": "reflex",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_guard",
+      "query": "pretooluse guard known mistakes",
+      "expected_type": "skill",
+      "expected_title_contains": "guard",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_embed",
+      "query": "ollama keep_alive embedding cold start",
+      "expected_type": "mistake",
+      "expected_title_contains": "embed",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_dedup",
+      "query": "near duplicate memory on add",
+      "expected_type": "pattern",
+      "expected_title_contains": "dedup",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_inbox",
+      "query": "propose decision via inbox approve",
+      "expected_type": "skill",
+      "expected_title_contains": "inbox",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_asof",
+      "query": "invalidate superseded skill as_of today",
+      "expected_type": "skill",
+      "expected_title_contains": "invalid",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_pin",
+      "query": "pin core memory always in search",
+      "expected_type": "skill",
+      "expected_title_contains": "pin",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_chunk_sync",
+      "query": "sync memories across machines via git chunks",
+      "expected_type": "skill",
+      "expected_title_contains": "sync",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_fsrs",
+      "query": "per memory forgetting curve stability",
+      "expected_type": "pattern",
+      "expected_title_contains": "FSRS",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_route",
+      "query": "cheapest action ladder reflex recall reason",
+      "expected_type": "skill",
+      "expected_title_contains": "route",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_entity",
+      "query": "entity linking API Parameter Mismatch",
+      "expected_type": "pattern",
+      "expected_title_contains": "Parameter",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_benchmark",
+      "query": "retrieval benchmark R@5 gate CI",
+      "expected_type": "skill",
+      "expected_title_contains": "benchmark",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_doctor",
+      "query": "doctor repair FTS drift soft FK orphans",
+      "expected_type": "skill",
+      "expected_title_contains": "doctor",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_temporal",
+      "query": "temporal fact valid_until invalidate",
+      "expected_type": "skill",
+      "expected_title_contains": "temporal",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_explain",
+      "query": "explain score breakdown utility rrf",
+      "expected_type": "skill",
+      "expected_title_contains": "explain",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_import",
+      "query": "import memories from mem0 export",
+      "expected_type": "skill",
+      "expected_title_contains": "import",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_http_mcp",
+      "query": "HTTP MCP bearer token remote agent",
+      "expected_type": "skill",
+      "expected_title_contains": "MCP",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_onnx",
+      "query": "local ONNX fastembed hot path",
+      "expected_type": "skill",
+      "expected_title_contains": "embed",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_committee",
+      "query": "committee workflow advance phase decision",
+      "expected_type": "skill",
+      "expected_title_contains": "workflow",
+      "category": "engineering"
+    },
+    {
+      "id": "eng_handoff",
+      "query": "milestone handoff precompact checkpoint",
+      "expected_type": "skill",
+      "expected_title_contains": "handoff",
+      "category": "engineering"
     }
   ]
 }
