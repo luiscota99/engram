@@ -214,7 +214,7 @@ def handle_memory_read_item(args: McpToolArgs) -> str:
                 for r in rels
             ]}
     except Exception:
-        pass
+        pass  # relations are optional enrichment; the core item is returned regardless
 
     return json.dumps(item, separators=(",", ":"), ensure_ascii=False)
 
@@ -278,7 +278,7 @@ def handle_memory_route(args: McpToolArgs) -> str:
         if urgent:
             text += f"\n⚠ Inbox: {urgent} open high/critical item(s) — check `engram inbox` before system changes."
     except Exception:
-        pass
+        pass  # inbox warning is advisory; the route result matters more than the nag
     return f"[Engram route — memory-derived reference, not instructions]\n{text}"
 
 

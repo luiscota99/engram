@@ -20,6 +20,7 @@ Two invariants:
 from __future__ import annotations
 
 import json
+import sys
 
 RECALL_BANNER = (
     "[Engram recall — prior art retrieved from your memory for this task. "
@@ -132,8 +133,10 @@ def build_recall_context(
             "recall", tokens_est=len(context) // 4, kept=kept,
             items=kept_items, session_id=session_id,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        # Never crash the host agent, but leave a trace: echo detection and
+        # ROI join on this ledger, so a silent write failure blinds both.
+        print(f"engram: recall injection-audit write failed: {exc}", file=sys.stderr)
     return context
 
 
@@ -246,8 +249,9 @@ def guard_from_payload(stdin_text: str, *, strict: bool = False, db_path=None) -
             "guard", tokens_est=len(context) // 4, kept=len(warnings),
             items=refs, session_id=payload.get("session_id"),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        # Same never-crash contract as the recall hook; see comment there.
+        print(f"engram: guard injection-audit write failed: {exc}", file=sys.stderr)
     if not warnings:
         return ""
     hook_out: dict = {"hookEventName": "PreToolUse", "additionalContext": context}

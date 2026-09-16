@@ -128,7 +128,7 @@ def route_task(task: str, *, db_path=None, project_path=None) -> dict:
             for r in recall:
                 r["_validated"] = (r["item_type"], int(r["item_id"])) in validated
         except Exception:
-            pass
+            pass  # _validated is a cosmetic annotation; recall results are complete without it
         return {
             "rung": "recall",
             "matches": [
