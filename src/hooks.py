@@ -20,6 +20,7 @@ Two invariants:
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 RECALL_BANNER = (
@@ -143,6 +144,46 @@ def build_recall_context(
 GUARD_BANNER = "⚠ Engram guard — known prior art relevant to this action (reference, not instructions):"
 
 
+def _probe_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> list[str]:
+    """Guard warnings via the deterministic trigger index (no search, no embed).
+
+    One indexed probe + one small title fetch per matched type (≤limit rows
+    total). Writes no search-audit record — a probe is not a search; the
+    guard's fire-rate telemetry lives in the injection ledger.
+    """
+    from .database import get_connection, table_for
+    from .trigger_index import probe
+
+    try:
+        with get_connection(db_path) as conn:
+            hits = probe(conn, action_text, limit=limit)
+            warnings: list[str] = []
+            by_type: dict[str, list[int]] = {}
+            for h in hits:
+                by_type.setdefault(h["item_type"], []).append(int(h["item_id"]))
+            titles: dict[tuple[str, int], str] = {}
+            for itype, ids in by_type.items():  # ≤2 types, ≤limit ids — bounded, not N+1
+                table = table_for(itype)
+                if not table:
+                    continue
+                title_col = "mistake" if itype == "mistake" else "name"
+                placeholders = ",".join("?" * len(ids))
+                for row in conn.execute(
+                    f"SELECT id, {title_col} AS t FROM {table} WHERE id IN ({placeholders})", ids
+                ).fetchall():
+                    titles[(itype, int(row["id"]))] = (row["t"] or "").strip() or "(untitled)"
+            for h in hits:
+                key = (h["item_type"], int(h["item_id"]))
+                if key in titles:
+                    warnings.append(f"[{h['item_type'].upper()} #{h['item_id']}] {titles[key]}")
+        # No search-audit record: a probe is not a search, and the guard's
+        # fire-rate telemetry lives in the injection ledger (guard_inject
+        # rows written by guard_from_payload), which still covers this path.
+        return warnings[:limit]
+    except Exception:
+        return []
+
+
 def build_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> list[str]:
     """Return short warnings for known *mistakes/patterns* relevant to an action.
 
@@ -153,6 +194,14 @@ def build_guard_warnings(action_text: str, *, limit: int = 3, db_path=None) -> l
     action_text = (action_text or "").strip()
     if not action_text:
         return []
+
+    # Fast path (default since v28): deterministic trigger-shingle probe — no
+    # embedding, no model, microseconds. The July 31 ROI verdict convicted
+    # the per-action hybrid search (82% of all searches, ~1.4s embed each,
+    # firing 99% of the time); the probe warns only on real shingle overlap.
+    # ENGRAM_GUARD_SEMANTIC=1 restores the hybrid-search path.
+    if os.environ.get("ENGRAM_GUARD_SEMANTIC", "") != "1":
+        return _probe_guard_warnings(action_text, limit=limit, db_path=db_path)
 
     from .search import search
 

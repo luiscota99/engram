@@ -284,6 +284,9 @@ def test_recall_hook_caps_embed_timeout(seeded, monkeypatch):
 
 
 def test_guard_hook_caps_embed_timeout(guarded, monkeypatch):
+    """The embed-timeout cap is a property of the SEMANTIC guard path, which
+    is opt-in since the v28 fast path became the default."""
+    monkeypatch.setenv("ENGRAM_GUARD_SEMANTIC", "1")
     captured = {}
 
     def _fake_search(*args, **kwargs):

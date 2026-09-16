@@ -467,6 +467,19 @@ MIGRATIONS = {
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_summary", "TEXT"),
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_at", "TEXT"),
     ],
+    28: [
+        # Guard fast path: deterministic trigger shingles (July 31 ROI verdict
+        # convicted the per-action hybrid search — 82% of searches, ~1.4s
+        # embed each). Maintained ONLY by index_in_fts/delete_item (single
+        # owner, per the v23 lesson); backfilled here from existing FTS text.
+        """CREATE TABLE IF NOT EXISTS trigger_ngrams (
+            ngram TEXT NOT NULL,
+            item_type TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            PRIMARY KEY (ngram, item_type, item_id)
+        ) WITHOUT ROWID;""",
+        lambda conn: _backfill_trigger_ngrams(conn),
+    ],
     27: [
         # Bi-temporal + provenance edges. Two time axes (event-time
         # valid_from/valid_to, ingestion-time recorded_at/invalidated_at) +
@@ -566,6 +579,14 @@ def _rebuild_fts_with_porter(conn) -> None:
     _swap_fts_table(conn, ", tokenize='porter unicode61'", "memory_fts_v16")
 
 
+def _backfill_trigger_ngrams(conn) -> None:
+    """v28: index existing mistakes/patterns into the trigger table."""
+    from .trigger_index import backfill
+
+    n = backfill(conn)
+    logger.info(f"  ✓ Trigger index backfilled for {n} items.")
+
+
 def _drop_fts_triggers(conn) -> None:
     """v23: remove every fts_* trigger — index_in_fts() is the sole FTS owner."""
     names = [
@@ -662,6 +683,9 @@ def _normalize_vec_memory(conn) -> None:
 # ALTER TABLE ADD COLUMN steps are marked as no-ops.
 
 DOWNGRADES = {
+    28: [
+        "DROP TABLE IF EXISTS trigger_ngrams;",
+    ],
     27: [
         # ALTER ADD COLUMN steps are left in place (SQLite can't drop columns
         # pre-3.35, and the extra edge columns are harmless to older code).

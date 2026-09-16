@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -439,6 +439,15 @@ CREATE TABLE IF NOT EXISTS retrieval_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_item ON retrieval_feedback(item_type, item_id);
 
+-- Guard fast path (schema v28): deterministic trigger shingles for
+-- mistakes/patterns. Single owner: index_in_fts/delete_item — never triggers.
+CREATE TABLE IF NOT EXISTS trigger_ngrams (
+    ngram TEXT NOT NULL,
+    item_type TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    PRIMARY KEY (ngram, item_type, item_id)
+) WITHOUT ROWID;
+
 -- Per-memory forgetting curves (schema v25, FSRS-4.5). Evolved by usage and
 -- feedback events; items without a row keep fixed-half-life ranking behavior.
 CREATE TABLE IF NOT EXISTS memory_dynamics (
@@ -672,6 +681,12 @@ def get_tags_for_item(conn, item_type, item_id):
 def index_in_fts(conn, item_type, item_id, title, content, tags_list):
     """Insert or replace an item in the FTS index and generate its embedding."""
     embedding_model = resolve_embedding_model_name()
+
+    # Single-owner maintenance of the guard's trigger index (v28): the same
+    # write path that owns FTS owns the shingles — never triggers.
+    from .trigger_index import index_item_triggers
+
+    index_item_triggers(conn, item_type, int(item_id), f"{title} {content or ''}")
 
     # Remove old FTS and embedding_status entries
     old_row = conn.execute(
@@ -1147,6 +1162,7 @@ SOFT_FK_TABLES = (
     "skill_tests",
     "retrieval_feedback",
     "memory_dynamics",
+    "trigger_ngrams",
 )
 
 
