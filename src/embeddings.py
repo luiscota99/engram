@@ -190,6 +190,22 @@ _host_fails: dict[str, int] = {}
 _last_embed_failure_reason: str | None = None
 
 
+def _apply_embed_dimensions(vec: list[float]) -> list[float]:
+    """MRL truncation, client-side: slice to ENGRAM_EMBED_DIMENSIONS if set.
+
+    Lets 1024-dim models (qwen3-embedding) serve engram's float[768] schema.
+    Slice-then-renormalize is exactly server-side MRL truncation (verified
+    cosine 1.000000 against Ollama's ``dimensions`` param, 2026-07); callers
+    always l2_normalize AFTER this, which completes the equivalence. Applied
+    uniformly so the legacy endpoint (which ignores ``dimensions``) and the
+    batch endpoint behave identically.
+    """
+    dims = os.environ.get("ENGRAM_EMBED_DIMENSIONS", "").strip()
+    if dims.isdigit() and len(vec) > int(dims):
+        return vec[: int(dims)]
+    return vec
+
+
 def l2_normalize(vec: list[float]) -> list[float]:
     """Scale *vec* to unit length.
 
@@ -460,7 +476,7 @@ def embed_text(text: str, model: str | None = None, timeout: float | None = None
             if embedding:
                 _mark_host_success(base_url)
                 _last_embed_failure_reason = None
-                embedding = l2_normalize(embedding)
+                embedding = l2_normalize(_apply_embed_dimensions(embedding))
                 _embed_cache[cache_key] = list(embedding)
                 _embed_cache.move_to_end(cache_key)
                 while len(_embed_cache) > EMBED_CACHE_MAX:
@@ -569,7 +585,7 @@ def embed_batch(texts: list[str], model: str | None = None) -> list[list[float] 
     _last_embed_failure_reason = None
     for i, vec in zip(miss_idx, vectors):
         if vec:
-            vec = l2_normalize(vec)
+            vec = l2_normalize(_apply_embed_dimensions(vec))
             out[i] = vec
             _embed_cache[(active_model, prepared[i])] = list(vec)
             _embed_cache.move_to_end((active_model, prepared[i]))
