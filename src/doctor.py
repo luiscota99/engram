@@ -144,8 +144,11 @@ def run_diagnostics(repair=False):
                     issues_found += 1
             else:
                 print("✓ Ranking weights: code defaults (no fitted set installed).")
-        except Exception:
-            pass
+        except Exception as exc:
+            # Doctor's whole purpose is surfacing problems — a check that
+            # crashes must say so instead of vanishing.
+            print(fmt_error(f"Ranking weights check itself crashed ({exc}) — check skipped."))
+            issues_found += 1
 
         # 0b. Soft-FK orphans: side-table rows referencing deleted memories.
         # delete_item cleans these since July 2026; legacy deletions left

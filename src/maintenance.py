@@ -1249,7 +1249,7 @@ def get_roi_report(db_path=None) -> dict:
                     "helped": row["helped"] or 0, "unhelpful": row["unhelpful"] or 0,
                 }
         except Exception:
-            pass
+            pass  # retrieval_feedback table may not exist yet; stats section stays empty
     report["feedback_by_source"] = feedback_by_source
 
     eff = get_efficiency_report(db_path=db_path)

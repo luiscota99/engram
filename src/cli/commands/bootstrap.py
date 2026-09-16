@@ -542,7 +542,7 @@ def cmd_bootstrap(args):
         with _urllib_req.urlopen(_urllib_req.Request(ollama_host, method="GET"), timeout=2) as resp:
             ollama_ok = resp.status == 200
     except Exception:
-        pass
+        pass  # any failure just means "not reachable"; lexical-only fallback is reported below
 
     if ollama_ok:
         ollama_status = "✓ Ollama reachable — hybrid semantic+lexical search active"
