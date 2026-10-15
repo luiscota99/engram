@@ -363,3 +363,42 @@ def test_integrity_report_flags_second_writer(tmp_path, monkeypatch):
     dirty = integrity_report(db_path=db)
     assert dirty["fts_dup_groups"] == 1
     assert dirty["fts_type_drift"] == 1
+
+
+def test_v29_rebuilds_checkpoints_with_identity_and_stamps_provenance(migration_db, monkeypatch):
+    """v29 (ADR-0009): checkpoints keyed by (project_key, host, profile, session_id);
+    legacy rows backfilled; content tables gain a code-set provenance column."""
+    import socket
+
+    monkeypatch.delenv("ENGRAM_HOST", raising=False)
+    conn = _open_conn(migration_db)
+    try:
+        run_migrations(conn, 1, 28)
+        conn.execute(
+            "INSERT INTO checkpoints (project_path, session_id, last_prompt, turn_count) "
+            "VALUES ('/Users/x/proj', 'sess-1', 'hello', 3)"
+        )
+        conn.execute(
+            "INSERT INTO mistakes (date, context, mistake, fix) VALUES ('2026-01-01', 'c', 'm', 'f')"
+        )
+        conn.commit()
+        run_migrations(conn, 28, 29)
+        conn.commit()
+
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(checkpoints)").fetchall()}
+        assert {"project_key", "host", "profile", "milestone_summary"} <= cols
+        row = conn.execute("SELECT * FROM checkpoints").fetchone()
+        assert row["project_key"] == "/Users/x/proj"  # the only key a legacy row ever had
+        assert row["host"] == socket.gethostname().split(".")[0].lower()
+        assert row["profile"] == "default" and row["turn_count"] == 3
+
+        indexes = {r["name"]: r["unique"] for r in conn.execute("PRAGMA index_list(checkpoints)").fetchall()}
+        assert indexes.get("idx_checkpoints_identity") == 1
+        assert not any(n.startswith("sqlite_autoindex") for n in indexes), "old UNIQUE must be gone"
+
+        for table in ("mistakes", "patterns", "skills", "conversations", "prompts"):
+            tcols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            assert "provenance" in tcols, table
+        assert conn.execute("SELECT provenance FROM mistakes").fetchone()["provenance"] == "local"
+    finally:
+        conn.close()

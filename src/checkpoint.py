@@ -19,6 +19,8 @@ import json
 import os
 import subprocess
 
+from .identity import host_name, profile_name, project_key_for
+
 # The agent's final reply IS the handoff — keep enough of it to be useful.
 MAX_SUMMARY_CHARS = 4000
 MAX_PROMPT_CHARS = 500
@@ -107,6 +109,17 @@ def extract_transcript_tail(transcript_path: str) -> tuple[str, str]:
     return last_prompt, last_summary
 
 
+def _identity(
+    project: str, project_key: str | None, host: str | None, profile: str | None
+) -> tuple[str, str, str]:
+    """Resolve (project_key, host, profile), computing local defaults when absent."""
+    return (
+        (project_key or "").strip() or project_key_for(project),
+        (host or "").strip() or host_name(),
+        (profile or "").strip() or profile_name(),
+    )
+
+
 def upsert_checkpoint(
     project_path: str,
     session_id: str,
@@ -116,23 +129,32 @@ def upsert_checkpoint(
     git_head: str = "",
     git_branch: str = "",
     db_path=None,
+    project_key: str | None = None,
+    host: str | None = None,
+    profile: str | None = None,
 ) -> None:
-    """Insert or refresh the checkpoint row for (project, session).
+    """Insert or refresh the checkpoint row for (project, host, profile, session).
 
     A blank ``last_summary``/``last_prompt`` never overwrites a previous
     non-blank one — a turn that produced no visible text (pure tool work)
     must not erase the handoff captured on the turn before it.
+
+    Identity (ADR-0009 §3): ``project_key`` defaults to the portable key for
+    *project_path* (git remote, else host:realpath); ``host`` and ``profile``
+    default to this machine and ``ENGRAM_PROFILE``. The remote server passes
+    all three as the client sent them.
     """
     from .database import get_connection
 
     project = _normalize_project(project_path)
+    key, host, profile = _identity(project, project_key, host, profile)
     with get_connection(db_path) as conn:
         conn.execute(
             """INSERT INTO checkpoints
-                   (project_path, session_id, last_prompt, last_summary,
-                    git_head, git_branch, turn_count)
-               VALUES (?, ?, ?, ?, ?, ?, 1)
-               ON CONFLICT(project_path, session_id) DO UPDATE SET
+                   (project_path, project_key, host, profile, session_id,
+                    last_prompt, last_summary, git_head, git_branch, turn_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+               ON CONFLICT(project_key, host, profile, session_id) DO UPDATE SET
                    last_prompt  = CASE WHEN excluded.last_prompt  != ''
                                        THEN excluded.last_prompt  ELSE last_prompt  END,
                    last_summary = CASE WHEN excluded.last_summary != ''
@@ -145,6 +167,9 @@ def upsert_checkpoint(
                    updated_at   = datetime('now')""",
             (
                 project,
+                key,
+                host,
+                profile,
                 session_id,
                 (last_prompt or "")[:MAX_PROMPT_CHARS],
                 (last_summary or "")[:MAX_SUMMARY_CHARS],
@@ -174,9 +199,14 @@ def checkpoint_from_stop_payload(stdin_text: str, *, db_path=None) -> None:
     if not session_id:
         return
 
-    last_prompt, last_summary = (
+    last_prompt, tail_summary = (
         extract_transcript_tail(transcript_path) if transcript_path else ("", "")
     )
+    # Claude Code's Stop payload carries the final assistant text directly and
+    # documents that the transcript file "may lag"; prefer it, fall back to the
+    # tail (ADR-0009 §4).
+    direct = payload.get("last_assistant_message")
+    last_summary = direct.strip() if isinstance(direct, str) and direct.strip() else tail_summary
     git_head, git_branch = _git_state(cwd)
     try:
         upsert_checkpoint(
@@ -190,7 +220,9 @@ def checkpoint_from_stop_payload(stdin_text: str, *, db_path=None) -> None:
         )
     except Exception:
         return
-    if transcript_path:
+    if isinstance(direct, str) and direct.strip():
+        record_echoes_from_text(session_id, direct, db_path=db_path)
+    elif transcript_path:
         detect_and_record_echoes(session_id, transcript_path, db_path=db_path)
 
 
@@ -200,6 +232,9 @@ def record_milestone(
     summary: str | None = None,
     *,
     db_path=None,
+    project_key: str | None = None,
+    host: str | None = None,
+    profile: str | None = None,
 ) -> str:
     """Write a DELIBERATE handoff — richer than the ambient per-turn capture.
 
@@ -223,13 +258,14 @@ def record_milestone(
             f"Milestone checkpoint at {git_head or '(no git)'}."
         )
     summary = summary[:MAX_SUMMARY_CHARS]
+    key, host, profile = _identity(project, project_key, host, profile)
     with get_connection(db_path) as conn:
         conn.execute(
             """INSERT INTO checkpoints
-                   (project_path, session_id, git_head, git_branch,
-                    milestone_summary, milestone_at, turn_count)
-               VALUES (?, ?, ?, ?, ?, datetime('now'), 0)
-               ON CONFLICT(project_path, session_id) DO UPDATE SET
+                   (project_path, project_key, host, profile, session_id,
+                    git_head, git_branch, milestone_summary, milestone_at, turn_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
+               ON CONFLICT(project_key, host, profile, session_id) DO UPDATE SET
                    milestone_summary = excluded.milestone_summary,
                    milestone_at = excluded.milestone_at,
                    git_head = CASE WHEN excluded.git_head != ''
@@ -237,7 +273,7 @@ def record_milestone(
                    git_branch = CASE WHEN excluded.git_branch != ''
                                      THEN excluded.git_branch ELSE git_branch END,
                    updated_at = datetime('now')""",
-            (project, session_id, git_head or "", git_branch or "", summary),
+            (project, key, host, profile, session_id, git_head or "", git_branch or "", summary),
         )
     return summary
 
@@ -245,59 +281,107 @@ def record_milestone(
 _CITATION_RE = None
 
 
-def detect_and_record_echoes(session_id: str, transcript_path: str, *, db_path=None) -> int:
-    """Injection echo: memories the hooks injected that the agent then CITED.
+def _citation_re():
+    global _CITATION_RE
+    if _CITATION_RE is None:
+        import re
+
+        _CITATION_RE = re.compile(
+            r"\b(mistake|pattern|skill|conversation|prompt)\s*#(\d+)", re.IGNORECASE
+        )
+    return _CITATION_RE
+
+
+def _injected_items(session_id: str) -> set[tuple[str, int]]:
+    """Items the hooks injected into *session_id*, from the injection ledger."""
+    from . import config
+
+    audit_path = config.audit_log_path()
+    if not audit_path or not os.path.exists(audit_path) or not session_id:
+        return set()
+    injected: set[tuple[str, int]] = set()
+    with open(audit_path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if (
+                isinstance(rec, dict)
+                and str(rec.get("source", "")).endswith("_inject")
+                and rec.get("session_id") == session_id
+            ):
+                for ref in rec.get("items") or []:
+                    injected.add((str(ref["item_type"]), int(ref["item_id"])))
+    return injected
+
+
+def _record_echoes(session_id: str, echoes: set[tuple[str, int]], *, db_path=None) -> int:
+    """One weak-positive feedback row (source='echo') per newly echoed (item, session)."""
+    if not echoes:
+        return 0
+    from .database import get_connection
+
+    marker = f"echo:{session_id}"
+    new = 0
+    with get_connection(db_path) as conn:
+        for item_type, item_id in sorted(echoes):
+            exists = conn.execute(
+                "SELECT 1 FROM retrieval_feedback WHERE item_type = ? AND item_id = ? "
+                "AND source = 'echo' AND query = ?",
+                (item_type, item_id, marker),
+            ).fetchone()
+            if exists:
+                continue
+            conn.execute(
+                "INSERT INTO retrieval_feedback (item_type, item_id, helpful, query, source) "
+                "VALUES (?, ?, 1, ?, 'echo')",
+                (item_type, item_id, marker),
+            )
+            new += 1
+    return new
+
+
+def record_echoes_from_text(session_id: str, assistant_text: str, *, db_path=None) -> int:
+    """Injection echo from assistant text the caller already has.
 
     A citation like "[MISTAKE #26]" or "mistake #26" in the agent's visible
     output is textual evidence the injected memory shaped the work — a free,
     automatic helpfulness signal (case study 2026-07-17: 137 items surfaced,
-    the 11 echoed ones were exactly the load-bearing memories). Each echoed
-    (item, session) records ONE weak-positive feedback row (source='echo');
-    explicit feedback stays separable by source, and no FSRS event fires —
-    an echo is evidence of use, not a graded recall outcome.
-
-    Returns the number of new echo rows. Never raises.
+    the 11 echoed ones were exactly the load-bearing memories). Used by the
+    Stop hook (``last_assistant_message``) and by ``engram serve``, which
+    cannot open the client's transcript. Returns new echo rows; never raises.
     """
-    import re
-
-    global _CITATION_RE
-    if _CITATION_RE is None:
-        _CITATION_RE = re.compile(
-            r"\b(mistake|pattern|skill|conversation|prompt)\s*#(\d+)", re.IGNORECASE
-        )
     try:
-        from . import config
-        from .database import get_connection
-
-        audit_path = config.audit_log_path()
-        if not audit_path or not os.path.exists(audit_path) or not session_id:
+        if not session_id or not assistant_text:
             return 0
-
-        injected: set[tuple[str, int]] = set()
-        with open(audit_path, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if (
-                    isinstance(rec, dict)
-                    and str(rec.get("source", "")).endswith("_inject")
-                    and rec.get("session_id") == session_id
-                ):
-                    for ref in rec.get("items") or []:
-                        injected.add((str(ref["item_type"]), int(ref["item_id"])))
+        injected = _injected_items(session_id)
         if not injected:
             return 0
+        cited = {
+            (m.group(1).lower(), int(m.group(2))) for m in _citation_re().finditer(assistant_text)
+        }
+        return _record_echoes(session_id, injected & cited, db_path=db_path)
+    except Exception:
+        import logging
 
-        # Assistant text from the transcript tail (bounded read, as ever).
+        logging.getLogger(__name__).debug("echo detection failed", exc_info=True)
+        return 0
+
+
+def detect_and_record_echoes(session_id: str, transcript_path: str, *, db_path=None) -> int:
+    """Injection echo over the transcript tail (the pre-v29 path, kept for
+    payloads without ``last_assistant_message``). Bounded read; never raises."""
+    try:
+        if not session_id or not _injected_items(session_id):
+            return 0
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as f:
             if size > TRANSCRIPT_TAIL_BYTES:
                 f.seek(size - TRANSCRIPT_TAIL_BYTES)
                 f.readline()
             raw = f.read().decode("utf-8", errors="ignore")
-        cited: set[tuple[str, int]] = set()
+        texts: list[str] = []
         for line in raw.splitlines():
             try:
                 event = json.loads(line)
@@ -309,30 +393,8 @@ def detect_and_record_echoes(session_id: str, transcript_path: str, *, db_path=N
                 continue
             for b in event.get("message", {}).get("content", []):
                 if isinstance(b, dict) and b.get("type") == "text":
-                    for m in _CITATION_RE.finditer(b.get("text", "")):
-                        cited.add((m.group(1).lower(), int(m.group(2))))
-
-        echoes = injected & cited
-        if not echoes:
-            return 0
-        marker = f"echo:{session_id}"
-        new = 0
-        with get_connection(db_path) as conn:
-            for item_type, item_id in sorted(echoes):
-                exists = conn.execute(
-                    "SELECT 1 FROM retrieval_feedback WHERE item_type = ? AND item_id = ? "
-                    "AND source = 'echo' AND query = ?",
-                    (item_type, item_id, marker),
-                ).fetchone()
-                if exists:
-                    continue
-                conn.execute(
-                    "INSERT INTO retrieval_feedback (item_type, item_id, helpful, query, source) "
-                    "VALUES (?, ?, 1, ?, 'echo')",
-                    (item_type, item_id, marker),
-                )
-                new += 1
-        return new
+                    texts.append(b.get("text", ""))
+        return record_echoes_from_text(session_id, "\n".join(texts), db_path=db_path)
     except Exception:
         import logging
 
@@ -340,17 +402,38 @@ def detect_and_record_echoes(session_id: str, transcript_path: str, *, db_path=N
         return 0
 
 
-def get_checkpoints(project_path: str, *, limit: int = 3, db_path=None) -> list[dict]:
-    """Most recent checkpoints for a project, newest first."""
+def get_checkpoints(
+    project_path: str,
+    *,
+    limit: int = 3,
+    db_path=None,
+    project_key: str | None = None,
+    profile: str | None = None,
+    host: str | None = None,
+    all_profiles: bool = False,
+) -> list[dict]:
+    """Most recent checkpoints for a project, newest first, across hosts.
+
+    Matches on the portable ``project_key`` (git remote) OR the legacy
+    ``project_path`` so rows written before v29 stay reachable. Scoped to the
+    active profile unless ``all_profiles``; ``host`` narrows to one machine.
+    """
     from .database import get_connection
 
     project = _normalize_project(project_path)
+    key, _, prof = _identity(project, project_key, None, profile)
+    sql = "SELECT * FROM checkpoints WHERE (project_key = ? OR project_path = ?)"
+    params: list = [key, project]
+    if not all_profiles:
+        sql += " AND profile = ?"
+        params.append(prof)
+    if host:
+        sql += " AND host = ?"
+        params.append(host)
+    sql += " ORDER BY updated_at DESC, id DESC LIMIT ?"
+    params.append(limit)
     with get_connection(db_path) as conn:
-        rows = conn.execute(
-            """SELECT * FROM checkpoints WHERE project_path = ?
-               ORDER BY updated_at DESC, id DESC LIMIT ?""",
-            (project, limit),
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -363,28 +446,43 @@ def _commits_since(project_path: str, git_head: str) -> list[str]:
     return [line for line in out.splitlines() if line.strip()]
 
 
-def build_resume_report(project_path: str, *, limit: int = 1, db_path=None) -> str:
+def build_resume_report(
+    project_path: str,
+    *,
+    limit: int = 1,
+    db_path=None,
+    project_key: str | None = None,
+    profile: str | None = None,
+    host: str | None = None,
+    all_profiles: bool = False,
+) -> str:
     """Human/agent-readable "where we left off" for a project.
 
     Latest checkpoint(s): when, which session, git position (plus any commits
     made since — e.g. by another session), the user's last prompt and the
     agent's final reply. Empty string when the project has no checkpoints.
     """
-    checkpoints = get_checkpoints(project_path, limit=max(1, limit), db_path=db_path)
+    checkpoints = get_checkpoints(
+        project_path, limit=max(1, limit), db_path=db_path,
+        project_key=project_key, profile=profile, host=host, all_profiles=all_profiles,
+    )
     if not checkpoints:
         return ""
 
     project = _normalize_project(project_path)
+    here = host_name()
     parts: list[str] = []
     for i, cp in enumerate(checkpoints):
         head = "Latest checkpoint" if i == 0 else "Earlier checkpoint"
+        where = f", on {cp['host']}" if cp.get("host") and cp["host"] != here else ""
         lines = [
             f"## {head} — {cp['updated_at']} UTC "
-            f"(session {cp['session_id'][:8]}…, {cp['turn_count']} turns)"
+            f"(session {cp['session_id'][:8]}…, {cp['turn_count']} turns{where})"
         ]
         if cp["git_head"]:
             lines.append(f"Git: [{cp['git_branch'] or '?'}] at {cp['git_head']}")
-            if i == 0:
+            # "commits since" only makes sense against this machine's checkout
+            if i == 0 and (not cp.get("host") or cp["host"] == here):
                 newer = _commits_since(project, cp["git_head"])
                 if newer:
                     lines.append(f"Commits since this checkpoint ({len(newer)}):")

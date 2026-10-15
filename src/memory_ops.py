@@ -39,11 +39,12 @@ def create_mistake(
     prevention: str | None = None,
     conversation_id: str | None = None,
     tags: str | Iterable[str] | None = None,
+    provenance: str = "local",
 ) -> int:
     cursor = conn.execute(
-        """INSERT INTO mistakes (date, context, mistake, root_cause, fix, prevention, conversation_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (date, context, mistake, root_cause, fix, prevention, conversation_id),
+        """INSERT INTO mistakes (date, context, mistake, root_cause, fix, prevention, conversation_id, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (date, context, mistake, root_cause, fix, prevention, conversation_id, provenance),
     )
     mid = cursor.lastrowid
     tag_list = _parse_tags(tags)
@@ -63,10 +64,11 @@ def create_pattern(
     root_cause: str,
     standard_fix: str,
     tags: str | Iterable[str] | None = None,
+    provenance: str = "local",
 ) -> int:
     cursor = conn.execute(
-        "INSERT INTO patterns (name, symptoms, root_cause, standard_fix) VALUES (?, ?, ?, ?)",
-        (name, symptoms, root_cause, standard_fix),
+        "INSERT INTO patterns (name, symptoms, root_cause, standard_fix, provenance) VALUES (?, ?, ?, ?, ?)",
+        (name, symptoms, root_cause, standard_fix, provenance),
     )
     pid = cursor.lastrowid
     tag_list = _parse_tags(tags)
@@ -87,11 +89,12 @@ def create_skill(
     key_files: str | None = None,
     dependencies: str | None = None,
     tags: str | Iterable[str] | None = None,
+    provenance: str = "local",
 ) -> int:
     cursor = conn.execute(
-        """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (name, domain, trigger, workflow, pitfalls, key_files, dependencies),
+        """INSERT INTO skills (name, domain, trigger_desc, workflow, pitfalls, key_files, dependencies, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, domain, trigger, workflow, pitfalls, key_files, dependencies, provenance),
     )
     sid = cursor.lastrowid
     tag_list = _parse_tags(tags)
@@ -113,10 +116,11 @@ def create_conversation(
     mistakes_summary: str | None = None,
     skills_extracted: str | None = None,
     tags: str | Iterable[str] | None = None,
+    provenance: str = "local",
 ) -> int:
     cursor = conn.execute(
         """INSERT INTO conversations (conversation_id, title, date, domain, tasks_completed,
-           key_decisions, mistakes_summary, skills_extracted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           key_decisions, mistakes_summary, skills_extracted, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             conversation_id,
             title,
@@ -126,6 +130,7 @@ def create_conversation(
             key_decisions,
             mistakes_summary,
             skills_extracted,
+            provenance,
         ),
     )
     cid = cursor.lastrowid
@@ -147,6 +152,7 @@ def create_conversation_chunked(
     window: int = 8,
     stride: int = 4,
     tags: str | Iterable[str] | None = None,
+    provenance: str = "local",
 ) -> list[int]:
     """Create a conversation plus turn-window part rows for fine-grained retrieval.
 
@@ -165,6 +171,7 @@ def create_conversation_chunked(
     body = "\n".join(turns)
     parent_id = create_conversation(
         conn,
+        provenance=provenance,
         conversation_id=conversation_id,
         title=title,
         date=date,
@@ -186,6 +193,7 @@ def create_conversation_chunked(
         ids.append(
             create_conversation(
                 conn,
+                provenance=provenance,
                 conversation_id=f"{conversation_id}#p{part_n}",
                 title=f"{title[:70]} (part {part_n})",
                 date=date,
@@ -252,11 +260,12 @@ def create_prompt(
     source_path: str | None = None,
     best_for: str | None = None,
     tags: str | Iterable[str] | None = None,
+    provenance: str = "local",
 ) -> int:
     cursor = conn.execute(
-        """INSERT INTO prompts (name, role, domain, description, prompt_text, source_path, best_for)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (name, role, domain, description, prompt_text or "", source_path, best_for),
+        """INSERT INTO prompts (name, role, domain, description, prompt_text, source_path, best_for, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, role, domain, description, prompt_text or "", source_path, best_for, provenance),
     )
     pid = cursor.lastrowid
     tag_list = _parse_tags(tags)

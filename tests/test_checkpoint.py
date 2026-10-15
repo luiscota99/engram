@@ -383,3 +383,82 @@ def test_stop_payload_triggers_echo_pass(db, tmp_path, monkeypatch):
             "SELECT COUNT(*) FROM retrieval_feedback WHERE source='echo' AND item_type='pattern' AND item_id=13"
         ).fetchone()[0]
     assert n == 1
+
+
+# ── v29 identity: portable key, host, profile (ADR-0009 §3) ─────────────
+
+
+def test_same_session_on_two_hosts_is_two_rows_and_resume_sees_both(db, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENGRAM_PROJECT_KEY", "github.com/acme/widgets")
+    checkpoint.upsert_checkpoint("/Users/a/widgets", "sess-1", last_summary="from the mac", host="mac1")
+    checkpoint.upsert_checkpoint("/home/a/widgets", "sess-1", last_summary="from wsl", host="wsl1")
+    rows = checkpoint.get_checkpoints("/anything", limit=5)
+    assert {r["host"] for r in rows} == {"mac1", "wsl1"}
+    assert all(r["project_key"] == "github.com/acme/widgets" for r in rows)
+    only_mac = checkpoint.get_checkpoints("/anything", limit=5, host="mac1")
+    assert [r["last_summary"] for r in only_mac] == ["from the mac"]
+
+
+def test_resume_is_profile_scoped_by_default(db, monkeypatch):
+    monkeypatch.setenv("ENGRAM_PROJECT_KEY", "github.com/acme/widgets")
+    checkpoint.upsert_checkpoint("/p", "s-work", last_summary="work stuff", profile="work")
+    checkpoint.upsert_checkpoint("/p", "s-home", last_summary="home stuff", profile="default")
+    monkeypatch.setenv("ENGRAM_PROFILE", "default")
+    assert [r["session_id"] for r in checkpoint.get_checkpoints("/p", limit=5)] == ["s-home"]
+    monkeypatch.setenv("ENGRAM_PROFILE", "work")
+    assert [r["session_id"] for r in checkpoint.get_checkpoints("/p", limit=5)] == ["s-work"]
+    both = checkpoint.get_checkpoints("/p", limit=5, all_profiles=True)
+    assert {r["session_id"] for r in both} == {"s-work", "s-home"}
+    report = checkpoint.build_resume_report("/p", limit=2, all_profiles=True)
+    assert "work stuff" in report and "home stuff" in report
+
+
+def test_legacy_rows_matched_by_project_path(db, monkeypatch):
+    """Rows written before v29 carry project_key = project_path; still found."""
+    from src.database import get_connection
+
+    monkeypatch.delenv("ENGRAM_PROJECT_KEY", raising=False)
+    with get_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO checkpoints (project_path, project_key, host, profile, session_id, last_summary) "
+            "VALUES (?, ?, 'oldmac', 'default', 'legacy', 'old handoff')",
+            (checkpoint._normalize_project("/tmp/legacy-proj"), checkpoint._normalize_project("/tmp/legacy-proj")),
+        )
+    monkeypatch.setenv("ENGRAM_PROFILE", "default")
+    rows = checkpoint.get_checkpoints("/tmp/legacy-proj", limit=3)
+    assert [r["session_id"] for r in rows] == ["legacy"]
+
+
+def test_stop_payload_prefers_last_assistant_message(db, tmp_path, monkeypatch):
+    monkeypatch.setenv("ENGRAM_PROJECT_KEY", "github.com/acme/widgets")
+    transcript = _write_transcript(tmp_path, [_user("hi"), _assistant("stale tail text")])
+    payload = json.dumps({
+        "session_id": "s-direct",
+        "transcript_path": transcript,
+        "cwd": str(tmp_path),
+        "last_assistant_message": "fresh final text",
+    })
+    checkpoint.checkpoint_from_stop_payload(payload, db_path=db)
+    (row,) = checkpoint.get_checkpoints(str(tmp_path), limit=1)
+    assert row["last_summary"] == "fresh final text"
+    assert row["last_prompt"] == "hi"  # prompt still comes from the transcript tail
+
+
+def test_record_echoes_from_text(db, tmp_path, monkeypatch):
+    from src.database import get_connection
+    from src.memory_ops import create_mistake
+
+    with get_connection(db) as conn:
+        mid = create_mistake(conn, date="2026-01-01", context="c", mistake="m", fix="f")
+    log = tmp_path / "audit.jsonl"
+    log.write_text(json.dumps({
+        "ts": "t", "source": "recall_inject", "session_id": "s-echo",
+        "items": [{"item_type": "mistake", "item_id": mid}],
+    }) + "\n")
+    monkeypatch.setenv("ENGRAM_AUDIT_LOG", str(log))
+    assert checkpoint.record_echoes_from_text("s-echo", f"Per [MISTAKE #{mid}], done.", db_path=db) == 1
+    assert checkpoint.record_echoes_from_text("s-echo", f"again [MISTAKE #{mid}]", db_path=db) == 0
+    assert checkpoint.record_echoes_from_text("other", f"[MISTAKE #{mid}]", db_path=db) == 0
+    with get_connection(db) as conn:
+        n = conn.execute("SELECT COUNT(*) FROM retrieval_feedback WHERE source = 'echo'").fetchone()[0]
+    assert n == 1

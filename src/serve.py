@@ -60,6 +60,8 @@ _REQUIRED_ACTION: dict[str, str] = {
     "inbox": "read",
     "add": "add",  # "write" satisfies it too (see _authorized)
     "extract": "write",
+    "checkpoint": "write",
+    "resume": "read",
 }
 
 _CITATION_RE = re.compile(r"\[(\w+) #(\d+)\]")
@@ -221,7 +223,57 @@ def ep_add(body: Mapping[str, Any], query: Mapping[str, str]) -> dict:
     from src.mcp.handlers import handle_memory_add
 
     _require(body, "type")
-    return _handler_result(handle_memory_add(body))
+    # Code-set origin stamp (ADR-0009 §3): the server decides, never the caller.
+    stamped = dict(body)
+    stamped["provenance"] = f"remote:{str(body.get('host') or '').strip() or 'unknown'}"
+    return _handler_result(handle_memory_add(stamped))
+
+
+def ep_checkpoint(body: Mapping[str, Any], query: Mapping[str, str]) -> None:
+    """Upsert a checkpoint the client assembled (ADR-0009 §4) and run echo
+    detection over the assistant text it sent. Answers 204: a Stop hook that
+    returns context would keep Claude working."""
+    from src.checkpoint import record_echoes_from_text, upsert_checkpoint
+
+    project_key = _require(body, "project_key")
+    session_id = _require(body, "session_id")
+    last_summary = str(body.get("last_summary") or "")
+    upsert_checkpoint(
+        str(body.get("cwd") or project_key),
+        session_id,
+        last_prompt=str(body.get("last_prompt") or ""),
+        last_summary=last_summary,
+        git_head=str(body.get("git_head") or ""),
+        git_branch=str(body.get("git_branch") or ""),
+        project_key=project_key,
+        host=str(body.get("host") or "").strip() or "unknown",
+        profile=str(body.get("profile") or "").strip() or "default",
+    )
+    if last_summary:
+        record_echoes_from_text(session_id, last_summary)
+    return None
+
+
+def ep_resume(body: Mapping[str, Any], query: Mapping[str, str]) -> dict:
+    from src.checkpoint import build_resume_report, get_checkpoints
+
+    project_key = (query.get("project_key") or "").strip()
+    if not project_key:
+        raise ServeError(400, "'project_key' is required")
+    profile = (query.get("profile") or "").strip() or "default"
+    host = (query.get("host") or "").strip() or None
+    all_profiles = query.get("all_profiles", "") in ("1", "true", "yes")
+    limit = _int(query, "limit", 1, hi=10)
+    return {
+        "checkpoints": get_checkpoints(
+            project_key, limit=limit, project_key=project_key, profile=profile,
+            host=host, all_profiles=all_profiles,
+        ),
+        "report": build_resume_report(
+            project_key, limit=limit, project_key=project_key, profile=profile,
+            host=host, all_profiles=all_profiles,
+        ),
+    }
 
 
 def ep_route(body: Mapping[str, Any], query: Mapping[str, str]) -> dict:
@@ -246,7 +298,7 @@ def ep_inbox(body: Mapping[str, Any], query: Mapping[str, str]) -> dict:
     return {"items": list_items(status=status)}
 
 
-Endpoint = Callable[[Mapping[str, Any], Mapping[str, str]], dict]
+Endpoint = Callable[[Mapping[str, Any], Mapping[str, str]], "dict | None"]
 
 ROUTES: dict[tuple[str, str], Endpoint] = {
     ("GET", "health"): ep_health,
@@ -257,6 +309,8 @@ ROUTES: dict[tuple[str, str], Endpoint] = {
     ("POST", "route"): ep_route,
     ("POST", "extract"): ep_extract,
     ("GET", "inbox"): ep_inbox,
+    ("POST", "checkpoint"): ep_checkpoint,
+    ("GET", "resume"): ep_resume,
 }
 
 
@@ -328,7 +382,7 @@ class _Handler(BaseHTTPRequestHandler):
         parts = urlsplit(self.path)
         endpoint = parts.path[len(API_PREFIX):].strip("/") if parts.path.startswith(API_PREFIX) else ""
         body: dict = {}
-        payload: dict
+        payload: dict | None
         try:
             if not endpoint or not any(ep == endpoint for _, ep in ROUTES):
                 raise ServeError(404, "unknown endpoint")
@@ -339,7 +393,7 @@ class _Handler(BaseHTTPRequestHandler):
             body = self._read_body() if method == "POST" else {}
             query = {k: v[-1] for k, v in parse_qs(parts.query).items()}
             payload = fn(body, query)
-            status, outcome = 200, "ok"
+            status, outcome = (204 if payload is None else 200), "ok"
         except ServeError as e:
             status = e.status
             outcome = "denied" if status in (401, 403) else "client_error" if status < 500 else "error"
@@ -351,7 +405,12 @@ class _Handler(BaseHTTPRequestHandler):
         # Ledger BEFORE the response: a caller that reads the ledger right after
         # the reply (tests, `engram roi` on the same host) must see this call.
         self._ledger(endpoint or parts.path, method, status, outcome, t0, body)
-        self._send_json(status, payload)
+        if payload is None:
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        else:
+            self._send_json(status, payload)
 
     def _ledger(self, endpoint: str, method: str, status: int, outcome: str, t0: float, body: Mapping[str, Any]) -> None:
         try:

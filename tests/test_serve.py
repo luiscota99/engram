@@ -199,3 +199,45 @@ def test_every_call_writes_a_remote_call_ledger_row(server, monkeypatch, tmp_pat
     assert [r["outcome"] for r in remote] == ["ok", "client_error"]
     assert remote[0]["endpoint"] == "health" and remote[0]["caller"] == "luis@example.com"
     assert remote[0]["server_ms"] >= 0
+
+
+# --- v29: checkpoint + resume + provenance (ADR-0009 §3/§4) ----------------------
+
+
+def test_checkpoint_then_resume_across_hosts(server):
+    body = {
+        "project_key": "github.com/acme/widgets", "session_id": "sess-1", "host": "mac1",
+        "profile": "default", "last_prompt": "fix the bug", "last_summary": "Fixed it in foo.py",
+        "git_head": "abc123 fix", "git_branch": "main", "cwd": "/Users/a/widgets",
+    }
+    status, payload = _call(server, "POST", "/v1/checkpoint", body)
+    assert status == 204 and payload == {"__raw__": ""}
+    body2 = {**body, "session_id": "sess-2", "host": "wsl1", "last_summary": "Started the tests"}
+    assert _call(server, "POST", "/v1/checkpoint", body2)[0] == 204
+
+    status, payload = _call(server, "GET", "/v1/resume?project_key=github.com/acme/widgets&limit=5")
+    assert status == 200, payload
+    assert {c["host"] for c in payload["checkpoints"]} == {"mac1", "wsl1"}
+    assert "Started the tests" in payload["report"] and "Fixed it in foo.py" in payload["report"]
+
+    status, payload = _call(server, "GET", "/v1/resume?project_key=github.com/acme/widgets&host=mac1")
+    assert [c["session_id"] for c in payload["checkpoints"]] == ["sess-1"]
+    status, payload = _call(server, "GET", "/v1/resume?project_key=github.com/acme/widgets&profile=work")
+    assert payload["checkpoints"] == [] and payload["report"] == ""
+    assert _call(server, "GET", "/v1/resume")[0] == 400
+    assert _call(server, "POST", "/v1/checkpoint", {"session_id": "x"})[0] == 400
+
+
+def test_add_is_stamped_with_remote_provenance(server, test_db):
+    status, _ = _call(server, "POST", "/v1/add", {**MISTAKE, "host": "mac1", "provenance": "forged"})
+    assert status == 200
+    row = test_db["conn"].execute("SELECT provenance FROM mistakes ORDER BY id DESC LIMIT 1").fetchone()
+    assert row["provenance"] == "remote:mac1"
+
+
+def test_caps_checkpoint_needs_write_and_resume_needs_read(caps_server):
+    body = {"project_key": "k", "session_id": "s", "host": "h"}
+    assert _call(caps_server, "POST", "/v1/checkpoint", body, headers=_grant("read"))[0] == 403
+    assert _call(caps_server, "POST", "/v1/checkpoint", body, headers=_grant("write"))[0] == 204
+    assert _call(caps_server, "GET", "/v1/resume?project_key=k", headers=_grant("add"))[0] == 403
+    assert _call(caps_server, "GET", "/v1/resume?project_key=k", headers=_grant("read"))[0] == 200

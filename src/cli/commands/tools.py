@@ -150,7 +150,11 @@ def cmd_resume(args):
     from ...checkpoint import build_resume_report
 
     project = getattr(args, "project", None) or os.getcwd()
-    report = build_resume_report(project, limit=getattr(args, "count", 1) or 1)
+    report = build_resume_report(
+        project,
+        limit=getattr(args, "count", 1) or 1,
+        all_profiles=bool(getattr(args, "all_profiles", False)),
+    )
     if not report:
         print(
             "No checkpoints for this project yet. They appear automatically "

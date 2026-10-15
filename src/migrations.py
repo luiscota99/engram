@@ -467,6 +467,19 @@ MIGRATIONS = {
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_summary", "TEXT"),
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_at", "TEXT"),
     ],
+    29: [
+        # Portable identity (ADR-0009 §3/§7). Content tables get a code-set
+        # provenance stamp ('local' | 'remote:<host>' | later 'import:<machine>');
+        # checkpoints are rebuilt with project_key/host/profile and the unique
+        # key (project_key, host, profile, session_id) — SQLite cannot drop the
+        # old UNIQUE(project_path, session_id) table constraint in place.
+        lambda conn: _add_column_if_missing(conn, "mistakes", "provenance", "TEXT NOT NULL DEFAULT 'local'"),
+        lambda conn: _add_column_if_missing(conn, "patterns", "provenance", "TEXT NOT NULL DEFAULT 'local'"),
+        lambda conn: _add_column_if_missing(conn, "skills", "provenance", "TEXT NOT NULL DEFAULT 'local'"),
+        lambda conn: _add_column_if_missing(conn, "conversations", "provenance", "TEXT NOT NULL DEFAULT 'local'"),
+        lambda conn: _add_column_if_missing(conn, "prompts", "provenance", "TEXT NOT NULL DEFAULT 'local'"),
+        lambda conn: _rebuild_checkpoints_v29(conn),
+    ],
     28: [
         # Guard fast path: deterministic trigger shingles (July 31 ROI verdict
         # convicted the per-action hybrid search — 82% of searches, ~1.4s
@@ -638,6 +651,65 @@ def _repair_fts_type_drift(conn) -> None:
             f"  ✓ FTS repair: removed {len(dups)} duplicate rows, "
             f"re-keyed {len(orphans)} orphan integer rows."
         )
+
+
+def _rebuild_checkpoints_v29(conn) -> None:
+    """v29: checkpoints keyed by (project_key, host, profile, session_id).
+
+    Existing rows keep working: project_key = project_path (the only key they
+    ever had), host = this machine, profile = 'default'. ``engram resume``
+    matches on project_key OR project_path, so legacy rows stay reachable.
+    """
+    from .identity import host_name
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(checkpoints)").fetchall()}
+    if not cols:
+        return  # never created (pre-v21 DBs get the fresh DDL from SCHEMA_SQL)
+    _add_column_if_missing(conn, "checkpoints", "milestone_summary", "TEXT")
+    _add_column_if_missing(conn, "checkpoints", "milestone_at", "TEXT")
+    conn.execute("DROP TABLE IF EXISTS checkpoints_v29")
+    conn.execute(
+        """CREATE TABLE checkpoints_v29 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_path TEXT NOT NULL,
+            project_key TEXT NOT NULL DEFAULT '',
+            host TEXT NOT NULL DEFAULT '',
+            profile TEXT NOT NULL DEFAULT 'default',
+            session_id TEXT NOT NULL,
+            last_prompt TEXT NOT NULL DEFAULT '',
+            last_summary TEXT NOT NULL DEFAULT '',
+            git_head TEXT NOT NULL DEFAULT '',
+            git_branch TEXT NOT NULL DEFAULT '',
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            milestone_summary TEXT,
+            milestone_at TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )"""
+    )
+    conn.execute(
+        """INSERT INTO checkpoints_v29
+               (id, project_path, project_key, host, profile, session_id, last_prompt,
+                last_summary, git_head, git_branch, turn_count, milestone_summary,
+                milestone_at, created_at, updated_at)
+           SELECT id, project_path, project_path, ?, 'default', session_id, last_prompt,
+                  last_summary, git_head, git_branch, turn_count, milestone_summary,
+                  milestone_at, created_at, updated_at
+           FROM checkpoints""",
+        (host_name(),),
+    )
+    conn.execute("DROP TABLE checkpoints")
+    conn.execute("ALTER TABLE checkpoints_v29 RENAME TO checkpoints")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_path, updated_at)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoints_identity "
+        "ON checkpoints(project_key, host, profile, session_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_checkpoints_key ON checkpoints(project_key, profile, updated_at)"
+    )
 
 
 def _add_column_if_missing(conn, table: str, column: str, decl: str) -> None:

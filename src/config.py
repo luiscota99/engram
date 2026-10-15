@@ -30,6 +30,11 @@ LLM layer (see src/llm.py)
     ENGRAM_LLM_EXTRACT_MODEL    Per-task override: memory extraction
     ENGRAM_LLM_AUDIT_MODEL      Per-task override: consolidation audit
 
+Identity (ADR-0009, schema v29)
+    ENGRAM_PROFILE              Profile/namespace recall and resume are scoped to (default: default)
+    ENGRAM_HOST                 Override this machine's short hostname on checkpoints/provenance
+    ENGRAM_PROJECT_KEY          Override the portable project key (default: normalized git remote)
+
 Logging / limits
     ENGRAM_AUDIT_LOG            Path for search-audit JSONL (unset → no auditing)
     ENGRAM_SESSION_HELP_LOG     Path for session-help scores (default ~/.engram/session-help.jsonl)
