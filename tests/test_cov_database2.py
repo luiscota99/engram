@@ -80,7 +80,7 @@ def test_index_in_fts_ready_path_writes_vec_and_status(test_db, monkeypatch):
     monkeypatch.delenv("ENGRAM_DEFER_EMBED", raising=False)
     conn = test_db["conn"]
     with patch("src.database.embed_text", return_value=[0.1] * 768), \
-         patch("src.database.resolve_embedding_model_name", return_value="mdl"), \
+         patch("src.database.get_embedding_model", return_value="mdl"), \
          patch("src.database.embedding_matches_vec_schema", return_value=(True, None)):
         index_in_fts(conn, "skill", 1, "Title", "content body", ["tg"])
     conn.commit()
@@ -99,7 +99,7 @@ def test_index_in_fts_schema_mismatch_marks_failed(test_db, monkeypatch):
     monkeypatch.delenv("ENGRAM_DEFER_EMBED", raising=False)
     conn = test_db["conn"]
     with patch("src.database.embed_text", return_value=[0.1] * 768), \
-         patch("src.database.resolve_embedding_model_name", return_value="mdl"), \
+         patch("src.database.get_embedding_model", return_value="mdl"), \
          patch("src.database.embedding_matches_vec_schema", return_value=(False, "wrong dim")):
         index_in_fts(conn, "skill", 2, "T2", "body", [])
     conn.commit()
@@ -348,7 +348,7 @@ def test_find_similar_returns_matches(test_db):
     conn.commit()
 
     with patch("src.embeddings.embed_text", return_value=vec), \
-         patch("src.database.resolve_embedding_model_name", return_value="m"), \
+         patch("src.database.get_embedding_model", return_value="m"), \
          patch("src.database.embedding_matches_vec_schema", return_value=(True, None)):
         results = find_similar("query text", item_type="skill", threshold=0.5, db_path=test_db["path"])
 
@@ -367,7 +367,7 @@ def test_find_similar_no_embedding_returns_empty(test_db):
 
 def test_find_similar_schema_mismatch_returns_empty(test_db):
     with patch("src.embeddings.embed_text", return_value=[0.1] * 768), \
-         patch("src.database.resolve_embedding_model_name", return_value="m"), \
+         patch("src.database.get_embedding_model", return_value="m"), \
          patch("src.database.embedding_matches_vec_schema", return_value=(False, "dim mismatch")):
         assert find_similar("x", db_path=test_db["path"]) == []
 
@@ -384,7 +384,7 @@ def test_get_embedding_stats_counts(test_db):
         )
     conn.commit()
 
-    with patch("src.database.resolve_embedding_model_name", return_value="the-model"):
+    with patch("src.database.get_embedding_model", return_value="the-model"):
         stats = get_embedding_stats(db_path=test_db["path"])
     assert stats["model"] == "the-model"
     assert stats["total"] == 5
@@ -707,7 +707,7 @@ def test_reembed_stale_vec_mismatch_marked_failed(test_db):
     conn.commit()
 
     with patch("src.database.embed_batch", return_value=[[0.1] * 768]), \
-         patch("src.database.resolve_embedding_model_name", return_value="m"), \
+         patch("src.database.get_embedding_model", return_value="m"), \
          patch("src.database.embedding_matches_vec_schema", return_value=(False, "bad dim")):
         result = reembed_stale(db_path=test_db["path"])
     assert result["failed"] == 1
@@ -730,7 +730,7 @@ def test_reembed_stale_success_path(test_db):
     conn.commit()
 
     with patch("src.database.embed_batch", return_value=[[0.2] * 768]), \
-         patch("src.database.resolve_embedding_model_name", return_value="m"), \
+         patch("src.database.get_embedding_model", return_value="m"), \
          patch("src.database.embedding_matches_vec_schema", return_value=(True, None)):
         result = reembed_stale(db_path=test_db["path"])
     assert result["succeeded"] == 1
@@ -752,7 +752,7 @@ def test_migrate_embeddings_same_dimension_no_rebuild(test_db, monkeypatch):
 
     with patch("src.embeddings.embed_text", return_value=[0.3] * 768), \
          patch("src.database.embed_batch", return_value=[[0.3] * 768]), \
-         patch("src.database.resolve_embedding_model_name", return_value="same-768"), \
+         patch("src.database.get_embedding_model", return_value="same-768"), \
          patch("src.database.embedding_matches_vec_schema", return_value=(True, None)):
         result = migrate_embeddings_to_model("same-768", db_path=test_db["path"])
 
@@ -782,7 +782,7 @@ def test_reembed_stale_empty_embedding_marked_failed(test_db):
     conn.commit()
 
     with patch("src.database.embed_batch", return_value=[None]), \
-         patch("src.database.resolve_embedding_model_name", return_value="m"):
+         patch("src.database.get_embedding_model", return_value="m"):
         result = reembed_stale(db_path=test_db["path"])
     assert result["failed"] == 1
     with get_connection(test_db["path"]) as c:

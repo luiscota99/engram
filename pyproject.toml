@@ -25,6 +25,11 @@ dev = [
     "ruff>=0.3.0",
     "pre-commit>=3.7.0"
 ]
+# Fast in-process embedding backends for the hot path (ENGRAM_EMBED_BACKEND).
+# Optional: the core install stays lean; select a backend only if you want to
+# trade some retrieval quality for sub-50ms embeds on the recall/guard gate.
+static = ["model2vec>=0.3.0"]        # Model2Vec static embeddings (numpy-only)
+fastembed = ["fastembed>=0.3.0"]     # quantized ONNX embeddings (onnxruntime)
 
 [project.scripts]
 engram = "src.cli:main"

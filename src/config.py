@@ -16,6 +16,11 @@ Embeddings (see src/embeddings.py)
     ENGRAM_EMBED_URL            unset → Ollama; "disabled" → embeddings off;
                                 any other URL → OpenAI-compatible /v1/embeddings
     ENGRAM_EMBED_API_KEY        Bearer token for the OpenAI-compatible backend
+    ENGRAM_EMBED_BACKEND        Force a backend, overriding the URL rules:
+                                static|fastembed (fast in-process), ollama,
+                                openai, or disabled
+    ENGRAM_STATIC_EMBED_MODEL   Model2Vec model id (default minishlab/potion-retrieval-32M)
+    ENGRAM_FASTEMBED_MODEL      FastEmbed model id (default BAAI/bge-small-en-v1.5)
     OLLAMA_HOST                 Ollama base URL (default http://localhost:11434)
 
 LLM layer (see src/llm.py)
