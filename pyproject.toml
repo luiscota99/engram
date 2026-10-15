@@ -30,6 +30,8 @@ dev = [
 # trade some retrieval quality for sub-50ms embeds on the recall/guard gate.
 # Anthropic-native LLM backend (ENGRAM_LLM_PROVIDER=anthropic).
 anthropic = ["anthropic>=1.0"]
+# Local decision model for the `decide` interface (policy backend "laya").
+laya = ["laya>=0.4"]
 static = ["model2vec>=0.3.0"]        # Model2Vec static embeddings (numpy-only)
 fastembed = ["fastembed>=0.3.0"]     # quantized ONNX embeddings (onnxruntime)
 
@@ -58,6 +60,7 @@ include = [
     "src/serve.py",
     "src/llm.py",
     "src/llm_anthropic.py",
+    "src/decide.py",
     "src/search_audit.py",
     "src/search.py",
     "src/summarize.py",

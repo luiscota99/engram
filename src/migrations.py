@@ -467,6 +467,32 @@ MIGRATIONS = {
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_summary", "TEXT"),
         lambda conn: _add_column_if_missing(conn, "checkpoints", "milestone_at", "TEXT"),
     ],
+    30: [
+        # Typed decisions log (hub spec: the LLM node's `decide` interface).
+        # The log IS the fine-tuning dataset for the decision model (Laya):
+        # input, answer taken, backend, confidence, latency, later outcome.
+        """CREATE TABLE IF NOT EXISTS decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            input_hash TEXT NOT NULL,
+            input_text TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0,
+            backend TEXT NOT NULL,
+            model TEXT NOT NULL DEFAULT '',
+            latency_ms REAL NOT NULL DEFAULT 0,
+            low_confidence INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT,
+            outcome TEXT,
+            outcome_source TEXT,
+            outcome_at TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );""",
+        "CREATE INDEX IF NOT EXISTS idx_decisions_question ON decisions(question, version, created_at);",
+        "CREATE INDEX IF NOT EXISTS idx_decisions_hash ON decisions(input_hash);",
+    ],
     29: [
         # Portable identity (ADR-0009 §3/§7). Content tables get a code-set
         # provenance stamp ('local' | 'remote:<host>' | later 'import:<machine>');

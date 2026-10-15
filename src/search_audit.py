@@ -164,6 +164,39 @@ def append_remote_call_audit(
         pass
 
 
+def append_decision_audit(
+    *,
+    question: str,
+    backend: str,
+    model: str,
+    latency_ms: float,
+    confidence: float,
+    session_id: str | None = None,
+) -> None:
+    """One ledger row per typed decision (``source: decision``) — latency and
+    confidence by backend feed the promotion evidence; the full record lives in
+    the ``decisions`` table."""
+    path = config.audit_log_path()
+    if not path:
+        return
+    line: dict[str, Any] = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "source": "decision",
+        "question": question,
+        "backend": backend,
+        "model": model,
+        "latency_ms": round(float(latency_ms), 2),
+        "confidence": round(float(confidence), 3),
+    }
+    if session_id:
+        line["session_id"] = session_id
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def summarize_audit_log(path: str | None = None) -> dict:
     """Aggregate the search-audit JSONL into ROI-report stats.
 
