@@ -21,6 +21,7 @@ import math
 import os
 import time
 from collections import OrderedDict
+from typing import Any
 
 from . import config
 
@@ -39,6 +40,34 @@ LEGACY_EMBEDDING_MODEL_ENV = "ENGRAM_EMBEDDING_MODEL"
 #                                 (auth via ENGRAM_EMBED_API_KEY if set)
 EMBED_URL_ENV = "ENGRAM_EMBED_URL"
 EMBED_API_KEY_ENV = "ENGRAM_EMBED_API_KEY"
+
+# ENGRAM_EMBED_BACKEND selects the backend explicitly, overriding the URL rules
+# above. It exists for the fast in-process backends, which have no host/URL:
+#   static     → Model2Vec static embeddings (dictionary-lookup encoder; pure
+#                numpy, no server/GPU; sub-5ms; ~15% quality cost vs a
+#                contextual model — acceptable for the recall/guard relevance
+#                gate, which is only a filter).
+#   fastembed  → quantized ONNX embeddings in-process (onnxruntime; ~10-50ms;
+#                higher quality than static, heavier dependency).
+#   ollama / openai / disabled → same as the URL rules; provided so the backend
+#                can be pinned without unsetting ENGRAM_EMBED_URL.
+# The two-tier plan (static for the hot path, contextual for the write path)
+# needs a SEPARATE vector space: a static query vector cannot be compared to a
+# nomic-768 document vector. This flag selects one backend process-wide; the
+# A/B harness sets it per scratch DB (see benchmarks/embed_backend_bench.py).
+EMBED_BACKEND_ENV = "ENGRAM_EMBED_BACKEND"
+STATIC_EMBED_MODEL_ENV = "ENGRAM_STATIC_EMBED_MODEL"
+FASTEMBED_MODEL_ENV = "ENGRAM_FASTEMBED_MODEL"
+
+# Defaults for the in-process backends. potion-retrieval-32M is a retrieval-tuned
+# static model (512-dim); bge-small-en-v1.5 is a strong small ONNX model (384-dim).
+# Neither matches nomic's 768 dims — the scratch/hot vector table must be built at
+# the backend's native dimension (see embedding_matches_vec_schema / get_vec_dimension).
+STATIC_DEFAULT_MODEL = "minishlab/potion-retrieval-32M"
+FASTEMBED_DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
+
+# In-process backend kinds share one code path (no HTTP, no host cooldown).
+_INPROCESS_KINDS = ("static", "fastembed")
 
 # Per-model context window limits (in characters, ~4 chars/token).
 # The truncation guard keeps text well within each model's token limit.
@@ -281,17 +310,104 @@ def warm_up(model: str | None = None) -> bool:
 
 
 def resolve_embed_backend() -> tuple[str, str]:
-    """Return ``(kind, base_url)`` where kind is ``ollama``, ``openai``, or ``disabled``.
+    """Return ``(kind, base_url)`` where kind is ``ollama``, ``openai``, ``static``,
+    ``fastembed``, or ``disabled``.
 
-    Any non-empty ``ENGRAM_EMBED_URL`` other than the literal ``disabled`` selects
-    the OpenAI-compatible backend at that URL.
+    ``ENGRAM_EMBED_BACKEND`` wins when set (needed for the in-process backends,
+    which have no URL — ``base_url`` is empty for those). Otherwise any non-empty
+    ``ENGRAM_EMBED_URL`` other than the literal ``disabled`` selects the
+    OpenAI-compatible backend at that URL.
     """
+    backend = os.environ.get(EMBED_BACKEND_ENV, "").strip().lower()
+    if backend in ("static", "model2vec"):
+        return "static", ""
+    if backend == "fastembed":
+        return "fastembed", ""
+    if backend == "disabled":
+        return "disabled", ""
+    if backend == "ollama":
+        return "ollama", config.ollama_host()
+    # backend == "openai" (or unset) falls through to the URL rules.
     url = os.environ.get(EMBED_URL_ENV, "").strip()
     if url.lower() == "disabled":
         return "disabled", ""
     if url:
         return "openai", url.rstrip("/")
     return "ollama", config.ollama_host()
+
+
+def _resolve_model_for_kind(kind: str) -> str:
+    """Active model name for a backend kind.
+
+    The in-process backends have their own model namespaces and defaults; an
+    explicit per-call ``model=`` still overrides these upstream in ``embed_text``.
+    """
+    if kind == "static":
+        return os.environ.get(STATIC_EMBED_MODEL_ENV, "").strip() or STATIC_DEFAULT_MODEL
+    if kind == "fastembed":
+        return os.environ.get(FASTEMBED_MODEL_ENV, "").strip() or FASTEMBED_DEFAULT_MODEL
+    return _get_model()
+
+
+# Loaded once per (kind, model) and reused for the process lifetime — the whole
+# point of a static backend is that there is no per-call load or round-trip.
+_inprocess_models: dict[tuple[str, str], Any] = {}
+
+
+def _load_inprocess_model(kind: str, model: str) -> Any:
+    key = (kind, model)
+    obj = _inprocess_models.get(key)
+    if obj is not None:
+        return obj
+    if kind == "static":
+        from model2vec import StaticModel  # pyright: ignore[reportMissingImports]
+
+        obj = StaticModel.from_pretrained(model)
+    elif kind == "fastembed":
+        from fastembed import TextEmbedding  # pyright: ignore[reportMissingImports]
+
+        obj = TextEmbedding(model_name=model)
+    else:  # pragma: no cover - guarded by callers
+        raise ValueError(f"not an in-process backend: {kind!r}")
+    _inprocess_models[key] = obj
+    return obj
+
+
+def _inprocess_embed(kind: str, model: str, texts: list[str]) -> list[list[float] | None]:
+    """Embed ``texts`` in-process, returning unit-normalized vectors (or None each).
+
+    Normalizes with numpy so L2 KNN ordering equals cosine — the same norm
+    contract the Ollama path enforces (see :func:`l2_normalize`); mixing norms
+    under sqlite-vec silently partitions the index.
+    """
+    global _last_embed_failure_reason
+    if not texts:
+        return []
+    try:
+        import numpy as np  # pyright: ignore[reportMissingImports]
+
+        obj = _load_inprocess_model(kind, model)
+        if kind == "static":
+            raw = obj.encode(list(texts))
+        else:  # fastembed: .embed yields one array per input
+            raw = list(obj.embed(list(texts)))
+        arr = np.asarray(raw, dtype="float32")
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        arr = arr / norms
+        _last_embed_failure_reason = None
+        return [row.tolist() for row in arr]
+    except ImportError:
+        pkg = "model2vec" if kind == "static" else "fastembed"
+        _last_embed_failure_reason = f"{kind}_backend_missing (pip install {pkg})"
+        logger.warning("%s backend selected but %s is not installed", kind, pkg)
+        return [None] * len(texts)
+    except Exception:
+        _last_embed_failure_reason = f"{kind}_embed_failed"
+        logger.exception("In-process embedding failed (backend=%s, model=%s)", kind, model)
+        return [None] * len(texts)
 
 
 def _openai_embeddings_endpoint(base_url: str) -> str:
@@ -308,6 +424,10 @@ def is_embedding_host_available() -> bool:
     kind, base_url = resolve_embed_backend()
     if kind == "disabled":
         return False
+    if kind in _INPROCESS_KINDS:
+        # No host, no cooldown: an in-process backend is "available" until it
+        # actually fails to import/encode (surfaced via the degradation reason).
+        return True
     return not _is_host_in_cooldown(base_url)
 
 
@@ -316,6 +436,8 @@ def get_embedding_degradation_reason() -> str | None:
     kind, base_url = resolve_embed_backend()
     if kind == "disabled":
         return "embeddings_disabled (ENGRAM_EMBED_URL=disabled)"
+    if kind in _INPROCESS_KINDS:
+        return _last_embed_failure_reason
     if _is_host_in_cooldown(base_url):
         return _last_embed_failure_reason or "ollama_host_cooldown"
     return _last_embed_failure_reason
@@ -423,8 +545,11 @@ def embed_text(text: str, model: str | None = None, timeout: float | None = None
         _last_embed_failure_reason = "embeddings_disabled"
         return None
 
-    active_model = model or _get_model()
-    max_chars = config.embed_max_chars() or _MODEL_CONTEXT.get(active_model, 2000)
+    active_model = model or _resolve_model_for_kind(kind)
+    # In-process backends handle their own truncation; give them a generous cap
+    # rather than the 2000-char fallback tuned for short-context Ollama models.
+    default_cap = 8000 if kind in _INPROCESS_KINDS else 2000
+    max_chars = config.embed_max_chars() or _MODEL_CONTEXT.get(active_model, default_cap)
 
     if len(text) > max_chars:
         text = text[:max_chars]
@@ -442,6 +567,16 @@ def embed_text(text: str, model: str | None = None, timeout: float | None = None
         while len(_embed_cache) > EMBED_CACHE_MAX:
             _embed_cache.popitem(last=False)
         return l2
+
+    if kind in _INPROCESS_KINDS:
+        embedding = _inprocess_embed(kind, active_model, [text])[0]
+        if embedding:
+            _embed_cache[cache_key] = list(embedding)
+            _embed_cache.move_to_end(cache_key)
+            while len(_embed_cache) > EMBED_CACHE_MAX:
+                _embed_cache.popitem(last=False)
+            _persistent_cache_put(active_model, text, embedding)
+        return embedding
 
     if _is_host_in_cooldown(base_url):
         _last_embed_failure_reason = "ollama_host_cooldown"
@@ -514,8 +649,9 @@ def embed_batch(texts: list[str], model: str | None = None) -> list[list[float] 
         _last_embed_failure_reason = "embeddings_disabled"
         return [None] * len(texts)
 
-    active_model = model or _get_model()
-    max_chars = config.embed_max_chars() or _MODEL_CONTEXT.get(active_model, 2000)
+    active_model = model or _resolve_model_for_kind(kind)
+    default_cap = 8000 if kind in _INPROCESS_KINDS else 2000
+    max_chars = config.embed_max_chars() or _MODEL_CONTEXT.get(active_model, default_cap)
     prepared = [(t or "")[:max_chars] for t in texts]
 
     # Serve what we can from cache; batch only the misses.
@@ -531,6 +667,18 @@ def embed_batch(texts: list[str], model: str | None = None) -> list[list[float] 
         else:
             miss_idx.append(i)
     if not miss_idx:
+        return out
+
+    if kind in _INPROCESS_KINDS:
+        vectors = _inprocess_embed(kind, active_model, [prepared[i] for i in miss_idx])
+        for i, vec in zip(miss_idx, vectors):
+            if vec:
+                out[i] = vec
+                _embed_cache[(active_model, prepared[i])] = list(vec)
+                _embed_cache.move_to_end((active_model, prepared[i]))
+                _persistent_cache_put(active_model, prepared[i], vec)
+        while len(_embed_cache) > EMBED_CACHE_MAX:
+            _embed_cache.popitem(last=False)
         return out
 
     if _is_host_in_cooldown(base_url):
@@ -600,5 +748,12 @@ def clear_embedding_cache() -> None:
 
 
 def get_embedding_model() -> str:
-    """Return the currently configured embedding model name (for display/logging)."""
+    """Return the currently configured embedding model name (for display/logging).
+
+    Backend-aware: the in-process backends have their own model namespaces, so a
+    ``static``/``fastembed`` deployment reports its own model, not the Ollama one.
+    """
+    kind, _ = resolve_embed_backend()
+    if kind in _INPROCESS_KINDS:
+        return _resolve_model_for_kind(kind)
     return _get_model()

@@ -27,7 +27,7 @@ from .embeddings import (
     embed_batch,
     embed_text,
     embedding_matches_vec_schema,
-    resolve_embedding_model_name,
+    get_embedding_model,
 )
 from .item_registry import dedup_table_map, rebuild_specs, table_for
 from .migrations import backup_before_migration, run_migrations
@@ -680,7 +680,10 @@ def get_tags_for_item(conn, item_type, item_id):
 
 def index_in_fts(conn, item_type, item_id, title, content, tags_list):
     """Insert or replace an item in the FTS index and generate its embedding."""
-    embedding_model = resolve_embedding_model_name()
+    # Backend-aware: an in-process backend (static/fastembed) has its own model
+    # name and dimension. Using the Ollama model name here would make the
+    # dimension check reject the vector (e.g. "nomic → 768" vs a 512-dim table).
+    embedding_model = get_embedding_model()
 
     # Single-owner maintenance of the guard's trigger index (v28): the same
     # write path that owns FTS owns the shingles — never triggers.
@@ -964,7 +967,7 @@ def find_similar(content: str, item_type: str | None = None, threshold: float = 
     if not embedding or sqlite_vec is None:
         return []
 
-    model = resolve_embedding_model_name()
+    model = get_embedding_model()
     ok_vec, vec_err = embedding_matches_vec_schema(
         embedding, model, expected_dim=get_vec_dimension(db_path=db_path)
     )
@@ -1019,7 +1022,7 @@ def find_similar(content: str, item_type: str | None = None, threshold: float = 
 
 def get_embedding_stats(db_path=None) -> dict:
     """Return counts of embedding_status values plus the current model."""
-    current_model = resolve_embedding_model_name()
+    current_model = get_embedding_model()
 
     with get_connection(db_path) as conn:
         rows = conn.execute(
@@ -1063,7 +1066,7 @@ def reembed_stale(db_path=None, batch_size: int = 50) -> dict:
     if sqlite_vec is None:
         return {"processed": 0, "succeeded": 0, "failed": 0, "remaining": 0, "error": "sqlite_vec not available"}
 
-    embedding_model = resolve_embedding_model_name()
+    embedding_model = get_embedding_model()
     succeeded = failed = 0
 
     with get_connection(db_path) as conn:
