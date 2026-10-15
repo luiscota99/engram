@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 73 commands.
+All commands are invoked as `engram <command>`. 74 commands.
 
 ### `engram add`
 
@@ -104,6 +104,19 @@ Resolver un item del inbox
   - `--reject`
   - `--ack`
   - `--run` — Con --approve: ejecuta el reflex propuesto
+
+### `engram decisions`
+
+Typed decisions log (choice / score / yes-no): ask, stats, bench, export, policy, outcome
+
+  - `<daction>` — one of `ask, stats, bench, export, policy, outcome`
+
+- **`engram decisions ask`**
+- **`engram decisions bench`**
+- **`engram decisions export`**
+- **`engram decisions outcome`**
+- **`engram decisions policy`**
+- **`engram decisions stats`**
 
 ### `engram doctor`
 

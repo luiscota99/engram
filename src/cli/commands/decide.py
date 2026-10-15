@@ -7,7 +7,9 @@ import sys
 
 
 def add_parser(sub) -> None:
-    p = sub.add_parser("decide", help="Typed decisions (choice / score / yes-no): the LLM node's decide interface")
+    # "decisions" (the log/registry), not "decide": `engram decide <id>` is the inbox
+    # approval command (ADR-0007) and must stay the single proposal→execution path.
+    p = sub.add_parser("decisions", help="Typed decisions log (choice / score / yes-no): ask, stats, bench, export, policy, outcome")
     ds = p.add_subparsers(dest="daction")
 
     p_ask = ds.add_parser("ask", help="Answer one question over a piece of text (logs the decision)")

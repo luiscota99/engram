@@ -15,7 +15,7 @@ Three rules from the spec:
 * **Bootstrap on Haiku, promote per question, measured, reversible.** The
   policy file pins a backend per question. ``laya`` (Convai Innovations' local
   decision model, optional extra) joins when it beats Haiku on holdout — and
-  joins the *request path* only when ``engram decide bench`` measures it
+  joins the *request path* only when ``engram decisions bench`` measures it
   under the policy's latency ceiling on this CPU.
 
 Never raises into a caller: a missing backend returns ``None`` and the caller
