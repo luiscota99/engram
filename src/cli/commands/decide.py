@@ -99,7 +99,8 @@ def cmd_decide_export(args) -> None:
 
 
 def cmd_decide_policy(args) -> None:
-    from ...decide import load_policy, policy_path, set_backend
+    from ...decide import load_policy, set_backend
+    from ...policy import policy_path
 
     if args.pin:
         try:

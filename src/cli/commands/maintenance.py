@@ -215,6 +215,21 @@ def cmd_roi(args):
                 ))
         print()
 
+    llm = a.get("llm", {}) if a["enabled"] else {}
+    if llm.get("calls"):
+        print(fmt_bold("LLM spend (policy-routed, from the cost ledger):"))
+        print(
+            f"  Calls: {llm['calls']} (ok {llm['ok']}, unavailable {llm['unavailable']}, "
+            f"refused by privacy policy {llm['refused']})  tokens in/out: "
+            f"{llm['input_tokens']:,}/{llm['output_tokens']:,}  cost: ${llm['cost_usd']:.4f}"
+        )
+        for job, b in sorted(llm.get("by_job", {}).items(), key=lambda kv: -kv[1]["cost_usd"]):
+            lat = f"  p50 {b['p50_ms']}ms" if b.get("p50_ms") is not None else ""
+            print(f"    {job:<10} {b['calls']:>5} calls  ${b['cost_usd']:.4f}{lat}")
+        for model, b in sorted(llm.get("by_model", {}).items(), key=lambda kv: -kv[1]["cost_usd"])[:5]:
+            print(fmt_dim(f"    {model:<22} {b['calls']:>5} calls  ${b['cost_usd']:.4f}"))
+        print()
+
     print(fmt_bold("Realized reuse:"))
     print(f"  Memories ever used: {r['items_used']}/{r['items_total']}")
     fb = r.get("feedback_by_source") or {}

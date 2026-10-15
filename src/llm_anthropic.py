@@ -40,6 +40,16 @@ def sdk_installed() -> bool:
     return True
 
 
+# Besides ENGRAM_LLM_API_KEY the SDK resolves its own credential sources: an
+# ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN, an `ant auth login` profile, or
+# Workload Identity Federation (ANTHROPIC_FEDERATION_RULE_ID + token file).
+_SDK_CREDENTIAL_ENVS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_PROFILE")
+
+
+def credentials_present() -> bool:
+    return bool(config.llm_api_key()) or any(os.environ.get(k) for k in _SDK_CREDENTIAL_ENVS)
+
+
 def _client(timeout: float) -> Any:
     import anthropic  # pyright: ignore[reportMissingImports]  # optional extra
 
@@ -50,7 +60,7 @@ def _client(timeout: float) -> Any:
 
 def is_available(model: str, timeout: float = 2.0) -> bool:
     """True when the SDK is installed, the key is accepted and *model* exists."""
-    if not sdk_installed() or not config.llm_api_key():
+    if not sdk_installed() or not credentials_present():
         return False
     try:
         _client(timeout).models.retrieve(model)
@@ -89,6 +99,18 @@ def _create(client: Any, model: str, **kwargs: Any) -> Any:
     return client.messages.create(model=model, **kwargs)
 
 
+def _usage_of(response: Any) -> dict[str, int] | None:
+    u = getattr(response, "usage", None)
+    if u is None:
+        return None
+    out: dict[str, int] = {}
+    for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+        v = getattr(u, k, None)
+        if isinstance(v, int):
+            out[k] = v
+    return out or None
+
+
 def generate(
     *,
     model: str,
@@ -98,12 +120,24 @@ def generate(
     timeout: float = 60.0,
 ) -> str | None:
     """One Messages API call; text or None. Never raises."""
+    return generate_ex(model=model, messages=messages, system=system, max_tokens=max_tokens, timeout=timeout)[0]
+
+
+def generate_ex(
+    *,
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    system: str = "",
+    max_tokens: int = 4096,
+    timeout: float = 60.0,
+) -> tuple[str | None, dict[str, int] | None]:
+    """``generate`` plus the token usage (for the cost ledger)."""
     if not sdk_installed():
         logger.warning(
             "ENGRAM_LLM_PROVIDER=anthropic but the SDK is not installed: "
             "pip install 'engram-memory[anthropic]'"
         )
-        return None
+        return None, None
     import anthropic  # pyright: ignore[reportMissingImports]
 
     kwargs: dict[str, Any] = {"max_tokens": int(max_tokens), "messages": list(messages)}
@@ -116,27 +150,29 @@ def generate(
         response = _create(_client(timeout), model, **kwargs)
     except anthropic.AuthenticationError:
         logger.error("anthropic: invalid API key (ENGRAM_LLM_API_KEY)")
-        return None
+        return None, None
     except anthropic.NotFoundError:
         logger.error("anthropic: unknown model %r (ENGRAM_LLM_MODEL)", model)
-        return None
+        return None, None
     except anthropic.RateLimitError as exc:
         logger.warning("anthropic: rate limited (retry-after=%s)", exc.response.headers.get("retry-after"))
-        return None
+        return None, None
     except anthropic.APIStatusError as exc:
         logger.error("anthropic: API error %s: %s", exc.status_code, exc.message)
-        return None
+        return None, None
     except anthropic.APIConnectionError:
         logger.error("anthropic: connection error")
-        return None
+        return None, None
     except TypeError as exc:  # an option the installed SDK does not know (e.g. output_config)
         logger.error("anthropic: SDK rejected request options (%s); upgrade the SDK", exc)
-        return None
-    return _text_of(response)
+        return None, None
+    return _text_of(response), _usage_of(response)
 
 
-def complete(prompt: str, *, system: str = "", model: str, max_tokens: int = 4096, timeout: float = 60.0) -> str | None:
-    return generate(
+def complete_ex(
+    prompt: str, *, system: str = "", model: str, max_tokens: int = 4096, timeout: float = 60.0
+) -> tuple[str | None, dict[str, int] | None]:
+    return generate_ex(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         system=system,
@@ -145,7 +181,13 @@ def complete(prompt: str, *, system: str = "", model: str, max_tokens: int = 409
     )
 
 
-def chat(messages: list[dict], *, model: str, max_tokens: int = 800, timeout: float = 60.0) -> str | None:
+def complete(prompt: str, *, system: str = "", model: str, max_tokens: int = 4096, timeout: float = 60.0) -> str | None:
+    return complete_ex(prompt, system=system, model=model, max_tokens=max_tokens, timeout=timeout)[0]
+
+
+def chat_ex(
+    messages: list[dict], *, model: str, max_tokens: int = 800, timeout: float = 60.0
+) -> tuple[str | None, dict[str, int] | None]:
     """OpenAI-style message list → Messages API (system turns become ``system``)."""
     system = "\n\n".join(str(m.get("content") or "") for m in messages if m.get("role") == "system").strip()
     turns = [
@@ -155,4 +197,8 @@ def chat(messages: list[dict], *, model: str, max_tokens: int = 800, timeout: fl
     ]
     if not turns or turns[0]["role"] != "user":
         turns.insert(0, {"role": "user", "content": "Continue."})
-    return generate(model=model, messages=turns, system=system, max_tokens=max_tokens, timeout=timeout)
+    return generate_ex(model=model, messages=turns, system=system, max_tokens=max_tokens, timeout=timeout)
+
+
+def chat(messages: list[dict], *, model: str, max_tokens: int = 800, timeout: float = 60.0) -> str | None:
+    return chat_ex(messages, model=model, max_tokens=max_tokens, timeout=timeout)[0]
