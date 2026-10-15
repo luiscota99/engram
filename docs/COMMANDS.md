@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 72 commands.
+All commands are invoked as `engram <command>`. 73 commands.
 
 ### `engram add`
 
@@ -425,6 +425,15 @@ Seed with historical data
 ### `engram self-check`
 
 Barrido de auto-mantenimiento → inbox (idempotente)
+
+### `engram serve`
+
+Run the remote-mode JSON/HTTP server on 127.0.0.1 (publish it with `tailscale serve`)
+
+  - `--host` — Bind address (default 127.0.0.1; env ENGRAM_SERVE_HOST)
+  - `--port` — Port (default 7437; env ENGRAM_SERVE_PORT)
+  - `--auth` — caps = require a Tailscale-App-Capabilities grant (default); none = trust every caller (tests only). Env ENGRAM_SERVE_AUTH — one of `caps, none`
+  - `--allow-nonlocal` — Permit binding a non-loopback address (normally refused; env ENGRAM_SERVE_ALLOW_NONLOCAL=1)
 
 ### `engram session-help`
 
