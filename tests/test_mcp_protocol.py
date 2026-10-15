@@ -279,3 +279,76 @@ def test_parent_death_watchdog_exits_when_ppid_changes(monkeypatch):
     protocol._start_parent_death_watchdog(poll_interval=0.01)
     assert exited.wait(timeout=2.0), "watchdog did not detect parent death"
     assert captured["code"] == 0
+
+
+# --- Claude Code v2 MCP runtime (spec 2026-07-28) compatibility ----------------
+# Verified on the wire 2026-10-15 (ADR-0009 Phase 1 pre-flight, issue #12): with
+# MCP_SDK_GENERATION=v2, Claude Code 2.1.226 spawns a throwaway server process and
+# sends `server/discover`; anything that is not definitive modern evidence makes
+# it treat the server as legacy, and it then connects the real process with the
+# 2025-era `initialize` handshake (protocolVersion 2025-11-25, capabilities
+# elicitation + roots). These tests pin the server-side contract that fallback
+# relies on: a clean -32601 on the probe, an `initialize` answer carrying our own
+# version whatever the client asked for, and tolerance of `_meta` in params.
+
+_V2_META = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
+    "io.modelcontextprotocol/clientInfo": {"name": "probe", "version": "0"},
+}
+
+
+def test_server_discover_probe_gets_method_not_found_not_a_crash():
+    import src.mcp.protocol as prot
+
+    resp = prot.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "server-discover-probe-1",
+            "method": "server/discover",
+            "params": {"_meta": _V2_META},
+        }
+    )
+    assert resp is not None
+    assert resp["id"] == "server-discover-probe-1"
+    assert resp["error"]["code"] == -32601
+    assert "result" not in resp
+
+
+def test_initialize_with_newer_protocol_version_answers_with_ours():
+    import src.mcp.protocol as prot
+
+    for requested in ("2025-11-25", "2026-07-28"):
+        resp = prot.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": requested,
+                    "capabilities": {"elicitation": {}, "roots": {}},
+                    "clientInfo": {"name": "claude-code", "version": "2.1.226"},
+                },
+            }
+        )
+        assert resp is not None
+        assert resp["result"]["protocolVersion"] == prot.PROTOCOL_VERSION
+        # The ADR-0007 elicitation gate keeps its signal across the fallback.
+        assert prot.client_supports_elicitation() is True
+
+
+def test_v2_meta_in_params_is_ignored(monkeypatch, tmp_path):
+    import src.mcp.protocol as prot
+
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(tmp_path / "meta.db"))
+    listed = prot.handle_request(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"_meta": _V2_META}}
+    )
+    assert listed is not None
+    assert "memory_health" in {t["name"] for t in listed["result"]["tools"]}
+
+    pinged = prot.handle_request(
+        {"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {"_meta": _V2_META}}
+    )
+    assert pinged is not None
+    assert pinged["result"] == {}
