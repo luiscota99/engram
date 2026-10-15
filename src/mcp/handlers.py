@@ -1076,7 +1076,7 @@ def handle_memory_auto_extract(args: McpToolArgs) -> str:
             messages = messages_raw
         if not isinstance(messages, list):
             return "Error: messages must be a JSON array of {role, content} objects."
-        result = extract_from_messages(messages)
+        result = extract_from_messages(messages, screen=True, session_id=args.get("session_id") or None)
         return format_auto_extract_result(result)
 
     task_description = args.get("task_description", "")

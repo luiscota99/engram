@@ -402,3 +402,16 @@ def test_v29_rebuilds_checkpoints_with_identity_and_stamps_provenance(migration_
         assert conn.execute("SELECT provenance FROM mistakes").fetchone()["provenance"] == "local"
     finally:
         conn.close()
+
+
+def test_v30_creates_decisions_log(migration_db):
+    conn = _open_conn(migration_db)
+    try:
+        run_migrations(conn, 1, 30)
+        conn.commit()
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
+        assert {"question", "version", "kind", "input_hash", "answer", "confidence", "backend", "latency_ms", "outcome"} <= cols
+        idx = {r["name"] for r in conn.execute("PRAGMA index_list(decisions)").fetchall()}
+        assert {"idx_decisions_question", "idx_decisions_hash"} <= idx
+    finally:
+        conn.close()

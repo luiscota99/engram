@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -205,6 +205,32 @@ CREATE TABLE IF NOT EXISTS prompts (
     updated_at TEXT DEFAULT (datetime('now')),
     provenance TEXT NOT NULL DEFAULT 'local'  -- code-set origin stamp (v29, ADR-0009)
 );
+
+-- Typed decisions (schema v30) — the LLM node's `decide` log. Operational
+-- state and the fine-tuning dataset in one: input, answer taken, backend,
+-- confidence, latency, and the outcome signal that arrives later. Never
+-- FTS-indexed or embedded.
+CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    kind TEXT NOT NULL,                       -- choice | score | yesno
+    input_hash TEXT NOT NULL,
+    input_text TEXT NOT NULL,
+    answer TEXT NOT NULL,                     -- JSON-encoded
+    confidence REAL NOT NULL DEFAULT 0,
+    backend TEXT NOT NULL,                    -- haiku | laya
+    model TEXT NOT NULL DEFAULT '',
+    latency_ms REAL NOT NULL DEFAULT 0,
+    low_confidence INTEGER NOT NULL DEFAULT 0,
+    session_id TEXT,
+    outcome TEXT,                             -- kept | dismissed | correct | wrong | …
+    outcome_source TEXT,
+    outcome_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_question ON decisions(question, version, created_at);
+CREATE INDEX IF NOT EXISTS idx_decisions_hash ON decisions(input_hash);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_meta (

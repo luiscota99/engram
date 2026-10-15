@@ -67,22 +67,14 @@ def _grade(answer: str, assertion: str, grader: str) -> bool:
     if grader == "contains":
         return assertion.lower() in answer.lower()
     try:
-        from .llm import call_chat_completion, is_llm_available
+        from .decide import decide
 
-        if not is_llm_available():
+        # A yes/no judgement is a typed decision (test_passes@v1): logged, and
+        # movable from Haiku to the local decision model by policy.
+        d = decide("test_passes", answer, context=f"Requirement: {assertion}")
+        if d is None:
             return assertion.lower() in answer.lower()
-        verdict = call_chat_completion(
-            [{
-                "role": "user",
-                "content": (
-                    "Answer only YES or NO. Does the following response satisfy this "
-                    f"requirement?\nRequirement: {assertion}\n\nResponse:\n{answer}"
-                ),
-            }],
-            task="audit",
-            max_tokens=5,
-        )
-        return bool(verdict) and "yes" in verdict.lower()
+        return bool(d.answer)
     except Exception:
         logger.debug("llm_judge grading failed; falling back to contains", exc_info=True)
         return assertion.lower() in answer.lower()

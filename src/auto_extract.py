@@ -104,13 +104,50 @@ def _llm_extract(messages: list[dict]) -> list[dict]:
     return out[:2]
 
 
-def extract_from_messages(messages: list[dict]) -> dict:
-    """Extract memory candidates from chat messages (LLM + regex combined)."""
+def _screen_candidates(candidates: list[dict], *, session_id: str | None = None) -> tuple[list[dict], int]:
+    """Ask ``worth_remembering@v1`` per candidate (the LLM node's *decide* path).
+
+    Fail open: when no decision backend can answer, every candidate passes
+    exactly as before. Kept candidates carry ``decision_id`` so the outcome
+    (stored or dismissed) can be recorded against the logged decision later.
+    """
+    from .decide import decide
+
+    kept: list[dict] = []
+    dropped = 0
+    for c in candidates:
+        state = f"[{c.get('type', 'fact')}] {c.get('title', '')}: {c.get('summary', '')}"
+        d = decide("worth_remembering", state, session_id=session_id)
+        if d is None:
+            kept.append(c)
+            continue
+        if d.answer:
+            kept.append({**c, "decision_id": d.id, "decision_confidence": round(d.confidence, 2)})
+        else:
+            dropped += 1
+    return kept, dropped
+
+
+def extract_from_messages(
+    messages: list[dict], *, screen: bool = False, session_id: str | None = None
+) -> dict:
+    """Extract memory candidates from chat messages (LLM + regex combined).
+
+    With ``screen=True`` (the MCP/digest path) each candidate is then judged by
+    the ``worth_remembering`` decision; without a decision backend nothing is
+    dropped.
+    """
     llm_facts = _llm_extract(messages)
     regex_facts = _regex_extract(messages)
     combined = llm_facts + regex_facts
+    screened, dropped = (
+        _screen_candidates(combined[:4], session_id=session_id)
+        if screen and is_llm_available()
+        else (combined[:4], 0)
+    )
     return {
-        "candidates": combined[:4],
+        "candidates": screened,
+        "screened_out": dropped,
         "llm_used": bool(llm_facts),
         "regex_used": bool(regex_facts),
         "llm_available": is_llm_available(),
@@ -131,10 +168,13 @@ def extract_from_task(
         errors_encountered=errors_encountered,
         files_changed=files_changed,
     )
-    message_facts = extract_from_messages([
-        {"role": "user", "content": task_description},
-        {"role": "assistant", "content": outcome},
-    ])
+    message_facts = extract_from_messages(
+        [
+            {"role": "user", "content": task_description},
+            {"role": "assistant", "content": outcome},
+        ],
+        screen=True,
+    )
     return {
         "capture_suggestion": capture,
         "auto_extract": message_facts,
@@ -145,11 +185,15 @@ def format_auto_extract_result(result: dict) -> str:
     lines = ["Auto-extract results:\n"]
     if not result.get("candidates"):
         lines.append("No durable facts detected.")
+        if result.get("screened_out"):
+            lines.append(f"Screened out {result['screened_out']} candidate(s) as not worth remembering.")
         lines.append(f"LLM available: {result.get('llm_available', False)}")
         return "\n".join(lines)
     for i, c in enumerate(result["candidates"], 1):
         lines.append(f"{i}. [{c.get('type', 'fact').upper()}] {c.get('title', 'Untitled')}")
         lines.append(f"   {c.get('summary', '')}")
+    if result.get("screened_out"):
+        lines.append(f"(Screened out {result['screened_out']} candidate(s) as not worth remembering.)")
     lines.append("")
     lines.append(
         "Present drafts to the user for approval before calling memory_add."

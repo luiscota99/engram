@@ -32,7 +32,10 @@ _TASK_MODEL_ENV: dict[str, str] = {
     "audit": "ENGRAM_LLM_AUDIT_MODEL",
     "gc": "ENGRAM_LLM_AUDIT_MODEL",
     "merge": "ENGRAM_LLM_MODEL",
+    "decide": "ENGRAM_LLM_DECIDE_MODEL",
 }
+# The hub spec bootstraps every decision question on Haiku (judgements, not prose).
+ANTHROPIC_DECIDE_MODEL = "claude-haiku-5-5"
 
 PROVIDER_ENV = "ENGRAM_LLM_PROVIDER"  # anthropic | openai | ollama | (unset = auto)
 
@@ -72,10 +75,13 @@ def resolve_llm_model(model: str | None = None, task: str | None = None) -> str:
             override = os.environ.get(env_key, "").strip()
             if override:
                 return override
-    if llm_provider() == "anthropic" and not os.environ.get("ENGRAM_LLM_MODEL", "").strip():
-        from .llm_anthropic import DEFAULT_MODEL
+    if llm_provider() == "anthropic":
+        if task == "decide":
+            return ANTHROPIC_DECIDE_MODEL
+        if not os.environ.get("ENGRAM_LLM_MODEL", "").strip():
+            from .llm_anthropic import DEFAULT_MODEL
 
-        return DEFAULT_MODEL
+            return DEFAULT_MODEL
     return config.llm_model()
 
 

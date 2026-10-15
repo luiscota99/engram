@@ -21,6 +21,7 @@ from .commands.codebase import (
     cmd_index_project,
     cmd_query_codebase,
 )
+from .commands.decide import add_parser as add_decide_parser
 from .commands.inbox import (
     cmd_decide,
     cmd_inbox,
@@ -360,6 +361,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_chunk_sync_parsers(sub)
 
     add_serve_parser(sub)
+
+    add_decide_parser(sub)
 
     p_sync = sub.add_parser("sync-skills", help="Bidirectional sync between Engram and Cursor skills")
     p_sync.add_argument("--path", default="~/.cursor/skills")
