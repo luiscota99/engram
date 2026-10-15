@@ -371,6 +371,7 @@ Where did the last session leave off? (from Stop-hook checkpoints)
 
   - `--project` — Project path (default: current directory)
   - `-n, --count` — How many recent checkpoints to show (default 1)
+  - `--all-profiles` — Include checkpoints from every profile (default: ENGRAM_PROFILE only)
 
 ### `engram retrieval-benchmark`
 

@@ -696,6 +696,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume = sub.add_parser("resume", help="Where did the last session leave off? (from Stop-hook checkpoints)")
     p_resume.add_argument("--project", help="Project path (default: current directory)")
     p_resume.add_argument("-n", "--count", type=int, default=1, help="How many recent checkpoints to show (default 1)")
+    p_resume.add_argument("--all-profiles", action="store_true", help="Include checkpoints from every profile (default: ENGRAM_PROFILE only)")
     p_resume.set_defaults(func=cmd_resume)
 
     p_guard = sub.add_parser("guard", help="Scan files or the staged diff against known mistakes/patterns (pre-commit)")

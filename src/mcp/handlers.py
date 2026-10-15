@@ -375,6 +375,7 @@ def handle_memory_add_mistake(args: McpToolArgs) -> str:
     with get_connection() as conn:
         mid = create_mistake(
             conn,
+            provenance=str(args.get("provenance") or "local"),
             date=args["date"],
             context=args["context"],
             mistake=args["mistake"],
@@ -395,6 +396,7 @@ def handle_memory_add_pattern(args: McpToolArgs) -> str:
     with get_connection() as conn:
         pid = create_pattern(
             conn,
+            provenance=str(args.get("provenance") or "local"),
             name=args["name"],
             symptoms=args["symptoms"],
             root_cause=args["root_cause"],
@@ -412,6 +414,7 @@ def handle_memory_add_skill(args: McpToolArgs) -> str:
     with get_connection() as conn:
         sid = create_skill(
             conn,
+            provenance=str(args.get("provenance") or "local"),
             name=args["name"],
             domain=args["domain"],
             trigger=args["trigger"],
@@ -457,6 +460,7 @@ def handle_memory_add_conversation(args: McpToolArgs) -> str:
     with get_connection() as conn:
         cid = create_conversation(
             conn,
+            provenance=str(args.get("provenance") or "local"),
             conversation_id=args["conversation_id"],
             title=args["title"],
             date=args["date"],
@@ -474,6 +478,7 @@ def handle_memory_add_prompt(args: McpToolArgs) -> str:
     with get_connection() as conn:
         pid = create_prompt(
             conn,
+            provenance=str(args.get("provenance") or "local"),
             name=args["name"],
             role=args["role"],
             domain=args["domain"],

@@ -39,7 +39,7 @@ _vec_load_warned = False
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".engram", "memory.db")
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 SCHEMA_SQL = """
 -- Mistakes: individual error instances with root cause analysis
@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS mistakes (
     usage_count INTEGER DEFAULT 0,
     last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    superseded_by INTEGER
+    superseded_by INTEGER,
+    provenance TEXT NOT NULL DEFAULT 'local'  -- code-set origin stamp (v29, ADR-0009)
 );
 
 -- Patterns: recurring issue types with standard solutions
@@ -68,7 +69,8 @@ CREATE TABLE IF NOT EXISTS patterns (
     usage_count INTEGER DEFAULT 0,
     last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    superseded_by INTEGER
+    superseded_by INTEGER,
+    provenance TEXT NOT NULL DEFAULT 'local'  -- code-set origin stamp (v29, ADR-0009)
 );
 
 -- Track where each pattern has been observed
@@ -94,7 +96,8 @@ CREATE TABLE IF NOT EXISTS skills (
     last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    superseded_by INTEGER
+    superseded_by INTEGER,
+    provenance TEXT NOT NULL DEFAULT 'local'  -- code-set origin stamp (v29, ADR-0009)
 );
 
 -- Conversations: structured index of past sessions (Legacy, superseded by sessions)
@@ -110,7 +113,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     skills_extracted TEXT,
     usage_count INTEGER DEFAULT 0,
     last_used_at TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    provenance TEXT NOT NULL DEFAULT 'local'  -- code-set origin stamp (v29, ADR-0009)
 );
 
 -- Sessions: Committee-driven session ledgers
@@ -198,7 +202,8 @@ CREATE TABLE IF NOT EXISTS prompts (
     usage_count INTEGER DEFAULT 0,
     last_used_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    provenance TEXT NOT NULL DEFAULT 'local'  -- code-set origin stamp (v29, ADR-0009)
 );
 
 -- Schema version tracking
@@ -409,7 +414,10 @@ CREATE INDEX IF NOT EXISTS idx_relations_status ON memory_relations(status);
 -- item type: never FTS-indexed or embedded; read only via `engram resume`.
 CREATE TABLE IF NOT EXISTS checkpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
+    project_path TEXT NOT NULL,                    -- the client's cwd (informational since v29)
+    project_key TEXT NOT NULL DEFAULT '',          -- portable key: git remote, else host:realpath (v29)
+    host TEXT NOT NULL DEFAULT '',                 -- machine the session ran on (v29)
+    profile TEXT NOT NULL DEFAULT 'default',       -- namespace recall/resume are scoped to (v29)
     session_id TEXT NOT NULL,
     last_prompt TEXT NOT NULL DEFAULT '',
     last_summary TEXT NOT NULL DEFAULT '',
@@ -419,10 +427,11 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     milestone_summary TEXT,                        -- deliberate handoff (v26)
     milestone_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    UNIQUE(project_path, session_id)
+    updated_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_path, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoints_identity ON checkpoints(project_key, host, profile, session_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_key ON checkpoints(project_key, profile, updated_at);
 
 -- Retrieval feedback (schema v22) — reward/discourage signal for RANKING only.
 -- helpful=+1 rewards, helpful=-1 demotes; never deletes (the user decides that,
@@ -639,8 +648,25 @@ def init_db(db_path=None):
             current_version = int(existing["value"])
             if current_version < SCHEMA_VERSION:
                 run_migrations(conn, current_version, SCHEMA_VERSION)
+        ensure_instance_id(conn)
 
     return True
+
+
+def ensure_instance_id(conn) -> str:
+    """Give this store a stable identity (schema_meta.instance_id, v29).
+
+    A remote client can tell it is talking to a different brain; a restore from
+    another machine's snapshot keeps that snapshot's id, which is the point.
+    """
+    import uuid
+
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('instance_id', ?)",
+        (uuid.uuid4().hex,),
+    )
+    row = conn.execute("SELECT value FROM schema_meta WHERE key = 'instance_id'").fetchone()
+    return str(row[0]) if row else ""
 
 
 def ensure_tag(conn, tag_name):
