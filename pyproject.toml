@@ -53,6 +53,8 @@ include = [
     "src/config.py",
     "src/embeddings.py",
     "src/database.py",
+    "src/serve.py",
+    "src/search_audit.py",
     "src/search.py",
     "src/summarize.py",
     "src/version.py",

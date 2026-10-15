@@ -124,6 +124,46 @@ def append_injection_audit(
         pass
 
 
+def append_remote_call_audit(
+    *,
+    endpoint: str,
+    method: str,
+    status: int,
+    outcome: str,
+    server_ms: float,
+    caller: str,
+    host: str = "",
+    profile: str = "",
+    session_id: str = "",
+) -> None:
+    """Record one ``engram serve`` call (ADR-0009: every remote call is a ledger row).
+
+    ``outcome`` is ``ok`` / ``denied`` / ``client_error`` / ``error``. ``server_ms``
+    is the server-side processing time; the client records its own RTT.
+    """
+    path = config.audit_log_path()
+    if not path:
+        return
+    line: dict[str, Any] = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "source": "remote_call",
+        "endpoint": endpoint,
+        "method": method,
+        "status": int(status),
+        "outcome": outcome,
+        "server_ms": round(float(server_ms), 2),
+        "caller": caller,
+    }
+    for k, v in (("host", host), ("profile", profile), ("session_id", session_id)):
+        if v:
+            line[k] = v
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def summarize_audit_log(path: str | None = None) -> dict:
     """Aggregate the search-audit JSONL into ROI-report stats.
 
