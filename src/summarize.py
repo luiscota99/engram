@@ -45,7 +45,15 @@ def _detect_language(file_path: str) -> str:
 
 
 def _call_ollama(prompt: str, model: str) -> str | None:
-    """Send a prompt to Ollama and return the raw response string."""
+    """Send a prompt to Ollama and return the raw response string.
+
+    Under ``ENGRAM_LLM_PROVIDER=anthropic`` the prompt goes to Claude instead,
+    through the shared LLM layer (same text-or-None contract).
+    """
+    from .llm import call_ollama_generate, llm_provider
+
+    if llm_provider() == "anthropic":
+        return call_ollama_generate(prompt, model=model if model.startswith("claude-") else None)
     base_url = config.ollama_host()
     url = f"{base_url}/api/generate"
     payload = json.dumps({
@@ -171,7 +179,11 @@ def summarize_files_batch(
 
 
 def ollama_available(model: str | None = None) -> bool:
-    """Return True if Ollama is reachable."""
+    """Return True if the summarizer's LLM backend is reachable."""
+    from .llm import is_llm_available, llm_provider
+
+    if llm_provider() == "anthropic":
+        return is_llm_available()
     base_url = config.ollama_host()
     try:
         with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2) as r:

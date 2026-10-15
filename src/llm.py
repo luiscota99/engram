@@ -1,5 +1,11 @@
 """
-Shared LLM helpers — local Ollama generate/chat with graceful unavailability.
+Shared LLM helpers — graceful-unavailability wrappers over three backends.
+
+* OpenAI-compatible chat (Ollama ``/v1``, OpenRouter, …): the default.
+* Ollama-native ``/api/generate`` when the base URL is the local Ollama.
+* Anthropic-native (Claude Messages API) when ``ENGRAM_LLM_PROVIDER=anthropic``
+  — or auto-detected from an ``sk-ant-`` key / an ``anthropic.com`` base URL.
+  Implemented in ``llm_anthropic.py``; the SDK is an optional extra.
 
 Per-task model routing via ENGRAM_LLM_EXTRACT_MODEL and ENGRAM_LLM_AUDIT_MODEL.
 """
@@ -28,6 +34,24 @@ _TASK_MODEL_ENV: dict[str, str] = {
     "merge": "ENGRAM_LLM_MODEL",
 }
 
+PROVIDER_ENV = "ENGRAM_LLM_PROVIDER"  # anthropic | openai | ollama | (unset = auto)
+
+
+def llm_provider() -> str:
+    """Which backend serves LLM calls: ``anthropic`` or ``openai`` (OpenAI-compatible,
+    which includes Ollama's ``/v1``). Explicit env wins; otherwise an ``sk-ant-``
+    key or an ``anthropic.com`` base URL selects Anthropic."""
+    explicit = os.environ.get(PROVIDER_ENV, "").strip().lower()
+    if explicit == "anthropic":
+        return "anthropic"
+    if explicit in ("openai", "ollama"):
+        return "openai"
+    if config.llm_api_key().startswith("sk-ant-"):
+        return "anthropic"
+    if "anthropic.com" in os.environ.get("ENGRAM_LLM_BASE_URL", ""):
+        return "anthropic"
+    return "openai"
+
 
 def _ollama_base_url() -> str:
     return config.ollama_host()
@@ -48,6 +72,10 @@ def resolve_llm_model(model: str | None = None, task: str | None = None) -> str:
             override = os.environ.get(env_key, "").strip()
             if override:
                 return override
+    if llm_provider() == "anthropic" and not os.environ.get("ENGRAM_LLM_MODEL", "").strip():
+        from .llm_anthropic import DEFAULT_MODEL
+
+        return DEFAULT_MODEL
     return config.llm_model()
 
 
@@ -58,6 +86,10 @@ def _is_ollama_chat_backend(base_url: str) -> bool:
 
 def is_llm_available(timeout: float = 2.0) -> bool:
     """Return True if the configured LLM backend responds."""
+    if llm_provider() == "anthropic":
+        from .llm_anthropic import is_available
+
+        return is_available(resolve_llm_model(), timeout=timeout)
     base = resolve_llm_base_url()
     if _is_ollama_chat_backend(base):
         url = f"{_ollama_base_url()}/api/tags"
@@ -92,8 +124,10 @@ def get_llm_status() -> dict:
     tasks_enabled: list[str] = []
     if available:
         tasks_enabled = ["consolidation_audit", "gc_scoring", "auto_extract", "merge"]
-    return {
-        "base_url": resolve_llm_base_url(),
+    provider = llm_provider()
+    status: dict = {
+        "provider": provider,
+        "base_url": "https://api.anthropic.com" if provider == "anthropic" else resolve_llm_base_url(),
         "model": resolve_llm_model(),
         "audit_model": resolve_llm_model(task="audit"),
         "extract_model": resolve_llm_model(task="extract"),
@@ -101,6 +135,11 @@ def get_llm_status() -> dict:
         "tasks_enabled": tasks_enabled,
         "api_key_set": bool(config.llm_api_key()),
     }
+    if provider == "anthropic":
+        from .llm_anthropic import sdk_installed
+
+        status["sdk_installed"] = sdk_installed()
+    return status
 
 
 def call_ollama_generate(
@@ -111,8 +150,15 @@ def call_ollama_generate(
     task: str | None = None,
     timeout: int = _LLM_TIMEOUT,
 ) -> str | None:
-    """Call Ollama ``/api/generate`` and return response text."""
+    """Call Ollama ``/api/generate`` and return response text.
+
+    Under the Anthropic provider the same call goes to the Messages API.
+    """
     ollama_model = resolve_llm_model(model, task=task)
+    if llm_provider() == "anthropic":
+        from .llm_anthropic import complete
+
+        return complete(prompt, system=system, model=ollama_model, timeout=timeout)
     url = f"{_ollama_base_url()}/api/generate"
     payload: dict = {
         "model": ollama_model,
@@ -142,10 +188,17 @@ def call_chat_completion(
     max_tokens: int = 800,
     timeout: int = _LLM_TIMEOUT,
 ) -> str | None:
-    """Call OpenAI-compatible ``/v1/chat/completions`` (Ollama, OpenRouter, etc.)."""
+    """Call OpenAI-compatible ``/v1/chat/completions`` (Ollama, OpenRouter, etc.).
+
+    Under the Anthropic provider the same messages go to the Messages API.
+    """
+    chat_model = resolve_llm_model(model, task=task)
+    if llm_provider() == "anthropic":
+        from .llm_anthropic import chat
+
+        return chat(messages, model=chat_model, max_tokens=max_tokens, timeout=timeout)
     base = resolve_llm_base_url()
     api_key = config.llm_api_key()
-    chat_model = resolve_llm_model(model, task=task)
     url = f"{base}/chat/completions"
     payload = {
         "model": chat_model,
