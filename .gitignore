@@ -6,6 +6,7 @@ __pycache__/
 data/*.db
 data/*.db-journal
 data/*.db-wal
+data/*.db-shm
 # Local stress-test / temp DBs (do not commit; reproduce via inject_noise.py)
 benchmarks/*.db
 benchmarks/*.db-journal

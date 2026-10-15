@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Guard fast path (schema v28) — the July 31 verdict's #1 conviction, executed.** The per-action guard ran a full hybrid search (~1.4s embedding call) on every Edit/Write/Bash and fired 99% of the time — 82% of all searches, 73% of all injected tokens, for warnings whose measured value was lexical. The guard now probes a deterministic `trigger_ngrams` index (normalized bilingual word 2/3-gram shingles of every mistake/pattern, stopword-only grams dropped, ≥2 distinct shared shingles required): **~110ms end-to-end including CLI startup, zero model calls**, silent on unrelated actions. Maintained solely by `index_in_fts`/`delete_item` (single owner, per the v23 lesson) with a v28 backfill (16,212 shingles from the existing corpus). The hybrid-search guard remains behind `ENGRAM_GUARD_SEMANTIC=1`. Live verification: the relevant test command warned with the right mistake in 118ms; `git status` stayed silent — the 99%-fire era is over, and the injection ledger will show the before/after.
+
 ### Added
 
 - **`engram roi` now splits semantic latency: embedding vs vector KNN — a measured guard against guessing at a vector-DB limit.** The audit ledger records `embed_ms` and `vec_search_ms` per search that runs the semantic path (threaded through a `timing_sink` in `semantic_search`, no change to the `(results, status)` contract), and `engram roi` reports p50/p95/max for each plus a verdict. First live reading on the real store (147 vectors): embedding ~1189ms vs vector KNN ~9–13ms — the KNN is ~100× cheaper, so the embedder is the bottleneck and the vector index is nowhere near its limit. If that ratio ever inverts as the store grows, the report says so ("vector KNN is now a material share… revisit the vector-DB choice") — the decision to move off sqlite-vec (e.g. to an ANN index) becomes data-driven instead of a hunch. Aggregation degrades cleanly: no timing samples → the block is absent, never a crash.

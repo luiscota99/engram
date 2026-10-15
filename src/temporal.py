@@ -96,7 +96,8 @@ def invalidate_memory(
 
             add_relation(
                 item_type, int(superseded_by), item_type, item_id, "supersedes",
-                source="merge", db_path=db_path, validate_exists=False,
+                source="merge", provenance="system", actor="engram:temporal",
+                db_path=db_path, validate_exists=False,
             )
         except Exception:
             logger.debug("failed to record supersedes edge", exc_info=True)

@@ -272,6 +272,43 @@ engram import-cursor-skills ~/.cursor/skills
 engram sync-skills --auto
 ```
 
+### 5. Brains & Sync (scope, move, and share memory)
+
+A **brain** is a self-contained memory under `~/.engram/brains/<name>/` — its own DB, backups,
+and a launcher that pins `ENGRAM_DB_PATH` so every command runs against that brain only.
+Isolation is the point: a specialized agent's recall and guard fire on *its* domain, not on a
+global pool of unrelated projects.
+
+```bash
+engram brain new mtg --seed        # create ~/.engram/brains/mtg/ with a ./brain launcher
+engram brain list                  # brains and their memory counts
+~/.engram/brains/mtg/brain search "mulligan"   # any command, scoped to that brain
+```
+
+**Moving a brain** to another machine is a directory copy: the DB carries its schema version
+and migrations run forward on first use. To replace an existing DB safely, use
+`engram restore <file.db>` — it integrity-checks the file and snapshots the current DB first,
+so a restore is itself reversible. Embeddings only stay valid under the same embed model;
+otherwise run `engram reembed` afterwards.
+
+**Sharing memories** across machines or a team uses chunk sync — no server, no accounts. Entries
+export as append-only, content-hashed, gzipped-JSONL chunks into a plain directory; put that
+directory in a git repo (or any synced folder) and it merges without conflicts by construction.
+Import replays foreign entries through the same write path as a local add, so FTS, tags, and
+embedding queueing behave identically, and the local SQLite DB stays the source of truth.
+
+```bash
+engram sync-export --dir ~/.engram/sync    # write local entries the sync dir lacks (one new chunk)
+engram sync-status --dir ~/.engram/sync    # local vs remote counts, nothing changes
+engram sync-import --dir ~/.engram/sync    # create every remote entry you don't have (idempotent)
+```
+
+Chunk sync currently carries mistakes, patterns, skills, conversations, and prompts with their
+tags. Relations, pins, project affinity, and reflexes do not travel yet, and imported entries
+carry no provenance stamp — see `docs/PLAN-portable-brains-2026-09.md` for what's planned.
+`engram backup` is different: it writes a JSON *archive* of every table for safekeeping, and
+there is no JSON importer — use `restore` (SQLite) or `sync-import` (chunks) to bring data back.
+
 ## Claw-Code Integration (Optional)
 
 Engram integrates directly with **Claw-Code** for high-performance execution. Use Claw as your agent's execution engine to get ultra-fast results while logging everything to Engram:
@@ -347,6 +384,18 @@ See **[docs/MEASURING_FIT_AND_HELP.md](docs/MEASURING_FIT_AND_HELP.md)** — lab
 | `engram import-cursor-skills <path>` | Import Cursor skills into Engram |
 | `engram sync-skills` | Diff and sync Engram ↔ Cursor skills directory |
 
+### Brains & Sync
+
+| Command | Description |
+|---------|-------------|
+| `engram brain new <name> [--seed]` | Create a scoped brain under `~/.engram/brains/<name>/` with its own launcher |
+| `engram brain list` | List brains and their memory counts |
+| `engram brain path <name>` | Print a brain's DB path (for `ENGRAM_DB_PATH` / scripting) |
+| `engram sync-export [--dir DIR]` | Export new memories as an append-only, content-hashed chunk (git-friendly) |
+| `engram sync-import [--dir DIR]` | Import chunk entries the local DB lacks (idempotent) |
+| `engram sync-status [--dir DIR]` | Compare local DB vs sync dir without changing anything |
+| `engram restore <file.db> [--yes]` | Replace the DB from a SQLite backup — validated, current DB snapshotted first |
+
 ### Bootstrap & Maintenance
 
 | Command | Description |
@@ -356,7 +405,7 @@ See **[docs/MEASURING_FIT_AND_HELP.md](docs/MEASURING_FIT_AND_HELP.md)** — lab
 | `engram gc [--mode dry-run\|archive\|delete]` | Garbage collect unused memories (time-based) |
 | `engram reembed` | Regenerate stale or pending embeddings |
 | `engram merge-projects --from ID --into ID` | Merge duplicate project rows after renames |
-| `engram backup` | Export database to JSON |
+| `engram backup` | Write a JSON archive of every table (safekeeping only — no JSON importer; use `restore` or `sync-import`) |
 
 ### LLM (optional)
 

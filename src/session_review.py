@@ -4,6 +4,8 @@ Session retrospective prompt — shared by MCP `memory_session_review` and CLI `
 
 from __future__ import annotations
 
+import sys
+
 from .capture import SESSION_INFLUENCE_PROMPT
 from .database import get_or_create_project
 from .search import search as memory_search
@@ -28,8 +30,10 @@ def build_session_review_prompt(
         try:
             project = get_or_create_project(project_path)
             project_info = f"\nProject: {project['name']} ({project['path']})"
-        except Exception:
-            pass
+        except Exception as exc:
+            # A locked/corrupt DB shouldn't kill the retrospective, but
+            # skipping project affinity deserves a trace.
+            print(f"engram: project registration failed: {exc}", file=sys.stderr)
 
     # Search for similar existing entries to prevent duplicates
     similar_section = ""
