@@ -28,6 +28,8 @@ dev = [
 # Fast in-process embedding backends for the hot path (ENGRAM_EMBED_BACKEND).
 # Optional: the core install stays lean; select a backend only if you want to
 # trade some retrieval quality for sub-50ms embeds on the recall/guard gate.
+# Anthropic-native LLM backend (ENGRAM_LLM_PROVIDER=anthropic).
+anthropic = ["anthropic>=1.0"]
 static = ["model2vec>=0.3.0"]        # Model2Vec static embeddings (numpy-only)
 fastembed = ["fastembed>=0.3.0"]     # quantized ONNX embeddings (onnxruntime)
 
@@ -54,6 +56,8 @@ include = [
     "src/embeddings.py",
     "src/database.py",
     "src/serve.py",
+    "src/llm.py",
+    "src/llm_anthropic.py",
     "src/search_audit.py",
     "src/search.py",
     "src/summarize.py",

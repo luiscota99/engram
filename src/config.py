@@ -27,6 +27,9 @@ LLM layer (see src/llm.py)
     ENGRAM_LLM_BASE_URL         OpenAI-compatible chat base URL (default: Ollama /v1)
     ENGRAM_LLM_MODEL            Default chat model (default llama3.2)
     ENGRAM_LLM_API_KEY          Bearer token for the chat backend
+    ENGRAM_LLM_PROVIDER         anthropic | openai | ollama (unset = auto: an sk-ant- key or an
+                                anthropic.com base URL selects the Anthropic-native backend)
+    ENGRAM_LLM_EFFORT           Anthropic only: low|medium|high|xhigh|max (needs anthropic SDK >= 1.0)
     ENGRAM_LLM_EXTRACT_MODEL    Per-task override: memory extraction
     ENGRAM_LLM_AUDIT_MODEL      Per-task override: consolidation audit
 

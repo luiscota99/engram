@@ -1,0 +1,42 @@
+# Engram remote-mode server — ADR-0009 Phase 1.
+# Install: sudo cp deploy/systemd/engram-serve.service /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable --now engram-serve
+# Runs `engram serve` on 127.0.0.1 only; `tailscale serve` publishes it on the
+# tailnet (see deploy/README.md). This is NOT the stdio MCP server — never run
+# engram-mcp as a service (its parent-death watchdog exits under pid 1).
+
+[Unit]
+Description=Engram remote-mode server (engram serve, loopback only)
+Documentation=https://github.com/luiscota99/engram/blob/main/docs/decisions/0009-remote-mode.md
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=engram
+Group=engram
+WorkingDirectory=/opt/engram
+EnvironmentFile=/etc/engram/engram.env
+ExecStart=/opt/engram/.venv/bin/engram serve
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# Hardening: the process needs its venv (read-only), the data dir (read-write),
+# and nothing else on the filesystem.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/engram
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
