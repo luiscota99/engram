@@ -1,7 +1,7 @@
 # ADR 0009: Remote mode — one canonical Engram instance, thin clients over Tailscale
 
 Date: 2026-10-13
-Status: proposed
+Status: accepted
 
 ## Context
 
