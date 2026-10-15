@@ -21,6 +21,7 @@ import math
 import os
 import time
 from collections import OrderedDict
+from typing import Any
 
 from . import config
 
@@ -350,20 +351,20 @@ def _resolve_model_for_kind(kind: str) -> str:
 
 # Loaded once per (kind, model) and reused for the process lifetime — the whole
 # point of a static backend is that there is no per-call load or round-trip.
-_inprocess_models: dict[tuple[str, str], object] = {}
+_inprocess_models: dict[tuple[str, str], Any] = {}
 
 
-def _load_inprocess_model(kind: str, model: str):
+def _load_inprocess_model(kind: str, model: str) -> Any:
     key = (kind, model)
     obj = _inprocess_models.get(key)
     if obj is not None:
         return obj
     if kind == "static":
-        from model2vec import StaticModel  # lazy: optional dependency
+        from model2vec import StaticModel  # pyright: ignore[reportMissingImports]
 
         obj = StaticModel.from_pretrained(model)
     elif kind == "fastembed":
-        from fastembed import TextEmbedding  # lazy: optional dependency
+        from fastembed import TextEmbedding  # pyright: ignore[reportMissingImports]
 
         obj = TextEmbedding(model_name=model)
     else:  # pragma: no cover - guarded by callers
@@ -383,7 +384,7 @@ def _inprocess_embed(kind: str, model: str, texts: list[str]) -> list[list[float
     if not texts:
         return []
     try:
-        import numpy as np
+        import numpy as np  # pyright: ignore[reportMissingImports]
 
         obj = _load_inprocess_model(kind, model)
         if kind == "static":
