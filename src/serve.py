@@ -327,8 +327,8 @@ class _Handler(BaseHTTPRequestHandler):
         t0 = time.perf_counter()
         parts = urlsplit(self.path)
         endpoint = parts.path[len(API_PREFIX):].strip("/") if parts.path.startswith(API_PREFIX) else ""
-        status, outcome = 500, "error"
         body: dict = {}
+        payload: dict
         try:
             if not endpoint or not any(ep == endpoint for _, ep in ROUTES):
                 raise ServeError(404, "unknown endpoint")
@@ -340,17 +340,18 @@ class _Handler(BaseHTTPRequestHandler):
             query = {k: v[-1] for k, v in parse_qs(parts.query).items()}
             payload = fn(body, query)
             status, outcome = 200, "ok"
-            self._send_json(status, payload)
         except ServeError as e:
             status = e.status
             outcome = "denied" if status in (401, 403) else "client_error" if status < 500 else "error"
-            self._send_json(status, {"error": e.message})
+            payload = {"error": e.message}
         except Exception as e:  # never leak a traceback to a hook; log it here
             logger.exception("remote call failed: %s /v1/%s", method, endpoint)
             status, outcome = 500, "error"
-            self._send_json(status, {"error": f"internal error: {type(e).__name__}"})
-        finally:
-            self._ledger(endpoint or parts.path, method, status, outcome, t0, body)
+            payload = {"error": f"internal error: {type(e).__name__}"}
+        # Ledger BEFORE the response: a caller that reads the ledger right after
+        # the reply (tests, `engram roi` on the same host) must see this call.
+        self._ledger(endpoint or parts.path, method, status, outcome, t0, body)
+        self._send_json(status, payload)
 
     def _ledger(self, endpoint: str, method: str, status: int, outcome: str, t0: float, body: Mapping[str, Any]) -> None:
         try:
