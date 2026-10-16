@@ -43,3 +43,35 @@ def test_env_template_has_placeholders_not_secrets_and_the_right_defaults():
     text = ENV.read_text()
     assert not re.search(r"sk-ant-(?!REPLACE)[A-Za-z0-9_-]{20,}", text), "a real-looking key in the template"
     assert "ENGRAM_SERVE_ALLOW_NONLOCAL" not in text
+
+
+def test_install_key_script_parses_and_dry_run_never_prints_the_key(tmp_path):
+    import os
+    import subprocess
+
+    script = ROOT / "deploy" / "install-key.sh"
+    assert os.access(script, os.X_OK)
+    assert subprocess.run(["bash", "-n", str(script)], capture_output=True).returncode == 0
+
+    key_file = tmp_path / "k.txt"
+    key = "sk-ant-TESTVALUE-0123456789abcdef"
+    key_file.write_text(f"  {key}  \n")
+    res = subprocess.run(
+        ["bash", str(script), "--dry-run", "--key-file", str(key_file), "--host", "nowhere"],
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert key not in res.stdout + res.stderr
+    assert "nowhere:/etc/engram/engram.env" in res.stdout and f"{len(key)} chars" in res.stdout
+    assert key_file.exists()  # dry run deletes nothing
+
+    key_file.write_text("PASTE-YOUR-ANTHROPIC-KEY-HERE-REPLACING-THIS-WHOLE-LINE\n")
+    res = subprocess.run(["bash", str(script), "--dry-run", "--key-file", str(key_file)], capture_output=True, text=True)
+    assert res.returncode == 2 and "placeholder" in res.stderr
+
+    key_file.write_text("not-an-anthropic-key\n")
+    res = subprocess.run(["bash", str(script), "--dry-run", "--key-file", str(key_file)], capture_output=True, text=True)
+    assert res.returncode == 2 and "sk-ant" in res.stderr and "not-an-anthropic-key" not in res.stderr
+
+    res = subprocess.run(["bash", str(script), "--dry-run", "--var", "bad-name", "--key-file", str(key_file)], capture_output=True, text=True)
+    assert res.returncode == 2

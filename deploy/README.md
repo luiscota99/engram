@@ -17,10 +17,26 @@ sudo chown -R engram:engram /opt/engram
 
 ## 2. Environment file (holds the keys)
 
+Two ways. From the VM itself:
+
 ```bash
 sudo install -o root -g engram -m 0640 deploy/engram.env.example /etc/engram/engram.env
 sudoedit /etc/engram/engram.env   # paste your own values; never commit this file
 ```
+
+Or from your own machine, so the key never has to be typed into a terminal on
+the VM or pasted into a chat: put the key alone on line 1 of
+`~/Documents/engram-hub-key.txt` (`chmod 600`), then
+
+```bash
+deploy/install-key.sh              # host "hub", var ENGRAM_LLM_API_KEY; deletes the local file when done
+deploy/install-key.sh --dry-run    # shows the plan, sends nothing
+```
+
+The script installs the template if the env file is missing, replaces the one
+`VAR=` line over SSH with the value on stdin (never an argument, never echoed),
+and restarts `engram-serve` if it is running. `--var ENGRAM_EMBED_API_KEY
+--key-file …` installs a second secret the same way.
 
 `ENGRAM_LLM_API_KEY` is your Anthropic key (Console → API keys; scope it to one
 workspace, give it an expiry you will remember to rotate). It never leaves the
