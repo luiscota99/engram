@@ -109,7 +109,7 @@ def test_provider_detection(monkeypatch):
     monkeypatch.setenv("ENGRAM_LLM_PROVIDER", "openai")  # explicit wins over the key prefix
     assert llm.llm_provider() == "openai"
     monkeypatch.setenv("ENGRAM_LLM_PROVIDER", "ollama")
-    assert llm.llm_provider() == "openai"
+    assert llm.llm_provider() == "ollama"  # its own provider since the policy layer (OLLAMA_HOST)
     monkeypatch.delenv("ENGRAM_LLM_PROVIDER")
     monkeypatch.setenv("ENGRAM_LLM_API_KEY", "sk-or-xyz")
     monkeypatch.setenv("ENGRAM_LLM_BASE_URL", "https://api.anthropic.com/v1")

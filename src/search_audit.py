@@ -197,6 +197,48 @@ def append_decision_audit(
         pass
 
 
+def append_llm_call_audit(
+    *,
+    job: str,
+    provider: str,
+    model: str,
+    mode: str,
+    usage: dict | None,
+    latency_ms: float,
+    outcome: str,
+    cost_usd: float | None,
+) -> None:
+    """One ledger row per LLM attempt (``source: llm_call``): job, provider, model,
+    mode, tokens, cost, latency, outcome (``ok`` / ``unavailable`` / ``refused: …``).
+    This is the spec's cost ledger — ``engram roi`` reports spend from it."""
+    path = config.audit_log_path()
+    if not path:
+        return
+    line: dict[str, Any] = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "source": "llm_call",
+        "job": job,
+        "provider": provider,
+        "model": model,
+        "mode": mode,
+        "latency_ms": round(float(latency_ms), 2),
+        "outcome": outcome,
+    }
+    if usage:
+        line["input_tokens"] = int(usage.get("input_tokens") or 0)
+        line["output_tokens"] = int(usage.get("output_tokens") or 0)
+        for k in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+            if usage.get(k):
+                line[k] = int(usage[k])
+    if cost_usd is not None:
+        line["cost_usd"] = round(float(cost_usd), 6)
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def summarize_audit_log(path: str | None = None) -> dict:
     """Aggregate the search-audit JSONL into ROI-report stats.
 
@@ -231,6 +273,9 @@ def summarize_audit_log(path: str | None = None) -> dict:
             "embed_ms": {"p50": None, "p95": None, "max": None},
             "vec_search_ms": {"p50": None, "p95": None, "max": None},
         },
+        # The LLM cost ledger (policy-routed generate calls): spend by job/model.
+        "llm": {"calls": 0, "ok": 0, "unavailable": 0, "refused": 0, "cost_usd": 0.0,
+                "input_tokens": 0, "output_tokens": 0, "by_job": {}, "by_model": {}},
     }
     if not path or not os.path.isfile(path):
         return out
@@ -238,6 +283,7 @@ def summarize_audit_log(path: str | None = None) -> dict:
     query_counts: dict[str, int] = {}
     embed_samples: list[float] = []
     vec_samples: list[float] = []
+    llm_lat: dict[str, list[float]] = {}
     try:
         with open(path, encoding="utf-8") as f:
             for raw in f:
@@ -249,6 +295,34 @@ def summarize_audit_log(path: str | None = None) -> dict:
                 except ValueError:
                     continue
                 src = rec.get("source") or "unknown"
+                if src == "llm_call":
+                    llm = out["llm"]
+                    llm["calls"] += 1
+                    outcome = str(rec.get("outcome") or "")
+                    if outcome == "ok":
+                        llm["ok"] += 1
+                    elif outcome.startswith("refused"):
+                        llm["refused"] += 1
+                    else:
+                        llm["unavailable"] += 1
+                    it, ot = int(rec.get("input_tokens") or 0), int(rec.get("output_tokens") or 0)
+                    cost = float(rec.get("cost_usd") or 0.0)
+                    llm["input_tokens"] += it
+                    llm["output_tokens"] += ot
+                    llm["cost_usd"] = round(llm["cost_usd"] + cost, 6)
+                    for key, name in (("by_job", str(rec.get("job") or "?")), ("by_model", str(rec.get("model") or "?"))):
+                        if key == "by_model" and not rec.get("model"):
+                            continue
+                        b = llm[key].setdefault(name, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})
+                        b["calls"] += 1
+                        b["input_tokens"] += it
+                        b["output_tokens"] += ot
+                        b["cost_usd"] = round(b["cost_usd"] + cost, 6)
+                    if outcome == "ok" and isinstance(rec.get("latency_ms"), (int, float)):
+                        llm_lat.setdefault(str(rec.get("job") or "?"), []).append(float(rec["latency_ms"]))
+                    continue
+                if src in ("decision", "remote_call"):
+                    continue  # other ledgers, summarized elsewhere
                 if src.endswith("_inject"):
                     kind = src[: -len("_inject")]
                     bucket = out["injection"].get(kind)
@@ -293,6 +367,11 @@ def summarize_audit_log(path: str | None = None) -> dict:
         # nearest-rank percentile; exact enough for an ops signal
         idx = min(len(ordered) - 1, max(0, int(round(q * (len(ordered) - 1)))))
         return round(ordered[idx], 1)
+
+    for job, samples in llm_lat.items():
+        if job in out["llm"]["by_job"]:
+            out["llm"]["by_job"][job]["p50_ms"] = _pct(samples, 0.50)
+            out["llm"]["by_job"][job]["p95_ms"] = _pct(samples, 0.95)
 
     out["latency"]["samples"] = len(embed_samples)
     if embed_samples:

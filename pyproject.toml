@@ -61,6 +61,7 @@ include = [
     "src/llm.py",
     "src/llm_anthropic.py",
     "src/decide.py",
+    "src/policy.py",
     "src/search_audit.py",
     "src/search.py",
     "src/summarize.py",

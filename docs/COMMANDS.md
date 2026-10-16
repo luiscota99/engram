@@ -2,7 +2,7 @@
 
 > Auto-generated from the CLI parser by `scripts/gen_docs.py`. Do not edit by hand; run `python3 -m scripts.gen_docs` after changing commands.
 
-All commands are invoked as `engram <command>`. 74 commands.
+All commands are invoked as `engram <command>`. 75 commands.
 
 ### `engram add`
 
@@ -326,6 +326,16 @@ Switch embedding model: mark stale, update schema_meta, reembed
 ### `engram notify-init`
 
 Crear el reflex 'notify' (borrador, osascript por default)
+
+### `engram policy`
+
+The policy file: per-job LLM routing (provider/model/mode/privacy/fallback) and decision pins
+
+  - `<paction>` — one of `show, set, path`
+
+- **`engram policy path`**
+- **`engram policy set`**
+- **`engram policy show`**
 
 ### `engram promote`
 

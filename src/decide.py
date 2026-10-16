@@ -27,17 +27,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import config
-
 logger = logging.getLogger(__name__)
 
-POLICY_PATH_ENV = "ENGRAM_POLICY_PATH"
 DECIDE_MODEL_ENV = "ENGRAM_LLM_DECIDE_MODEL"
 BACKENDS = ("haiku", "laya")
 KINDS = ("choice", "score", "yesno")
@@ -106,57 +102,10 @@ def get_question(name: str) -> Question:
 
 
 # ---------------------------------------------------------------------------
-# Policy file
+# Policy (shared file; see policy.py)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_POLICY: dict[str, Any] = {
-    "decide": {
-        "default_backend": "haiku",
-        "backends": {},  # "worth_remembering@v1": "laya"
-        "thresholds": {},  # "worth_remembering@v1": 0.6  (yesno: P(true) >= threshold)
-        "laya": {
-            "model": "multilingual",  # Router alias: english | multilingual | typed-decisions
-            "device": None,  # None = auto (cuda → mps → cpu); "cpu" to pin
-            "models": None,  # {"multilingual": "/var/lib/engram/laya/v3"} for pinned local weights
-            "max_len": None,
-            "max_latency_ms": 300,  # request-path ceiling (spec: ~300 ms on the VM's CPU)
-        },
-    }
-}
-
-
-def policy_path() -> str:
-    return os.environ.get(POLICY_PATH_ENV) or os.path.join(config.engram_dir(), "policy.json")
-
-
-def load_policy() -> dict[str, Any]:
-    """Policy with defaults filled in (``{}`` on disk is a valid policy)."""
-    data: dict[str, Any] = {}
-    try:
-        with open(policy_path(), encoding="utf-8") as f:
-            loaded = json.load(f)
-        if isinstance(loaded, dict):
-            data = loaded
-    except (OSError, ValueError):
-        pass
-    merged = json.loads(json.dumps(_DEFAULT_POLICY))
-    dec = data.get("decide")
-    if not isinstance(dec, dict):
-        dec = {}
-    for k, v in dec.items():
-        if k == "laya" and isinstance(v, dict):
-            merged["decide"]["laya"].update(v)
-        else:
-            merged["decide"][k] = v
-    return merged
-
-
-def save_policy(policy: dict[str, Any]) -> str:
-    path = policy_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(policy, f, indent=2, sort_keys=True)
-    return path
+from .policy import load_policy, save_policy  # noqa: E402  # re-exported
 
 
 def set_backend(question_key: str, backend: str) -> str:

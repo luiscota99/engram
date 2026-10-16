@@ -62,6 +62,7 @@ from .commands.memory import (
     cmd_suggest_consolidate,
     cmd_unlink,
 )
+from .commands.policy import add_parser as add_policy_parser
 from .commands.reflex import cmd_promote, cmd_reflex, cmd_route
 from .commands.serve import add_parser as add_serve_parser
 from .commands.session import (
@@ -363,6 +364,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_serve_parser(sub)
 
     add_decide_parser(sub)
+
+    add_policy_parser(sub)
 
     p_sync = sub.add_parser("sync-skills", help="Bidirectional sync between Engram and Cursor skills")
     p_sync.add_argument("--path", default="~/.cursor/skills")
